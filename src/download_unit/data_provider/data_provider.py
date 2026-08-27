@@ -4,18 +4,15 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from ..command import Command, UnifiedFormatCommand
-from ..format_adapter import FormatAdapterFactory
 
 
 class DataProvider(ABC):
     """Download data and translate commands for a particular provider."""
 
-    def __init__(self, format: str) -> None:
-        self.formatAdapter = FormatAdapterFactory.create(format)
-
+    @abstractmethod
     def convertRawData(self, raw_data: Any) -> Any:
-        """Convert raw data using this provider's format adapter."""
-        return self.formatAdapter.convertRawData(raw_data)
+        """Convert provider-specific raw data to the unified representation."""
+        raise NotImplementedError
 
     @abstractmethod
     def convertCommand(self, command: UnifiedFormatCommand) -> Command:

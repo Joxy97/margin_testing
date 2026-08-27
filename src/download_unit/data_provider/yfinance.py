@@ -11,8 +11,9 @@ from .data_provider import DataProvider
 class YfinanceDataProvider(DataProvider):
     """Download market data through the yfinance package."""
 
-    def __init__(self, format: str) -> None:
-        super().__init__(format)
+    def convertRawData(self, raw_data: Any) -> Any:
+        """Return yfinance data without modification."""
+        return raw_data
 
     def convertCommand(self, command: UnifiedFormatCommand) -> YfinanceCommand:
         """Convert a unified command to yfinance download parameters."""

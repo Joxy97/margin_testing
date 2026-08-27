@@ -43,14 +43,14 @@ class YfinanceExponentialBackoffIntegrationTest(unittest.TestCase):
             instruments=instruments,
             start_date=end_date - timedelta(days=300),
             end_date=end_date,
-            period=Period.ONE_YEAR,
+            period=Period.ONE_DAY,
         )
         unit = ExponentialBackoffDownloadUnit(
             instrument_batch=5,
             dates_batch=100,
             time=1,
         )
-        provider = YfinanceDataProvider("yfinance")
+        provider = YfinanceDataProvider()
 
         data = unit.getData(provider, command)
 
