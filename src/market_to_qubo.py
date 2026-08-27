@@ -2,20 +2,19 @@
 """Build (but do not solve) a scenario-conditioned portfolio QUBO.
 
 The implementation follows the calculation cells in ``example_code.ipynb``.
-It reads one subfolder of ``synthetic_market`` and writes exactly three runtime
-artifacts inside one timestamped output directory in the project root. For
-example, ``qubo-10_assets-scenario_27-20260827T162500+0200`` contains:
+It reads one subfolder of ``synthetic_market`` and writes a report plus one BQM
+and CQM pair per requested scenario inside a stable project-root directory. For
+example, ``qubo-assets_10`` contains:
 
-* ``process_step_outputs.html`` - self-contained tables and plots
-* ``qubo.bqm`` - the total QUBO as an Ocean BQM file
-* ``qubo.cqm`` - the same objective as an Ocean CQM file
+* ``report.html`` - self-contained tables and plots
+* ``bqms/scenario_0.bqm``, ... - Ocean BQM files
+* ``cqms/scenario_0.cqm``, ... - matching Ocean CQM files
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
-from datetime import datetime
 import html
 import io
 import os
@@ -39,7 +38,7 @@ from sklearn.preprocessing import StandardScaler
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SYNTHETIC_MARKET_ROOT = PROJECT_ROOT / "synthetic_market"
-DEFAULT_GRID_POINTS = (11, 5, 5, 3)
+DEFAULT_GRID_POINTS = (21, 5, 5, 3)
 
 
 @dataclass
@@ -88,6 +87,17 @@ class ShockGridResult:
 
 
 @dataclass(frozen=True)
+class ShockGridContext:
+    """Scenario-independent residual data reused across scenario exports."""
+
+    factors_recent: np.ndarray
+    residuals_recent: np.ndarray
+    pc_scale: np.ndarray
+    max_abs_z: np.ndarray
+    fallback_sigma: np.ndarray
+
+
+@dataclass(frozen=True)
 class ModelStats:
     """Report-only model metadata that avoids retaining intermediate BQMs."""
 
@@ -111,7 +121,16 @@ def parse_args() -> argparse.Namespace:
             "An absolute path to that subfolder is also accepted."
         ),
     )
-    parser.add_argument("--scenario-index", type=int, default=None)
+    parser.add_argument(
+        "--scenario-index",
+        type=int,
+        action="append",
+        default=None,
+        help=(
+            "Export only this scenario index. Repeat the option to select "
+            "multiple scenarios. By default every scenario is exported."
+        ),
+    )
     parser.add_argument("--components", type=int, default=2, metavar="K")
     parser.add_argument("--ew-lambda", type=float, default=0.93)
     parser.add_argument("--ew-window", type=int, default=125)
@@ -209,23 +228,14 @@ def resolve_input_folder(value: str) -> Path:
     return folder
 
 
-def output_directory(folder: Path, scenario_index: int, run_time: datetime) -> Path:
-    """Return a unique, informative project-root output directory path."""
+def output_directory(folder: Path) -> Path:
+    """Return the stable project-root output directory for an asset universe."""
     asset_match = re.fullmatch(r"assets_0*(\d+)", folder.name, flags=re.IGNORECASE)
     if asset_match:
-        input_label = f"{int(asset_match.group(1))}_assets"
-    else:
-        safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", folder.name).strip("_")
-        input_label = safe_name or "input"
+        return PROJECT_ROOT / f"qubo-assets_{int(asset_match.group(1))}"
 
-    timestamp = run_time.strftime("%Y%m%dT%H%M%S%z")
-    base_name = f"qubo-{input_label}-scenario_{scenario_index}-{timestamp}"
-    candidate = PROJECT_ROOT / base_name
-    suffix = 1
-    while candidate.exists():
-        candidate = PROJECT_ROOT / f"{base_name}_{suffix:02d}"
-        suffix += 1
-    return candidate
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", folder.name).strip("_")
+    return PROJECT_ROOT / f"qubo-{safe_name or 'input'}"
 
 
 def locate_file(folder: Path, candidates: Sequence[str], role: str) -> Path:
@@ -427,6 +437,24 @@ def build_scenario_grid(
     return pc_grids, scenario_grid, historical_counts
 
 
+def prepare_shock_grid_context(
+    prepared: PreparedData,
+    pca: PCAResult,
+    ew_window: int,
+) -> ShockGridContext:
+    reconstructed = pca.weighted_mean + pca.factors @ pca.loadings
+    residuals = prepared.historical_z - reconstructed
+    recent_start = max(0, len(pca.factors) - ew_window)
+    residuals_recent = residuals[recent_start:]
+    return ShockGridContext(
+        factors_recent=pca.factors[recent_start:],
+        residuals_recent=residuals_recent,
+        pc_scale=np.sqrt(np.maximum(pca.eigenvalues, 1e-12)),
+        max_abs_z=np.nanmax(np.abs(prepared.historical_z), axis=0),
+        fallback_sigma=np.nanstd(residuals_recent, axis=0, ddof=1),
+    )
+
+
 def create_z_shock_grids(
     prepared: PreparedData,
     pca: PCAResult,
@@ -439,22 +467,19 @@ def create_z_shock_grids(
     inflation_alpha: float,
     inflation_power: float,
     max_inflation: float,
+    context: ShockGridContext | None = None,
 ) -> ShockGridResult:
-    z = prepared.historical_z
     selected_scenario = scenario_grid[scenario_index]
     z_hat = pca.weighted_mean + selected_scenario @ pca.loadings
-    reconstructed = pca.weighted_mean + pca.factors @ pca.loadings
-    residuals = z - reconstructed
-
-    recent_start = max(0, len(pca.factors) - ew_window)
-    factors_recent = pca.factors[recent_start:]
-    residuals_recent = residuals[recent_start:]
+    if context is None:
+        context = prepare_shock_grid_context(prepared, pca, ew_window)
+    factors_recent = context.factors_recent
+    residuals_recent = context.residuals_recent
     nearest_count = min(nearest_requested, len(factors_recent), ew_window)
     if nearest_count < 2:
         raise ValueError("At least two recent factor samples are required")
 
-    pc_scale = np.sqrt(np.maximum(pca.eigenvalues, 1e-12))
-    scaled_differences = (factors_recent - selected_scenario) / pc_scale
+    scaled_differences = (factors_recent - selected_scenario) / context.pc_scale
     scaled_distances = np.linalg.norm(scaled_differences, axis=1)
     nearest_indices = np.argsort(scaled_distances)[:nearest_count]
     conditional_factors = factors_recent[nearest_indices]
@@ -466,21 +491,19 @@ def create_z_shock_grids(
     inflated_residuals = nearest_residuals * inflation_factor
     synthetic_z_samples = z_hat + inflated_residuals
 
-    max_abs_z = np.nanmax(np.abs(z), axis=0)
     local_sigma = np.nanstd(nearest_residuals, axis=0, ddof=1)
-    fallback_sigma = np.nanstd(residuals_recent, axis=0, ddof=1)
     local_sigma = np.where(
         np.isfinite(local_sigma) & (local_sigma > 1e-12),
         local_sigma,
-        fallback_sigma,
+        context.fallback_sigma,
     )
     local_sigma = np.where(
         np.isfinite(local_sigma) & (local_sigma > 1e-12), local_sigma, 1.0
     )
     inflated_sigma = local_sigma * inflation_factor
 
-    z_low_max = z_hat - max_abs_z
-    z_high_max = z_hat + max_abs_z
+    z_low_max = z_hat - context.max_abs_z
+    z_high_max = z_hat + context.max_abs_z
     all_bin_edges = np.linspace(z_low_max, z_high_max, z_bins + 1, axis=1)
     all_bin_centers = 0.5 * (all_bin_edges[:, :-1] + all_bin_edges[:, 1:])
 
@@ -842,7 +865,7 @@ def build_figures(
             marker="x",
             s=150,
             linewidths=3,
-            label=f"Selected scenario {scenario_index}",
+            label=f"Detailed scenario {scenario_index}",
         )
         axis.set(xlabel="PC1", ylabel="PC2", title="Factor-space scenario grid")
         axis.legend(loc="best")
@@ -891,7 +914,7 @@ def build_figures(
             marker="x",
             s=140,
             linewidths=3,
-            label="Selected scenario",
+            label="Detailed scenario",
         )
         factor_axis.set(xlabel="PC1", ylabel="PC2")
     else:
@@ -989,13 +1012,15 @@ def build_report(
     scenario_grid: np.ndarray,
     historical_counts: np.ndarray,
     scenario_index: int,
-    selection_method: str,
+    exported_scenario_indices: Sequence[int],
+    export_mode: str,
     shocks: ShockGridResult,
     asset_grids: Sequence[dict[str, np.ndarray]],
     portfolio: pd.DataFrame,
     weights: np.ndarray,
     model_stats: Sequence[ModelStats],
     compatibility_edges: int,
+    scenario_model_summary: pd.DataFrame,
     figures: Sequence[tuple[str, str]],
 ) -> str:
     parameters = pd.DataFrame(
@@ -1006,8 +1031,9 @@ def build_report(
             ("EW window", args.ew_window),
             ("PC grid sizes", ", ".join(map(str, grid_points))),
             ("Tail-density gamma", args.tail_density_gamma),
-            ("Selected scenario", scenario_index),
-            ("Scenario selection", selection_method),
+            ("Detailed report scenario", scenario_index),
+            ("Scenario export mode", export_mode),
+            ("Scenarios exported this run", len(exported_scenario_indices)),
             ("Candidate z bins", args.z_bins),
             ("Nearest residual donors", len(shocks.nearest_residuals)),
             ("Residual sigma range", args.residual_sigma_range),
@@ -1068,7 +1094,10 @@ def build_report(
     scenario_columns = {
         "scenario index": np.arange(len(scenario_grid)),
         "historical samples": historical_counts,
-        "selected": np.arange(len(scenario_grid)) == scenario_index,
+        "exported this run": np.isin(
+            np.arange(len(scenario_grid)), exported_scenario_indices
+        ),
+        "shown in detail": np.arange(len(scenario_grid)) == scenario_index,
     }
     for component in range(scenario_grid.shape[1]):
         scenario_columns[f"PC{component + 1}"] = scenario_grid[:, component]
@@ -1115,12 +1144,12 @@ def build_report(
         + f"<p>Solver: {html.escape(pca.solver)}</p>"
         + table_html(pca_table),
         "<h2>4. Lambda-multiple PC scenario grid</h2>"
-        + f"<p>{len(scenario_grid):,} scenarios. Selected scenario "
-        f"<strong>{scenario_index}</strong> has "
+        + f"<p>{len(scenario_grid):,} scenarios. Scenario "
+        f"<strong>{scenario_index}</strong> is shown in detail and has "
         f"{historical_counts[scenario_index]:,} historical samples in its "
         "nearest-grid cell.</p>"
         + table_html(scenario_table, max_rows=500),
-        "<h2>5. Selected-scenario z shocks and raw returns</h2>"
+        "<h2>5. Detailed-scenario z shocks and raw returns</h2>"
         + f"<p>Mean scaled scenario distance: {shocks.scenario_distance:.6g}; "
         f"residual inflation factor: {shocks.inflation_factor:.6g}.</p>"
         + table_html(asset_table),
@@ -1130,10 +1159,13 @@ def build_report(
         + table_html(portfolio),
         "<h2>7. QUBO construction</h2>"
         + f"<p>Sparse residual compatibility asset edges used: "
-        f"{compatibility_edges:,}. The CQM contains the same unconstrained "
+        f"{compatibility_edges:,} for detailed scenario {scenario_index}. "
+        "Each CQM contains the same unconstrained "
         "binary quadratic objective as the total BQM; one-hot behavior remains "
         "encoded by the notebook's quadratic penalty. No solver was called.</p>"
-        + table_html(qubo_table),
+        + table_html(qubo_table)
+        + "<h3>Per-scenario output files</h3>"
+        + table_html(scenario_model_summary, max_rows=500),
         "<h2>8. Visual outputs</h2>",
     ]
     for title, uri in figures:
@@ -1200,19 +1232,39 @@ def atomic_write_model(path: Path, model_file: io.BufferedIOBase) -> None:
         raise
 
 
+def export_scenario_models(
+    output_dir: Path,
+    scenario_index: int,
+    bqm: dimod.BinaryQuadraticModel,
+) -> tuple[Path, Path]:
+    """Serialize one scenario's BQM and equivalent CQM with bounded lifetime."""
+    bqm_path = output_dir / "bqms" / f"scenario_{scenario_index}.bqm"
+    cqm_path = output_dir / "cqms" / f"scenario_{scenario_index}.cqm"
+    bqm_file = bqm.to_file()
+    cqm = dimod.ConstrainedQuadraticModel.from_bqm(bqm)
+    cqm_file = cqm.to_file()
+    del cqm
+    try:
+        atomic_write_model(bqm_path, bqm_file)
+        atomic_write_model(cqm_path, cqm_file)
+    finally:
+        bqm_file.close()
+        cqm_file.close()
+    return bqm_path, cqm_path
+
+
 def main() -> None:
-    run_time = datetime.now().astimezone()
     args = parse_args()
     grid_points = validate_args(args)
     folder = resolve_input_folder(args.subfolder)
-    print(f"[1/8] Reading and preparing {folder}", flush=True)
+    print(f"[1/6] Reading and preparing {folder}", flush=True)
     prepared, paths = prepare_data(folder)
     if not 0 <= args.visual_asset_index < len(prepared.tickers):
         raise ValueError(
             f"--visual-asset-index must be in [0, {len(prepared.tickers) - 1}]"
         )
 
-    print("[2/8] Fitting exponentially weighted PCA", flush=True)
+    print("[2/6] Fitting exponentially weighted PCA", flush=True)
     pca = exponentially_weighted_pca(
         prepared.historical_z,
         prepared.backtest_z,
@@ -1221,65 +1273,124 @@ def main() -> None:
         args.ew_window,
     )
 
-    print("[3/8] Discretizing PC scenario space", flush=True)
+    print("[3/6] Discretizing PC scenario space", flush=True)
     pc_grids, scenario_grid, historical_counts = build_scenario_grid(
         pca, grid_points, args.tail_density_gamma
     )
     if args.scenario_index is None:
-        scenario_index = int(np.argmax(historical_counts))
-        selection_method = "automatic: most historical samples"
+        scenario_indices = list(range(len(scenario_grid)))
+        export_mode = "all scenarios (default)"
     else:
-        scenario_index = args.scenario_index
-        selection_method = "explicit --scenario-index"
-    if not 0 <= scenario_index < len(scenario_grid):
+        scenario_indices = list(dict.fromkeys(args.scenario_index))
+        export_mode = "explicit --scenario-index selection"
+    invalid_scenarios = [
+        index
+        for index in scenario_indices
+        if not 0 <= index < len(scenario_grid)
+    ]
+    if invalid_scenarios:
         raise ValueError(
-            f"Scenario index must be in [0, {len(scenario_grid) - 1}], got "
-            f"{scenario_index}"
+            f"Scenario indices must be in [0, {len(scenario_grid) - 1}], got "
+            + ", ".join(map(str, invalid_scenarios))
         )
-    output_dir = output_directory(folder, scenario_index, run_time)
 
-    print(f"[4/8] Creating z-shock grids for scenario {scenario_index}", flush=True)
-    shocks = create_z_shock_grids(
-        prepared,
-        pca,
-        scenario_grid,
-        scenario_index,
-        args.ew_window,
-        args.nearest,
-        args.z_bins,
-        args.residual_sigma_range,
-        args.distance_inflation_alpha,
-        args.distance_inflation_power,
-        args.max_inflation_factor,
+    detail_scenario_index = max(
+        scenario_indices, key=lambda index: historical_counts[index]
     )
-    asset_grids = convert_z_to_returns(prepared.standardizer, shocks.asset_z_grids)
+    output_dir = output_directory(folder)
+    output_dir.mkdir(parents=False, exist_ok=True)
+    (output_dir / "bqms").mkdir(exist_ok=True)
+    (output_dir / "cqms").mkdir(exist_ok=True)
 
-    print("[5/8] Loading portfolio and residual-neighbor graph", flush=True)
+    print("[4/6] Loading portfolio", flush=True)
     portfolio, weights = read_portfolio(paths["portfolio"], prepared.tickers)
-    conditional_std, neighbor_indices, neighbor_correlations = conditional_neighbors(
-        shocks.inflated_residuals, args.top_k_neighbors
-    )
+    shock_context = prepare_shock_grid_context(prepared, pca, args.ew_window)
 
-    print("[6/8] Building structural, portfolio, and total QUBOs", flush=True)
-    bqm_total, model_stats, compatibility_edges = build_qubos(
-        asset_grids,
-        weights,
-        shocks.z_hat,
-        conditional_std,
-        neighbor_indices,
-        neighbor_correlations,
-        args.lambda_one_hot,
-        args.lambda_compat,
+    print(
+        f"[5/6] Building and exporting {len(scenario_indices)} scenario(s)",
+        flush=True,
     )
-    print("[7/8] Rendering self-contained process report", flush=True)
+    scenario_rows: list[dict[str, object]] = []
+    detail_shocks: ShockGridResult | None = None
+    detail_asset_grids: list[dict[str, np.ndarray]] | None = None
+    detail_model_stats: tuple[ModelStats, ModelStats, ModelStats] | None = None
+    detail_compatibility_edges: int | None = None
+
+    for position, scenario_index in enumerate(scenario_indices, start=1):
+        print(
+            f"      scenario {scenario_index} ({position}/{len(scenario_indices)})",
+            flush=True,
+        )
+        shocks = create_z_shock_grids(
+            prepared,
+            pca,
+            scenario_grid,
+            scenario_index,
+            args.ew_window,
+            args.nearest,
+            args.z_bins,
+            args.residual_sigma_range,
+            args.distance_inflation_alpha,
+            args.distance_inflation_power,
+            args.max_inflation_factor,
+            context=shock_context,
+        )
+        asset_grids = convert_z_to_returns(
+            prepared.standardizer, shocks.asset_z_grids
+        )
+        conditional_std, neighbor_indices, neighbor_correlations = (
+            conditional_neighbors(shocks.inflated_residuals, args.top_k_neighbors)
+        )
+        bqm_total, model_stats, compatibility_edges = build_qubos(
+            asset_grids,
+            weights,
+            shocks.z_hat,
+            conditional_std,
+            neighbor_indices,
+            neighbor_correlations,
+            args.lambda_one_hot,
+            args.lambda_compat,
+        )
+        bqm_path, cqm_path = export_scenario_models(
+            output_dir, scenario_index, bqm_total
+        )
+        total_stats = model_stats[-1]
+        scenario_rows.append(
+            {
+                "scenario index": scenario_index,
+                "historical samples": int(historical_counts[scenario_index]),
+                "variables": total_stats.variables,
+                "interactions": total_stats.interactions,
+                "compatibility edges": compatibility_edges,
+                "BQM file": bqm_path.relative_to(output_dir).as_posix(),
+                "CQM file": cqm_path.relative_to(output_dir).as_posix(),
+            }
+        )
+        if scenario_index == detail_scenario_index:
+            detail_shocks = shocks
+            detail_asset_grids = asset_grids
+            detail_model_stats = model_stats
+            detail_compatibility_edges = compatibility_edges
+        del bqm_total
+
+    if (
+        detail_shocks is None
+        or detail_asset_grids is None
+        or detail_model_stats is None
+        or detail_compatibility_edges is None
+    ):
+        raise RuntimeError("Detailed report scenario was not constructed")
+
+    scenario_model_summary = pd.DataFrame(scenario_rows)
+    print("[6/6] Rendering self-contained process report", flush=True)
     figures = build_figures(
         prepared,
         pca,
         pc_grids,
         scenario_grid,
-        scenario_index,
-        shocks,
-        asset_grids,
+        detail_scenario_index,
+        detail_shocks,
+        detail_asset_grids,
         args.visual_asset_index,
     )
     report = build_report(
@@ -1291,39 +1402,27 @@ def main() -> None:
         pca,
         scenario_grid,
         historical_counts,
-        scenario_index,
-        selection_method,
-        shocks,
-        asset_grids,
+        detail_scenario_index,
+        scenario_indices,
+        export_mode,
+        detail_shocks,
+        detail_asset_grids,
         portfolio,
         weights,
-        model_stats,
-        compatibility_edges,
+        detail_model_stats,
+        detail_compatibility_edges,
+        scenario_model_summary,
         figures,
     )
 
-    report_path = output_dir / "process_step_outputs.html"
-    bqm_path = output_dir / "qubo.bqm"
-    cqm_path = output_dir / "qubo.cqm"
-    print("[8/8] Exporting report, BQM, and CQM", flush=True)
-    bqm_file = bqm_total.to_file()
-    cqm_total = dimod.ConstrainedQuadraticModel.from_bqm(bqm_total)
-    cqm_file = cqm_total.to_file()
-    del cqm_total
-    try:
-        output_dir.mkdir(parents=False, exist_ok=False)
-        atomic_write_model(bqm_path, bqm_file)
-        atomic_write_model(cqm_path, cqm_file)
-        atomic_write_text(report_path, report)
-    finally:
-        bqm_file.close()
-        cqm_file.close()
+    report_path = output_dir / "report.html"
+    atomic_write_text(report_path, report)
 
     print(
         "Done. No solver was called.\n"
-        f"  {report_path}\n"
-        f"  {bqm_path}\n"
-        f"  {cqm_path}",
+        f"  Output directory: {output_dir}\n"
+        f"  Scenarios exported: {len(scenario_indices)}\n"
+        f"  Report: {report_path}",
         flush=True,
     )
 
