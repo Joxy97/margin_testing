@@ -22,8 +22,7 @@ def ew_pca(z, k, decay=0.93, window=125):
     )
     eigenvalues = singular_values**2
     scores = (z - mean) @ components.T
-    explained = eigenvalues / np.square(weighted).sum()
-    return scores, components, eigenvalues, explained, mean
+    return scores, components, eigenvalues, mean
 
 
 def main():
@@ -36,7 +35,7 @@ def main():
     args = parser.parse_args()
 
     z = np.genfromtxt(args.input, delimiter=",", skip_header=1)[:, 1:]
-    scores, components, eigenvalues, explained, mean = ew_pca(
+    scores, components, eigenvalues, mean = ew_pca(
         z, args.k, args.decay, args.window
     )
     np.savez(
@@ -44,7 +43,6 @@ def main():
         scores=scores,
         components=components,
         eigenvalues=eigenvalues,
-        explained=explained,
         mean=mean,
     )
 
