@@ -87,6 +87,16 @@ class ShockGridResult:
     residual_ranges: np.ndarray
 
 
+@dataclass(frozen=True)
+class ModelStats:
+    """Report-only model metadata that avoids retaining intermediate BQMs."""
+
+    name: str
+    variables: int
+    interactions: int
+    offset: float
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -392,8 +402,17 @@ def build_scenario_grid(
         multipliers = half_width * np.sign(u) * (np.abs(u) ** tail_density_gamma)
         pc_grids.append(multipliers * sigma)
 
-    mesh = np.meshgrid(*pc_grids, indexing="ij")
-    scenario_grid = np.stack([values.ravel() for values in mesh], axis=1)
+    # Construct the Cartesian product directly in notebook-compatible C order.
+    # This avoids K full mesh arrays in addition to the final scenario matrix.
+    dimensions = tuple(len(grid) for grid in pc_grids)
+    scenario_count = int(np.prod(dimensions, dtype=np.int64))
+    scenario_grid = np.empty((scenario_count, len(pc_grids)), dtype=float)
+    for component, coordinates in enumerate(pc_grids):
+        inner_repeats = int(np.prod(dimensions[component + 1 :], dtype=np.int64))
+        outer_repeats = int(np.prod(dimensions[:component], dtype=np.int64))
+        scenario_grid[:, component] = np.tile(
+            np.repeat(coordinates, inner_repeats), outer_repeats
+        )
 
     # Discretize each historical observation to its nearest coordinate on every
     # PC. The Cartesian cell count gives a well-defined "most samples" scenario.
@@ -402,7 +421,7 @@ def build_scenario_grid(
         distances = np.abs(pca.factors[:, component, None] - coordinates[None, :])
         cell_coordinates[:, component] = np.argmin(distances, axis=1)
     flat_cells = np.ravel_multi_index(
-        cell_coordinates.T, tuple(len(grid) for grid in pc_grids)
+        cell_coordinates.T, dimensions
     )
     historical_counts = np.bincount(flat_cells, minlength=len(scenario_grid))
     return pc_grids, scenario_grid, historical_counts
@@ -460,36 +479,32 @@ def create_z_shock_grids(
     )
     inflated_sigma = local_sigma * inflation_factor
 
-    asset_z_grids: list[np.ndarray] = []
-    full_bin_edges: list[np.ndarray] = []
-    kept_bin_edges: list[np.ndarray] = []
-    max_vol_ranges = np.zeros((len(prepared.tickers), 2), dtype=float)
-    residual_ranges = np.zeros((len(prepared.tickers), 2), dtype=float)
+    z_low_max = z_hat - max_abs_z
+    z_high_max = z_hat + max_abs_z
+    all_bin_edges = np.linspace(z_low_max, z_high_max, z_bins + 1, axis=1)
+    all_bin_centers = 0.5 * (all_bin_edges[:, :-1] + all_bin_edges[:, 1:])
 
-    for asset, ticker in enumerate(prepared.tickers):
-        z_low_max = z_hat[asset] - max_abs_z[asset]
-        z_high_max = z_hat[asset] + max_abs_z[asset]
-        bin_edges = np.linspace(z_low_max, z_high_max, z_bins + 1)
-        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-
-        z_low_residual = z_hat[asset] - residual_sigma_range * inflated_sigma[asset]
-        z_high_residual = z_hat[asset] + residual_sigma_range * inflated_sigma[asset]
-        keep = (bin_edges[:-1] >= z_low_residual) & (
-            bin_edges[1:] <= z_high_residual
+    z_low_residual = z_hat - residual_sigma_range * inflated_sigma
+    z_high_residual = z_hat + residual_sigma_range * inflated_sigma
+    keep = (all_bin_edges[:, :-1] >= z_low_residual[:, None]) & (
+        all_bin_edges[:, 1:] <= z_high_residual[:, None]
+    )
+    invalid_assets = np.flatnonzero(~keep.any(axis=1))
+    if invalid_assets.size:
+        ticker = prepared.tickers[int(invalid_assets[0])]
+        raise ValueError(
+            f"No valid z bins for asset {ticker!r}; increase "
+            "--residual-sigma-range/--max-inflation-factor or reduce --z-bins"
         )
-        if not np.any(keep):
-            raise ValueError(
-                f"No valid z bins for asset {ticker!r}; increase "
-                "--residual-sigma-range/--max-inflation-factor or reduce "
-                "--z-bins"
-            )
 
-        kept_edges = np.column_stack((bin_edges[:-1][keep], bin_edges[1:][keep]))
-        asset_z_grids.append(bin_centers[keep])
-        full_bin_edges.append(bin_edges)
-        kept_bin_edges.append(kept_edges)
-        max_vol_ranges[asset] = (z_low_max, z_high_max)
-        residual_ranges[asset] = (z_low_residual, z_high_residual)
+    asset_z_grids = [centers[mask] for centers, mask in zip(all_bin_centers, keep)]
+    full_bin_edges = list(all_bin_edges)
+    kept_bin_edges = [
+        np.column_stack((edges[:-1][mask], edges[1:][mask]))
+        for edges, mask in zip(all_bin_edges, keep)
+    ]
+    max_vol_ranges = np.column_stack((z_low_max, z_high_max))
+    residual_ranges = np.column_stack((z_low_residual, z_high_residual))
 
     return ShockGridResult(
         selected_scenario=selected_scenario,
@@ -616,66 +631,142 @@ def build_qubos(
     neighbor_correlations: np.ndarray,
     lambda_one_hot: float,
     lambda_compat: float,
-) -> tuple[dimod.BinaryQuadraticModel, dimod.BinaryQuadraticModel, dimod.BinaryQuadraticModel, int]:
-    bqm_structural = dimod.BinaryQuadraticModel({}, {}, 0.0, dimod.BINARY)
-    valid_states = [range(len(grid["z"])) for grid in asset_grids]
+) -> tuple[dimod.BinaryQuadraticModel, tuple[ModelStats, ModelStats, ModelStats], int]:
+    """Build the same QUBO with vectorized coefficients and Ocean bulk loading.
 
-    for asset, states in enumerate(valid_states):
-        states_list = list(states)
-        for state in states_list:
-            bqm_structural.add_linear(variable(asset, state), -lambda_one_hot)
-        for first_position, first_state in enumerate(states_list):
-            for second_state in states_list[first_position + 1 :]:
-                bqm_structural.add_quadratic(
-                    variable(asset, first_state),
-                    variable(asset, second_state),
-                    2.0 * lambda_one_hot,
-                )
-        bqm_structural.offset += lambda_one_hot
+    Structural and portfolio linear arrays are constructed independently, then
+    added before the single BQM allocation. This is algebraically identical to
+    ``bqm_structural + bqm_portfolio`` but avoids retaining and copying three
+    graph-sized BQMs at once.
+    """
+    state_counts = np.fromiter(
+        (len(grid["z"]) for grid in asset_grids),
+        dtype=np.int64,
+        count=len(asset_grids),
+    )
+    offsets = np.empty(len(state_counts) + 1, dtype=np.int64)
+    offsets[0] = 0
+    np.cumsum(state_counts, out=offsets[1:])
+    variable_count = int(offsets[-1])
 
+    labels = [
+        variable(asset, state)
+        for asset, count in enumerate(state_counts)
+        for state in range(int(count))
+    ]
+    state_residuals = [
+        grid["z"] - z_hat[asset] for asset, grid in enumerate(asset_grids)
+    ]
+    variable_indices = [
+        np.arange(offsets[asset], offsets[asset + 1])
+        for asset in range(len(asset_grids))
+    ]
+    structural_linear = np.full(variable_count, -lambda_one_hot, dtype=float)
+    portfolio_linear = np.concatenate(
+        [
+            weights[asset] * grid["simple_return"]
+            for asset, grid in enumerate(asset_grids)
+        ]
+    ).astype(float, copy=False)
+
+    one_hot_count = int(np.sum(state_counts * (state_counts - 1) // 2))
+    edge_specs: list[tuple[int, int, float, int]] = []
     compatibility_edges = 0
-    for asset in range(len(asset_grids)):
-        for position, other in enumerate(neighbor_indices[asset]):
-            other = int(other)
-            # Match the notebook: process an outgoing neighbor only when its
-            # asset index is higher, preventing duplicate undirected terms.
+
+    def compatibility_coefficients(asset: int, other: int, rho: float) -> np.ndarray:
+        sigma_asset = conditional_standard_deviation[asset]
+        sigma_other = conditional_standard_deviation[other]
+        denominator = sigma_other**2 * max(1.0 - rho**2, 1e-12)
+        asset_residuals = state_residuals[asset]
+        expected_other = rho * sigma_other / sigma_asset * asset_residuals
+        other_residuals = state_residuals[other]
+        return (
+            np.square(other_residuals[None, :] - expected_other[:, None])
+            / denominator
+        ) * lambda_compat
+
+    # First pass determines the exact allocation size. Recomputing each small
+    # state-pair block in the fill pass avoids a second graph-sized set of arrays.
+    compatibility_count = 0
+    for asset, neighbors in enumerate(neighbor_indices):
+        for position, other_value in enumerate(neighbors):
+            other = int(other_value)
+            # Preserve the notebook's directed-neighbor filtering exactly.
             if other <= asset:
                 continue
             rho = float(neighbor_correlations[asset, position])
             if abs(rho) < 1e-6:
                 continue
             compatibility_edges += 1
-            sigma_asset = conditional_standard_deviation[asset]
-            sigma_other = conditional_standard_deviation[other]
-            denominator = sigma_other**2 * max(1.0 - rho**2, 1e-12)
 
-            for first_state in valid_states[asset]:
-                residual_asset = asset_grids[asset]["z"][first_state] - z_hat[asset]
-                expected_other = rho * sigma_other / sigma_asset * residual_asset
-                for second_state in valid_states[other]:
-                    residual_other = (
-                        asset_grids[other]["z"][second_state] - z_hat[other]
-                    )
-                    compatibility = (
-                        residual_other - expected_other
-                    ) ** 2 / denominator
-                    coefficient = lambda_compat * compatibility
-                    if coefficient != 0.0:
-                        bqm_structural.add_quadratic(
-                            variable(asset, first_state),
-                            variable(other, second_state),
-                            coefficient,
-                        )
-
-    bqm_portfolio = dimod.BinaryQuadraticModel({}, {}, 0.0, dimod.BINARY)
-    for asset, grid in enumerate(asset_grids):
-        for state, simple_return in enumerate(grid["simple_return"]):
-            bqm_portfolio.add_linear(
-                variable(asset, state), float(weights[asset] * simple_return)
+            nonzero_count = int(
+                np.count_nonzero(compatibility_coefficients(asset, other, rho))
             )
+            if nonzero_count:
+                edge_specs.append((asset, other, rho, nonzero_count))
+                compatibility_count += nonzero_count
 
-    bqm_total = bqm_structural + bqm_portfolio
-    return bqm_structural, bqm_portfolio, bqm_total, compatibility_edges
+    quadratic_count = one_hot_count + compatibility_count
+    quadratic_heads = np.empty(quadratic_count, dtype=np.int64)
+    quadratic_tails = np.empty(quadratic_count, dtype=np.int64)
+    quadratic_biases = np.empty(quadratic_count, dtype=float)
+
+    triangle_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    cursor = 0
+    for asset, count_value in enumerate(state_counts):
+        count = int(count_value)
+        if count not in triangle_cache:
+            triangle_cache[count] = np.triu_indices(count, k=1)
+        local_heads, local_tails = triangle_cache[count]
+        next_cursor = cursor + len(local_heads)
+        quadratic_heads[cursor:next_cursor] = offsets[asset] + local_heads
+        quadratic_tails[cursor:next_cursor] = offsets[asset] + local_tails
+        quadratic_biases[cursor:next_cursor] = 2.0 * lambda_one_hot
+        cursor = next_cursor
+
+    for asset, other, rho, nonzero_count in edge_specs:
+        flat_biases = compatibility_coefficients(asset, other, rho).ravel()
+        nonzero = flat_biases != 0.0
+        next_cursor = cursor + nonzero_count
+        asset_variables = variable_indices[asset]
+        other_variables = variable_indices[other]
+        quadratic_heads[cursor:next_cursor] = np.repeat(
+            asset_variables, len(other_variables)
+        )[nonzero]
+        quadratic_tails[cursor:next_cursor] = np.tile(
+            other_variables, len(asset_variables)
+        )[nonzero]
+        quadratic_biases[cursor:next_cursor] = flat_biases[nonzero]
+        cursor = next_cursor
+
+    offset = 0.0
+    for _ in asset_grids:
+        offset += lambda_one_hot
+    bqm_total = dimod.BinaryQuadraticModel.from_numpy_vectors(
+        structural_linear + portfolio_linear,
+        (quadratic_heads, quadratic_tails, quadratic_biases),
+        offset,
+        dimod.BINARY,
+        variable_order=labels,
+    )
+
+    interaction_count = len(bqm_total.quadratic)
+    stats = (
+        ModelStats(
+            "portfolio-independent structural BQM",
+            variable_count,
+            interaction_count,
+            offset,
+        ),
+        ModelStats("portfolio-dependent BQM", variable_count, 0, 0.0),
+        ModelStats(
+            "total QUBO BQM / CQM objective",
+            variable_count,
+            interaction_count,
+            offset,
+        ),
+    )
+    return bqm_total, stats, compatibility_edges
 
 
 def figure_data_uri(figure: plt.Figure) -> str:
@@ -903,9 +994,7 @@ def build_report(
     asset_grids: Sequence[dict[str, np.ndarray]],
     portfolio: pd.DataFrame,
     weights: np.ndarray,
-    bqm_structural: dimod.BinaryQuadraticModel,
-    bqm_portfolio: dimod.BinaryQuadraticModel,
-    bqm_total: dimod.BinaryQuadraticModel,
+    model_stats: Sequence[ModelStats],
     compatibility_edges: int,
     figures: Sequence[tuple[str, str]],
 ) -> str:
@@ -1005,23 +1094,12 @@ def build_report(
     qubo_table = pd.DataFrame(
         [
             {
-                "model": "portfolio-independent structural BQM",
-                "variables": len(bqm_structural.variables),
-                "interactions": len(bqm_structural.quadratic),
-                "offset": bqm_structural.offset,
-            },
-            {
-                "model": "portfolio-dependent BQM",
-                "variables": len(bqm_portfolio.variables),
-                "interactions": len(bqm_portfolio.quadratic),
-                "offset": bqm_portfolio.offset,
-            },
-            {
-                "model": "total QUBO BQM / CQM objective",
-                "variables": len(bqm_total.variables),
-                "interactions": len(bqm_total.quadratic),
-                "offset": bqm_total.offset,
-            },
+                "model": stats.name,
+                "variables": stats.variables,
+                "interactions": stats.interactions,
+                "offset": stats.offset,
+            }
+            for stats in model_stats
         ]
     )
 
@@ -1183,7 +1261,7 @@ def main() -> None:
     )
 
     print("[6/8] Building structural, portfolio, and total QUBOs", flush=True)
-    bqm_structural, bqm_portfolio, bqm_total, compatibility_edges = build_qubos(
+    bqm_total, model_stats, compatibility_edges = build_qubos(
         asset_grids,
         weights,
         shocks.z_hat,
@@ -1193,8 +1271,6 @@ def main() -> None:
         args.lambda_one_hot,
         args.lambda_compat,
     )
-    cqm_total = dimod.ConstrainedQuadraticModel.from_bqm(bqm_total)
-
     print("[7/8] Rendering self-contained process report", flush=True)
     figures = build_figures(
         prepared,
@@ -1221,9 +1297,7 @@ def main() -> None:
         asset_grids,
         portfolio,
         weights,
-        bqm_structural,
-        bqm_portfolio,
-        bqm_total,
+        model_stats,
         compatibility_edges,
         figures,
     )
@@ -1233,7 +1307,9 @@ def main() -> None:
     cqm_path = output_dir / "qubo.cqm"
     print("[8/8] Exporting report, BQM, and CQM", flush=True)
     bqm_file = bqm_total.to_file()
+    cqm_total = dimod.ConstrainedQuadraticModel.from_bqm(bqm_total)
     cqm_file = cqm_total.to_file()
+    del cqm_total
     try:
         output_dir.mkdir(parents=False, exist_ok=False)
         atomic_write_model(bqm_path, bqm_file)
