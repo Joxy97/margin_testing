@@ -49,6 +49,9 @@ target_link_libraries(maxcut_batch_benchmark PRIVATE sbm)
 add_executable(maxcut_large_benchmark src/benchmark/maxcut_large_benchmark.cpp)
 target_link_libraries(maxcut_large_benchmark PRIVATE sbm)
 
+add_executable(bqm_margin_benchmark src/benchmark/bqm_margin_benchmark.cpp)
+target_link_libraries(bqm_margin_benchmark PRIVATE sbm)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(sbm_tests tests/sbm_tests.cpp)
