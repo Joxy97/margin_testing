@@ -4,7 +4,7 @@ from typing import Any
 
 import yfinance
 
-from ..command import Command, UnifiedFormatCommand, YfinanceCommand
+from ..command import UnifiedFormatCommand, YfinanceCommand
 from .data_provider import DataProvider
 
 
@@ -15,16 +15,16 @@ class YfinanceDataProvider(DataProvider):
         """Return yfinance data without modification."""
         return raw_data
 
-    def convertCommand(self, command: Command) -> YfinanceCommand:
+    def convertCommand(self, command: UnifiedFormatCommand) -> YfinanceCommand:
         """Convert a unified command to yfinance download parameters."""
-        if not isinstance(command, UnifiedFormatCommand):
-            raise TypeError("command must be a UnifiedFormatCommand instance")
+        if not isinstance(command, dict):
+            raise TypeError("command must be a dictionary")
         return YfinanceCommand(
             parameters=(
-                command.instruments,
-                command.start_date,
-                command.end_date,
-                command.period.value,
+                command["instruments"],
+                command["start_date"],
+                command["end_date"],
+                command["period"].value,
             )
         )
 

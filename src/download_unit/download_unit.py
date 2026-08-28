@@ -9,32 +9,30 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import pandas
 
-from .command import Command
+from .command import UnifiedFormatCommand
 from .data_provider import DataProvider
 
 
 class DownloadUnit(ABC):
     """Coordinate data retrieval through a data provider."""
 
-    def __init__(self) -> None:
-        self._provider: DataProvider | None = None
-
-    def getData(self, provider: DataProvider, command: Command) -> Any:
+    def getData(
+        self,
+        provider: DataProvider,
+        command: UnifiedFormatCommand,
+    ) -> Any:
         """Download, convert, and return data for ``command``."""
-        self._provider = provider
         raw_data = self.getRawData(provider, command)
-        return self.convertRawData(raw_data)
+        return provider.convertRawData(raw_data)
 
     @abstractmethod
-    def getRawData(self, provider: DataProvider, command: Command) -> Any:
+    def getRawData(
+        self,
+        provider: DataProvider,
+        command: UnifiedFormatCommand,
+    ) -> Any:
         """Retrieve unconverted data from ``provider`` for ``command``."""
         raise NotImplementedError
-
-    def convertRawData(self, raw_data: Any) -> Any:
-        """Convert raw data through the provider used by :meth:`getData`."""
-        if self._provider is None:
-            raise RuntimeError("getData must be called before convertRawData")
-        return self._provider.convertRawData(raw_data)
 
     @staticmethod
     def storeData(data: pandas.DataFrame, path: str | PathLike[str]) -> None:

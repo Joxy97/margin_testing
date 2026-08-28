@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pandas
 
-from download_unit import ExponentialBackoffDownloadUnit, Period, UnifiedFormatCommand
+from download_unit import (
+    DateChunker,
+    ExponentialBackoffDownloadUnit,
+    InstrumentChunker,
+    Period,
+    ProductChunker,
+    UnifiedFormatCommand,
+)
 
 
 @unittest.skipUnless(
@@ -47,8 +54,10 @@ class YfinanceExponentialBackoffIntegrationTest(unittest.TestCase):
             location="https://query1.finance.yahoo.com",
         )
         unit = ExponentialBackoffDownloadUnit(
-            instrument_batch=5,
-            dates_batch=100,
+            chunker=ProductChunker(
+                InstrumentChunker(5),
+                DateChunker(100),
+            ),
             time=1,
         )
         provider = YfinanceDataProvider()

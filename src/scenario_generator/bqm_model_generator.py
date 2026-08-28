@@ -4,29 +4,30 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from download_unit import Instrument
-
 if TYPE_CHECKING:
-    from .scenario import (
-        CorrelatedReturnsVolaGridScenario,
-        ReturnsVolaGridScenario,
+    from portfolio import Portfolio
+
+    from .risk_state import (
+        CorrelatedReturnsVolaGridRiskState,
+        ReturnsVolaGridRiskState,
     )
 
 
 class BQMModelGenerator:
-    """Build D-Wave binary quadratic models from scenarios."""
+    """Build D-Wave binary quadratic models from risk states."""
 
     def createReturnsVolaGridBQM(
         self,
-        scenario: ReturnsVolaGridScenario,
+        riskState: ReturnsVolaGridRiskState,
+        portfolio: Portfolio,
     ) -> None:
-        """Create a BQM for a returns-volatility-grid scenario."""
+        """Create a BQM for a returns-volatility-grid risk state."""
         pass
 
     def createCorrelatedReturnsVolaGridBQM(
         self,
-        scenario: CorrelatedReturnsVolaGridScenario,
-        correlations: dict[tuple[Instrument, Instrument], float],
+        riskState: CorrelatedReturnsVolaGridRiskState,
+        portfolio: Portfolio,
     ) -> None:
-        """Create a BQM for a correlated returns-volatility-grid scenario."""
+        """Create a BQM for a correlated returns-volatility-grid risk state."""
         pass

@@ -1,19 +1,27 @@
 """Tests for BQM solver interfaces and factories."""
 
 import unittest
-from typing import Any
 
 import dimod
 
-from bqmsolver import BQMSolver, BQMSolverFactory
+from decision_maker.optimization.optimization_solver.bqm_solver import (
+    BQMSolver,
+    BQMSolverFactory,
+    OptimizationProblem,
+    OptimizationSolver,
+    OptimizationSolverResult,
+    QUBOProblem,
+)
 
 
 class StubBQMSolver(BQMSolver):
     def __init__(self, answer: str = "solved") -> None:
         self.answer = answer
+        self.problem: QUBOProblem | None = None
 
-    def solve(self, bqm: dimod.BinaryQuadraticModel) -> Any:
-        return self.answer, bqm
+    def solve(self, problem: QUBOProblem) -> OptimizationSolverResult:
+        self.problem = problem
+        return OptimizationSolverResult()
 
 
 class BQMSolverTest(unittest.TestCase):
@@ -21,14 +29,17 @@ class BQMSolverTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         BQMSolverFactory.registerSolver("stub", StubBQMSolver)
 
-    def test_solver_receives_a_binary_quadratic_model(self) -> None:
-        bqm = dimod.BinaryQuadraticModel.from_ising({"x": -1}, {})
+    def test_solver_receives_a_qubo_problem(self) -> None:
+        problem = QUBOProblem.from_ising({"x": -1}, {})
         solver = StubBQMSolver()
 
-        answer, solved_bqm = solver.solve(bqm)
+        result = solver.solve(problem)
 
-        self.assertEqual(answer, "solved")
-        self.assertIs(solved_bqm, bqm)
+        self.assertIsInstance(result, OptimizationSolverResult)
+        self.assertIs(solver.problem, problem)
+        self.assertIsInstance(problem, dimod.BinaryQuadraticModel)
+        self.assertIsInstance(problem, OptimizationProblem)
+        self.assertIsInstance(solver, OptimizationSolver)
 
     def test_factory_creates_registered_solver_with_parameters(self) -> None:
         solver = BQMSolverFactory.createBQMSolver(

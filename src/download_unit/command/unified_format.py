@@ -1,12 +1,9 @@
-"""Provider-independent download command."""
+"""Provider-independent download command format."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
 from enum import Enum
-
-from .command import Command
+from typing import Any
 
 
 class Period(str, Enum):
@@ -26,13 +23,6 @@ class Period(str, Enum):
 
 Instrument = str
 
-
-@dataclass(frozen=True)
-class UnifiedFormatCommand(Command):
-    """Describe a download request independently of a data provider."""
-
-    instruments: list[Instrument]
-    start_date: date
-    end_date: date
-    period: Period
-    location: str = ""
+# The shared keys are ``instruments``, ``start_date``, ``end_date``, ``period``,
+# and, when needed by a provider, ``location``.
+UnifiedFormatCommand = dict[str, Any]

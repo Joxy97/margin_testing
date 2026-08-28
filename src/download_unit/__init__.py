@@ -7,6 +7,7 @@ from .command import (
     UnifiedFormatCommand,
     YfinanceCommand,
 )
+from .chunker import Chunker, DateChunker, InstrumentChunker, ProductChunker
 from .data_provider import DataProvider, LocalCSVDataProvider
 from .download_unit import DownloadUnit
 from .download_unit_factory import DownloadUnitFactory
@@ -15,13 +16,17 @@ from .single_request_download_unit import SingleRequestDownloadUnit
 
 __all__ = [
     "Command",
+    "Chunker",
     "DataProvider",
     "DownloadUnit",
     "DownloadUnitFactory",
+    "DateChunker",
     "ExponentialBackoffDownloadUnit",
     "Instrument",
+    "InstrumentChunker",
     "LocalCSVDataProvider",
     "Period",
+    "ProductChunker",
     "SingleRequestDownloadUnit",
     "UnifiedFormatCommand",
     "YfinanceCommand",

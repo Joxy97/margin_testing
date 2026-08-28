@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from .command import Command
+from .command import UnifiedFormatCommand
 from .data_provider import DataProvider
 from .download_unit import DownloadUnit
 
@@ -13,7 +13,7 @@ class SingleRequestDownloadUnit(DownloadUnit):
     def getRawData(
         self,
         provider: DataProvider,
-        command: Command,
+        command: UnifiedFormatCommand,
     ) -> Any:
         """Convert ``command`` and make one provider request."""
         provider_command = provider.convertCommand(command)
