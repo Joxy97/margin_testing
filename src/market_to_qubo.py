@@ -35,6 +35,8 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
+from qubo_model import CompactQubo
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SYNTHETIC_MARKET_ROOT = PROJECT_ROOT / "synthetic_market"
@@ -654,7 +656,14 @@ def build_qubos(
     neighbor_correlations: np.ndarray,
     lambda_one_hot: float,
     lambda_compat: float,
-) -> tuple[dimod.BinaryQuadraticModel, tuple[ModelStats, ModelStats, ModelStats], int]:
+    *,
+    numeric_labels: bool = False,
+    compact: bool = False,
+) -> tuple[
+    dimod.BinaryQuadraticModel | CompactQubo,
+    tuple[ModelStats, ModelStats, ModelStats],
+    int,
+]:
     """Build the same QUBO with vectorized coefficients and Ocean bulk loading.
 
     Structural and portfolio linear arrays are constructed independently, then
@@ -672,16 +681,21 @@ def build_qubos(
     np.cumsum(state_counts, out=offsets[1:])
     variable_count = int(offsets[-1])
 
-    labels = [
-        variable(asset, state)
-        for asset, count in enumerate(state_counts)
-        for state in range(int(count))
-    ]
+    if numeric_labels or compact:
+        # Integer labels avoid hundreds of thousands of Python strings in the
+        # rolling backtester.  Group offsets retain the asset/state mapping.
+        labels: Sequence[int | str] = range(variable_count)
+    else:
+        labels = [
+            variable(asset, state)
+            for asset, count in enumerate(state_counts)
+            for state in range(int(count))
+        ]
     state_residuals = [
         grid["z"] - z_hat[asset] for asset, grid in enumerate(asset_grids)
     ]
     variable_indices = [
-        np.arange(offsets[asset], offsets[asset + 1])
+        np.arange(offsets[asset], offsets[asset + 1], dtype=np.int32)
         for asset in range(len(asset_grids))
     ]
     structural_linear = np.full(variable_count, -lambda_one_hot, dtype=float)
@@ -730,8 +744,8 @@ def build_qubos(
                 compatibility_count += nonzero_count
 
     quadratic_count = one_hot_count + compatibility_count
-    quadratic_heads = np.empty(quadratic_count, dtype=np.int64)
-    quadratic_tails = np.empty(quadratic_count, dtype=np.int64)
+    quadratic_heads = np.empty(quadratic_count, dtype=np.int32)
+    quadratic_tails = np.empty(quadratic_count, dtype=np.int32)
     quadratic_biases = np.empty(quadratic_count, dtype=float)
 
     triangle_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
@@ -765,15 +779,25 @@ def build_qubos(
     offset = 0.0
     for _ in asset_grids:
         offset += lambda_one_hot
-    bqm_total = dimod.BinaryQuadraticModel.from_numpy_vectors(
-        structural_linear + portfolio_linear,
-        (quadratic_heads, quadratic_tails, quadratic_biases),
-        offset,
-        dimod.BINARY,
-        variable_order=labels,
-    )
-
-    interaction_count = len(bqm_total.quadratic)
+    total_linear = structural_linear + portfolio_linear
+    if compact:
+        bqm_total: dimod.BinaryQuadraticModel | CompactQubo = CompactQubo(
+            total_linear,
+            quadratic_heads,
+            quadratic_tails,
+            quadratic_biases,
+            offset,
+        )
+        interaction_count = quadratic_count
+    else:
+        bqm_total = dimod.BinaryQuadraticModel.from_numpy_vectors(
+            total_linear,
+            (quadratic_heads, quadratic_tails, quadratic_biases),
+            offset,
+            dimod.BINARY,
+            variable_order=labels,
+        )
+        interaction_count = len(bqm_total.quadratic)
     stats = (
         ModelStats(
             "portfolio-independent structural BQM",
