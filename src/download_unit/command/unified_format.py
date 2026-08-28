@@ -26,6 +26,7 @@ class Period(str, Enum):
 
 Instrument = str
 
+
 @dataclass(frozen=True)
 class UnifiedFormatCommand(Command):
     """Describe a download request independently of a data provider."""
@@ -34,3 +35,4 @@ class UnifiedFormatCommand(Command):
     start_date: date
     end_date: date
     period: Period
+    location: str = ""

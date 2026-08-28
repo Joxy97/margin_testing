@@ -4,7 +4,7 @@ from typing import Any
 
 import yfinance
 
-from ..command import UnifiedFormatCommand, YfinanceCommand
+from ..command import Command, UnifiedFormatCommand, YfinanceCommand
 from .data_provider import DataProvider
 
 
@@ -15,7 +15,7 @@ class YfinanceDataProvider(DataProvider):
         """Return yfinance data without modification."""
         return raw_data
 
-    def convertCommand(self, command: UnifiedFormatCommand) -> YfinanceCommand:
+    def convertCommand(self, command: Command) -> YfinanceCommand:
         """Convert a unified command to yfinance download parameters."""
         if not isinstance(command, UnifiedFormatCommand):
             raise TypeError("command must be a UnifiedFormatCommand instance")
