@@ -56,6 +56,7 @@ class ExponentialBackoffDownloadUnit(DownloadUnit):
                 start_date=start_date,
                 end_date=end_date,
                 period=command.period,
+                location=command.location,
             )
             provider_command = provider.convertCommand(chunk)
             raw_data.append(provider.downloadData(provider_command))

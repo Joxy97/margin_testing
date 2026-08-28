@@ -44,6 +44,7 @@ class YfinanceExponentialBackoffIntegrationTest(unittest.TestCase):
             start_date=end_date - timedelta(days=300),
             end_date=end_date,
             period=Period.ONE_DAY,
+            location="https://query1.finance.yahoo.com",
         )
         unit = ExponentialBackoffDownloadUnit(
             instrument_batch=5,
