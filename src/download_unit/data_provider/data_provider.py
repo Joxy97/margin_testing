@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..command import Command
+from ..command import Command, UnifiedFormatCommand
 
 
 class DataProvider(ABC):
@@ -15,7 +15,7 @@ class DataProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def convertCommand(self, command: Command) -> Command:
+    def convertCommand(self, command: UnifiedFormatCommand) -> Command:
         """Translate an application command into a provider-specific command."""
         raise NotImplementedError
 

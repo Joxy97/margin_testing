@@ -1,10 +1,26 @@
 """Tests for the singleton download-provider registry."""
 
 import unittest
+from datetime import date
 from unittest.mock import Mock, patch
 
 from download_manager import DownloadManager
-from download_unit import Command
+from download_unit import (
+    DateChunker,
+    InstrumentChunker,
+    Period,
+    ProductChunker,
+    UnifiedFormatCommand,
+)
+
+
+def unified_command() -> UnifiedFormatCommand:
+    return UnifiedFormatCommand(
+        instruments=[],
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 1),
+        period=Period.ONE_DAY,
+    )
 
 
 class DownloadManagerTest(unittest.TestCase):
@@ -67,7 +83,8 @@ class DownloadManagerTest(unittest.TestCase):
         create_download_unit: Mock,
     ) -> None:
         provider = object()
-        command = Command()
+        command = unified_command()
+        chunker = ProductChunker(InstrumentChunker(5), DateChunker(100))
         download_unit = create_download_unit.return_value
         download_unit.getData.return_value = "downloaded data"
         self.manager.addProvider("provider", provider)  # type: ignore[arg-type]
@@ -76,23 +93,24 @@ class DownloadManagerTest(unittest.TestCase):
             "provider",
             command,
             "exponential_backoff",
-            {"instrument_batch": 5, "dates_batch": 100, "time": 1},
+            {"chunker": chunker, "time": 1},
         )
 
         create_download_unit.assert_called_once_with(
             "exponential_backoff",
-            {"instrument_batch": 5, "dates_batch": 100, "time": 1},
+            {"chunker": chunker, "time": 1},
         )
         download_unit.getData.assert_called_once_with(provider, command)
         self.assertEqual(result, "downloaded data")
 
     def test_download_rejects_missing_provider(self) -> None:
+        chunker = ProductChunker(InstrumentChunker(5), DateChunker(100))
         with self.assertRaises(KeyError):
             self.manager.downloadData(
                 "missing",
-                Command(),
+                unified_command(),
                 "exponential_backoff",
-                {"instrument_batch": 5, "dates_batch": 100, "time": 1},
+                {"chunker": chunker, "time": 1},
             )
 
 

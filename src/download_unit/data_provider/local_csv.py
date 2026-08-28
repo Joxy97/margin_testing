@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from ..command import Command, UnifiedFormatCommand
+from ..command import UnifiedFormatCommand
 from .data_provider import DataProvider
 
 if TYPE_CHECKING:
@@ -21,11 +21,11 @@ class LocalCSVDataProvider(DataProvider):
 
     def convertCommand(
         self,
-        command: Command,
+        command: UnifiedFormatCommand,
     ) -> UnifiedFormatCommand:
         """Return the unified command without modification."""
-        if not isinstance(command, UnifiedFormatCommand):
-            raise TypeError("command must be a UnifiedFormatCommand instance")
+        if not isinstance(command, dict):
+            raise TypeError("command must be a dictionary")
         return command
 
     def downloadData(
@@ -33,14 +33,18 @@ class LocalCSVDataProvider(DataProvider):
         command: UnifiedFormatCommand,
     ) -> pandas.DataFrame:
         """Read and filter the CSV dataset described by ``command``."""
-        if not isinstance(command, UnifiedFormatCommand):
-            raise TypeError("command must be a UnifiedFormatCommand instance")
+        if not isinstance(command, dict):
+            raise TypeError("command must be a dictionary")
 
         import pandas
 
-        data = pandas.read_csv(command.location)
-        data = self._extractInstruments(data, command.instruments)
-        return self._extractDates(data, command.start_date, command.end_date)
+        data = pandas.read_csv(command.get("location", ""))
+        data = self._extractInstruments(data, command["instruments"])
+        return self._extractDates(
+            data,
+            command["start_date"],
+            command["end_date"],
+        )
 
     def _extractInstruments(
         self,

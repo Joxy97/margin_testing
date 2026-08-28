@@ -5,7 +5,7 @@ from __future__ import annotations
 from threading import Lock
 from typing import Any, ClassVar, Iterable, Mapping
 
-from download_unit import Command, DownloadUnitFactory
+from download_unit import DownloadUnitFactory, UnifiedFormatCommand
 from download_unit.data_provider import DataProvider
 
 
@@ -51,7 +51,7 @@ class DownloadManager:
     def downloadData(
         self,
         key: str,
-        command: Command,
+        command: UnifiedFormatCommand,
         downloadAlgorithm: str,
         parameters: Mapping[str, Any],
     ) -> Any:
