@@ -9,7 +9,7 @@ from download_unit import (
     DataProvider,
     Period,
     SingleRequestDownloadUnit,
-    UnifiedFormatCommand,
+    DataRequest,
 )
 
 
@@ -17,10 +17,13 @@ class StubDataProvider(DataProvider):
     def __init__(self) -> None:
         self.downloaded_command: Command | None = None
 
+    def getDataTypes(self) -> set[str]:
+        return {"testData"}
+
     def convertRawData(self, raw_data: Any) -> Any:
         return ("converted", raw_data)
 
-    def convertCommand(self, command: UnifiedFormatCommand) -> Command:
+    def convertCommand(self, command: DataRequest) -> Command:
         return command
 
     def downloadData(self, command: Command) -> Any:
@@ -29,13 +32,14 @@ class StubDataProvider(DataProvider):
 
 
 class SingleRequestDownloadUnitTest(unittest.TestCase):
-    def test_accepts_the_unified_command_dictionary(self) -> None:
+    def test_accepts_a_typed_data_request(self) -> None:
         provider = StubDataProvider()
-        command = UnifiedFormatCommand(
-            instruments=[],
+        command = DataRequest(
+            instruments=["AAPL"],
             start_date=date(2024, 1, 1),
             end_date=date(2024, 1, 1),
             period=Period.ONE_DAY,
+            data_type="testData",
         )
         unit = SingleRequestDownloadUnit()
 

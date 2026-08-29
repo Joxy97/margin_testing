@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 
-from ..command import UnifiedFormatCommand
+from ..command import DataRequest
 from .chunker import Chunker
 
 
@@ -15,8 +15,8 @@ class ProductChunker(Chunker):
 
     def createChunks(
         self,
-        command: UnifiedFormatCommand,
-    ) -> Iterable[UnifiedFormatCommand]:
+        command: DataRequest,
+    ) -> Iterable[DataRequest]:
         """Yield the product of both child chunkers' command chunks."""
         for first_chunk in self.firstChunker.createChunks(command):
             yield from self.secondChunker.createChunks(first_chunk)

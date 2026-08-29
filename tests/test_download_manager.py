@@ -1,4 +1,4 @@
-"""Tests for the singleton download-provider registry."""
+"""Tests for an independent download-provider registry."""
 
 import unittest
 from datetime import date
@@ -10,16 +10,19 @@ from download_unit import (
     InstrumentChunker,
     Period,
     ProductChunker,
-    UnifiedFormatCommand,
+    DataRequest,
+    LocalCSVDataProvider,
+    YfinanceDataProvider,
 )
 
 
-def unified_command() -> UnifiedFormatCommand:
-    return UnifiedFormatCommand(
-        instruments=[],
+def data_request() -> DataRequest:
+    return DataRequest(
+        instruments=["AAPL"],
         start_date=date(2024, 1, 1),
         end_date=date(2024, 1, 1),
         period=Period.ONE_DAY,
+        data_type="closePrices",
     )
 
 
@@ -31,14 +34,14 @@ class DownloadManagerTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.manager.purgeProviders()
 
-    def test_is_a_singleton_and_keeps_registered_providers(self) -> None:
+    def test_instances_keep_independent_provider_registries(self) -> None:
         provider = object()
         self.manager.addProvider("test", provider)  # type: ignore[arg-type]
 
         other_reference = DownloadManager()
 
-        self.assertIs(other_reference, self.manager)
-        self.assertIs(other_reference.providers["test"], provider)
+        self.assertIsNot(other_reference, self.manager)
+        self.assertNotIn("test", other_reference.providers)
 
     def test_adds_one_or_multiple_providers(self) -> None:
         first = object()
@@ -83,7 +86,7 @@ class DownloadManagerTest(unittest.TestCase):
         create_download_unit: Mock,
     ) -> None:
         provider = object()
-        command = unified_command()
+        command = data_request()
         chunker = ProductChunker(InstrumentChunker(5), DateChunker(100))
         download_unit = create_download_unit.return_value
         download_unit.getData.return_value = "downloaded data"
@@ -108,10 +111,27 @@ class DownloadManagerTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.manager.downloadData(
                 "missing",
-                unified_command(),
+                data_request(),
                 "exponential_backoff",
                 {"chunker": chunker, "time": 1},
             )
+
+    def test_returns_capable_providers_and_prefers_local_csv(self) -> None:
+        local = LocalCSVDataProvider()
+        yfinance = YfinanceDataProvider()
+        self.manager.addProviders(
+            (("yfinance", yfinance), ("localCSV", local))
+        )
+
+        providers = self.manager.returnProviders("closePrices")
+        selected = self.manager.providerSelection.selectProvider(providers)
+
+        self.assertEqual(providers, [yfinance, local])
+        self.assertIs(selected, local)
+
+    def test_rejects_a_data_type_without_a_provider(self) -> None:
+        with self.assertRaisesRegex(ValueError, "No provider"):
+            self.manager.downloadDataType("missing", data_request())
 
 
 if __name__ == "__main__":

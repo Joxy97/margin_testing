@@ -60,6 +60,31 @@ void test_cpu_batch_solver() {
     }
 }
 
+void test_cpu_candidate_batch_solver() {
+    const std::vector<sbm::BinaryQuadraticModel> bqms{example(), example()};
+    sbm::SolverParameters parameters;
+    parameters.steps = 100;
+    parameters.runs = 3;
+    parameters.seed = 13;
+
+    const auto batches = sbm::solve_cpu_candidates_batch(bqms, parameters);
+
+    require(batches.size() == bqms.size(),
+            "CPU candidate batch returned the wrong problem count");
+    for (std::size_t problem = 0; problem < batches.size(); ++problem) {
+        require(batches[problem].size() ==
+                    static_cast<std::size_t>(parameters.runs),
+                "CPU candidate batch returned the wrong run count");
+        for (const auto& candidate : batches[problem]) {
+            require(candidate.sample.size() == bqms[problem].size(),
+                    "CPU candidate batch returned the wrong sample size");
+            require(std::abs(candidate.energy -
+                             bqms[problem].energy(candidate.sample)) < 1e-12,
+                    "CPU candidate batch returned an inconsistent energy");
+        }
+    }
+}
+
 void test_maxcut_qubo_equivalence() {
     const sbm::maxcut::Graph graph{
         3, {{0, 1, 2.0}, {1, 2, 3.0}, {0, 2, 1.0}}};
@@ -93,6 +118,7 @@ int main() {
         test_maxcut_qubo_equivalence();
         test_cpu_solver();
         test_cpu_batch_solver();
+        test_cpu_candidate_batch_solver();
 #ifdef SBM_HAS_FPGA_SIM
         test_fpga_sim_solver();
 #endif

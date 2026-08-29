@@ -2,104 +2,228 @@
 
 import unittest
 from datetime import date
-from unittest.mock import Mock
+from decimal import Decimal
+from unittest.mock import Mock, call
 
 import numpy
 
-from download_unit import Period, UnifiedFormatCommand
+from margin_calculator.optimization.optimization_result import BQMOptimizationResult
+from margin_calculator.optimization.optimization_problem.qubo_problem import (
+    QUBOProblem,
+)
 from portfolio import Portfolio
-from scenario_generator import (
-    BQMModelGenerator,
+from risk_state_generator import (
+    CorrelationFactors,
     CorrelatedReturnsVolaGridRiskState,
+    PortfolioCorrelatedReturnsVolaGridRiskState,
+    PortfolioReturnsVolaGridRiskState,
+    PortfolioRiskState,
+    PortfolioRiskStateBQMManager,
     RiskState,
+    RiskStateGenerator,
     ReturnsVolaGridRiskState,
-    ReturnsVolaGridScenarioGenerator,
-    ScenarioGenerator,
+    ReturnsVolaGridRiskStateGenerator,
 )
 
 
 class ReturnsVolaGridRiskStateTest(unittest.TestCase):
-    def test_is_a_risk_state_and_dispatches_itself_to_generator(self) -> None:
+    def test_returns_grid_is_a_portfolio_independent_risk_state(self) -> None:
         grids = {
             "AAPL": numpy.array([[0.01, 0.20], [0.02, 0.25]]),
             "MSFT": numpy.array([[0.03, 0.15]]),
         }
         risk_state = ReturnsVolaGridRiskState(grids)
-        generator = Mock()
-        portfolio = Portfolio()
-
-        result = risk_state.accept(generator, portfolio)
 
         self.assertIsInstance(risk_state, RiskState)
         self.assertIs(risk_state.returnsVolaGrid, grids)
-        generator.createReturnsVolaGridBQM.assert_called_once_with(
-            risk_state,
-            portfolio,
-        )
-        self.assertIsNone(result)
 
-    def test_correlated_risk_state_dispatches_its_correlations(self) -> None:
+    def test_correlated_risk_state_stores_its_correlations(self) -> None:
         grids = {"AAPL": numpy.array([[0.01, 0.20]])}
-        correlations = {("AAPL", "MSFT"): 0.75}
+        correlations = CorrelationFactors(
+            numpy.array([0]),
+            numpy.array([0]),
+            numpy.array([1]),
+            numpy.array([0]),
+            numpy.array([0.75]),
+        )
         risk_state = CorrelatedReturnsVolaGridRiskState(grids, correlations)
-        generator = Mock()
-        portfolio = Portfolio()
-
-        result = risk_state.accept(generator, portfolio)
 
         self.assertIsInstance(risk_state, ReturnsVolaGridRiskState)
         self.assertIs(risk_state.returnsVolaGrid, grids)
         self.assertIs(risk_state.correlations, correlations)
-        generator.createCorrelatedReturnsVolaGridBQM.assert_called_once_with(
+
+    def test_portfolio_risk_states_dispatch_encoding_and_decoding(self) -> None:
+        risk_state = ReturnsVolaGridRiskState(
+            {"AAPL": numpy.array([[0.01, 0.20]])}
+        )
+        correlated_risk_state = CorrelatedReturnsVolaGridRiskState(
+            risk_state.returnsVolaGrid,
+            CorrelationFactors.empty(),
+        )
+        portfolio = Portfolio()
+        parameters = {"lambdaOneHot": 2.0}
+        result = BQMOptimizationResult({"x_0_0": 1})
+        manager = Mock()
+        greedy_visitor = Mock()
+        portfolio_state = PortfolioReturnsVolaGridRiskState(
             risk_state,
             portfolio,
         )
-        self.assertIsNone(result)
-
-    def test_bqm_generator_methods_are_empty(self) -> None:
-        generator = BQMModelGenerator()
-        grids = {"AAPL": numpy.array([[0.01, 0.20]])}
-        correlations = {("AAPL", "MSFT"): 0.75}
-        risk_state = ReturnsVolaGridRiskState(grids)
-        correlated_risk_state = CorrelatedReturnsVolaGridRiskState(
-            grids,
-            correlations,
-        )
-        portfolio = Portfolio()
-
-        self.assertIsNone(
-            generator.createReturnsVolaGridBQM(risk_state, portfolio)
-        )
-        self.assertIsNone(
-            generator.createCorrelatedReturnsVolaGridBQM(
+        correlated_portfolio_state = (
+            PortfolioCorrelatedReturnsVolaGridRiskState(
                 correlated_risk_state,
                 portfolio,
             )
         )
 
-    def test_risk_state_is_abstract(self) -> None:
-        with self.assertRaises(TypeError):
-            RiskState()
+        portfolio_state.acceptBQM(manager, parameters)
+        portfolio_state.acceptDecode(manager, result)
+        portfolio_state.acceptGreedy(greedy_visitor)
+        correlated_portfolio_state.acceptBQM(manager, parameters)
+        correlated_portfolio_state.acceptDecode(manager, result)
+        correlated_portfolio_state.acceptGreedy(greedy_visitor)
 
-    def test_scenario_generator_returns_its_data_requirements(self) -> None:
-        command = UnifiedFormatCommand(
-            instruments=["AAPL"],
-            start_date=date(2024, 1, 1),
-            end_date=date(2024, 1, 2),
-            period=Period.ONE_DAY,
+        self.assertIsInstance(portfolio_state, PortfolioRiskState)
+        manager.createReturnsVolaGridBQM.assert_called_once_with(
+            risk_state,
+            portfolio,
+            parameters,
+        )
+        manager.decodeReturnsVolaGridRiskState.assert_called_once_with(
+            risk_state,
+            portfolio,
+            result,
+        )
+        manager.createCorrelatedReturnsVolaGridBQM.assert_called_once_with(
+            correlated_risk_state,
+            portfolio,
+            parameters,
+        )
+        manager.decodeCorrelatedReturnsVolaGridRiskState.assert_called_once_with(
+            correlated_risk_state,
+            portfolio,
+            result,
+        )
+        self.assertEqual(
+            greedy_visitor.getGreedyScenario.call_args_list,
+            [call(portfolio_state), call(correlated_portfolio_state)],
         )
 
-        result = ReturnsVolaGridScenarioGenerator().dataRequirements(command)
+    def test_bqm_generator_builds_marginlab_terms(self) -> None:
+        manager = PortfolioRiskStateBQMManager()
+        grids = {
+            "AAPL": numpy.array([[0.01, 0.20], [0.02, 0.25]]),
+            "MSFT": numpy.array([[-0.03, 0.15]]),
+        }
+        correlations = CorrelationFactors(
+            numpy.array([0]),
+            numpy.array([0]),
+            numpy.array([1]),
+            numpy.array([0]),
+            numpy.array([0.75]),
+        )
+        risk_state = ReturnsVolaGridRiskState(grids)
+        correlated_risk_state = CorrelatedReturnsVolaGridRiskState(
+            grids,
+            correlations,
+        )
+        portfolio = Portfolio(
+            weights={
+                "AAPL": Decimal("10"),
+                "MSFT": Decimal("5"),
+            }
+        )
 
-        self.assertIs(result, command)
+        uncorrelated_bqm = manager.createReturnsVolaGridBQM(
+            risk_state,
+            portfolio,
+            {"lambdaOneHot": 2.0},
+        )
+        correlated_bqm = manager.createCorrelatedReturnsVolaGridBQM(
+            correlated_risk_state,
+            portfolio,
+            {"lambdaOneHot": 2.0, "lambdaCompat": 0.5},
+        )
 
-    def test_returns_generator_key_extraction_is_not_implemented(self) -> None:
-        with self.assertRaises(NotImplementedError):
-            ReturnsVolaGridScenarioGenerator().getRiskStates(object())
+        self.assertIsInstance(correlated_bqm, QUBOProblem)
+        numpy.testing.assert_allclose(
+            sorted(uncorrelated_bqm.linear),
+            sorted((10.0 * 0.01 - 2.0, 10.0 * 0.02 - 2.0, 5.0 * -0.03 - 2.0)),
+        )
+        numpy.testing.assert_allclose(
+            sorted(uncorrelated_bqm.quadraticBiases),
+            [4.0],
+        )
+        self.assertAlmostEqual(uncorrelated_bqm.offset, 4.0)
+        numpy.testing.assert_allclose(
+            sorted(correlated_bqm.linear),
+            sorted((10.0 * 0.01 - 2.0, 10.0 * 0.02 - 2.0, 5.0 * -0.03 - 2.0)),
+        )
+        numpy.testing.assert_allclose(
+            sorted(correlated_bqm.quadraticBiases),
+            [0.375, 4.0],
+        )
+        self.assertAlmostEqual(correlated_bqm.offset, 4.0)
+        manager.createReturnsVolaGridBQM(
+            risk_state,
+            portfolio,
+            {"lambdaOneHot": 2.0},
+        )
+        self.assertEqual(len(manager.structuralCache.cache.memory), 1)
 
-    def test_scenario_generator_is_abstract(self) -> None:
+    def test_bqm_manager_decodes_the_selected_portfolio_loss(self) -> None:
+        risk_state = ReturnsVolaGridRiskState(
+            {
+                "AAPL": numpy.array([[-0.05, 0.20], [0.01, 0.25]]),
+                "MSFT": numpy.array([[-0.02, 0.15]]),
+            }
+        )
+        portfolio = Portfolio(
+            weights={"AAPL": Decimal("10"), "MSFT": Decimal("5")}
+        )
+        result = BQMOptimizationResult(
+            {"x_0_0": 1, "x_0_1": 0, "x_1_0": 1}
+        )
+
+        margin = PortfolioRiskStateBQMManager().decodeReturnsVolaGridRiskState(
+            risk_state,
+            portfolio,
+            result,
+        )
+
+        self.assertAlmostEqual(margin, 0.6)
+
+    def test_bqm_manager_uses_marginlab_fallback_for_invalid_sample(self) -> None:
+        risk_state = ReturnsVolaGridRiskState(
+            {"AAPL": numpy.array([[-0.05, 0.20], [0.01, 0.25]])}
+        )
+        portfolio = Portfolio(weights={"AAPL": Decimal("10")})
+        result = BQMOptimizationResult({"x_0_0": 1, "x_0_1": 1})
+
+        margin = PortfolioRiskStateBQMManager().decodeReturnsVolaGridRiskState(
+            risk_state,
+            portfolio,
+            result,
+        )
+
+        self.assertAlmostEqual(margin, 0.5)
+
+    def test_generator_builds_its_own_typed_data_request(self) -> None:
+        generator = ReturnsVolaGridRiskStateGenerator(ew_window=5)
+        portfolio = Portfolio(
+            weights={"AAPL": Decimal("1"), "MSFT": Decimal("2")}
+        )
+
+        request = generator.createDataRequest(portfolio, date(2024, 1, 11))
+
+        self.assertEqual(request.instruments, ("AAPL", "MSFT"))
+        self.assertEqual(request.start_date, date(2024, 1, 1))
+        self.assertEqual(request.end_date, date(2024, 1, 11))
+        self.assertEqual(request.data_type, "closePrices")
+
+    def test_risk_state_generator_is_abstract(self) -> None:
         with self.assertRaises(TypeError):
-            ScenarioGenerator()
+            RiskStateGenerator()
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ from download_unit import (
     InstrumentChunker,
     Period,
     ProductChunker,
-    UnifiedFormatCommand,
+    DataRequest,
 )
 
 
@@ -46,12 +46,15 @@ class YfinanceExponentialBackoffIntegrationTest(unittest.TestCase):
         ]
         instruments = random.Random(42).sample(ticker_pool, 10)
         end_date = date.today()
-        command = UnifiedFormatCommand(
+        command = DataRequest(
             instruments=instruments,
             start_date=end_date - timedelta(days=300),
             end_date=end_date,
             period=Period.ONE_DAY,
-            location="https://query1.finance.yahoo.com",
+            data_type="closePrices",
+            provider_parameters={
+                "location": "https://query1.finance.yahoo.com"
+            },
         )
         unit = ExponentialBackoffDownloadUnit(
             chunker=ProductChunker(

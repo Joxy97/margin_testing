@@ -8,41 +8,45 @@ from download_unit import (
     InstrumentChunker,
     Period,
     ProductChunker,
-    UnifiedFormatCommand,
+    DataRequest,
 )
 
 
-def unified_command() -> UnifiedFormatCommand:
-    return UnifiedFormatCommand(
+def data_request() -> DataRequest:
+    return DataRequest(
         instruments=["AAPL", "MSFT", "NVDA"],
         start_date=date(2024, 1, 1),
         end_date=date(2024, 1, 5),
         period=Period.ONE_DAY,
-        location="prices.csv",
+        data_type="closePrices",
+        provider_parameters={"location": "prices.csv"},
     )
 
 
 class ChunkerTest(unittest.TestCase):
     def test_instrument_chunker_preserves_other_command_values(self) -> None:
-        command = unified_command()
+        command = data_request()
 
         chunks = list(InstrumentChunker(2).createChunks(command))
 
         self.assertEqual(
-            [chunk["instruments"] for chunk in chunks],
-            [["AAPL", "MSFT"], ["NVDA"]],
+            [chunk.instruments for chunk in chunks],
+            [("AAPL", "MSFT"), ("NVDA",)],
         )
         self.assertTrue(
-            all(chunk["location"] == "prices.csv" for chunk in chunks)
+            all(
+                chunk.provider_parameters["location"] == "prices.csv"
+                for chunk in chunks
+            )
         )
         self.assertTrue(all(chunk is not command for chunk in chunks))
 
     def test_date_chunker_creates_contiguous_ranges(self) -> None:
-        chunks = list(DateChunker(2).createChunks(unified_command()))
+        chunks = list(DateChunker(2).createChunks(data_request()))
 
         self.assertEqual(
             [
-                (chunk["start_date"], chunk["end_date"])
+                (chunk.start_date, chunk.end_date)
                 for chunk in chunks
             ],
             [
@@ -54,16 +58,16 @@ class ChunkerTest(unittest.TestCase):
     def test_product_chunker_creates_cartesian_chunks(self) -> None:
         chunker = ProductChunker(InstrumentChunker(2), DateChunker(2))
 
-        chunks = list(chunker.createChunks(unified_command()))
+        chunks = list(chunker.createChunks(data_request()))
 
         self.assertEqual(len(chunks), 4)
         self.assertEqual(
-            [chunk["instruments"] for chunk in chunks],
+            [chunk.instruments for chunk in chunks],
             [
-                ["AAPL", "MSFT"],
-                ["AAPL", "MSFT"],
-                ["NVDA"],
-                ["NVDA"],
+                ("AAPL", "MSFT"),
+                ("AAPL", "MSFT"),
+                ("NVDA",),
+                ("NVDA",),
             ],
         )
 

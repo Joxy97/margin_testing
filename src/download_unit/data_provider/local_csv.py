@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from ..command import UnifiedFormatCommand
+from ..command import DataRequest
 from .data_provider import DataProvider
 
 if TYPE_CHECKING:
@@ -15,35 +15,39 @@ if TYPE_CHECKING:
 class LocalCSVDataProvider(DataProvider):
     """Load instrument data from a CSV file or URL."""
 
+    def getDataTypes(self) -> set[str]:
+        """Return the data types available in a local price file."""
+        return {"closePrices"}
+
     def convertRawData(self, raw_data: Any) -> Any:
         """Return CSV data without modification."""
         return raw_data
 
     def convertCommand(
         self,
-        command: UnifiedFormatCommand,
-    ) -> UnifiedFormatCommand:
+        command: DataRequest,
+    ) -> DataRequest:
         """Return the unified command without modification."""
-        if not isinstance(command, dict):
-            raise TypeError("command must be a dictionary")
+        if not isinstance(command, DataRequest):
+            raise TypeError("command must be a DataRequest")
         return command
 
     def downloadData(
         self,
-        command: UnifiedFormatCommand,
+        command: DataRequest,
     ) -> pandas.DataFrame:
         """Read and filter the CSV dataset described by ``command``."""
-        if not isinstance(command, dict):
-            raise TypeError("command must be a dictionary")
+        if not isinstance(command, DataRequest):
+            raise TypeError("command must be a DataRequest")
 
         import pandas
 
-        data = pandas.read_csv(command.get("location", ""))
-        data = self._extractInstruments(data, command["instruments"])
+        data = pandas.read_csv(command.provider_parameters.get("location", ""))
+        data = self._extractInstruments(data, list(command.instruments))
         return self._extractDates(
             data,
-            command["start_date"],
-            command["end_date"],
+            command.start_date,
+            command.end_date,
         )
 
     def _extractInstruments(

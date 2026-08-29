@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import pandas
 
-from .command import UnifiedFormatCommand
+from .command import DataRequest
 from .data_provider import DataProvider
 
 
@@ -19,7 +19,7 @@ class DownloadUnit(ABC):
     def getData(
         self,
         provider: DataProvider,
-        command: UnifiedFormatCommand,
+        command: DataRequest,
     ) -> Any:
         """Download, convert, and return data for ``command``."""
         raw_data = self.getRawData(provider, command)
@@ -29,7 +29,7 @@ class DownloadUnit(ABC):
     def getRawData(
         self,
         provider: DataProvider,
-        command: UnifiedFormatCommand,
+        command: DataRequest,
     ) -> Any:
         """Retrieve unconverted data from ``provider`` for ``command``."""
         raise NotImplementedError

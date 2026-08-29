@@ -10,6 +10,7 @@ add_library(sbm
     src/sbm/maxcut.cpp
     src/sbm/cpu_solver.cpp
 )
+set_target_properties(sbm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(sbm PUBLIC include)
 target_compile_features(sbm PUBLIC cxx_std_17)
 if(SBM_NATIVE_OPTIMIZATION AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -36,6 +37,9 @@ endif()
 
 add_executable(sbm_solve src/sbm/main.cpp)
 target_link_libraries(sbm_solve PRIVATE sbm)
+
+add_library(sbm_python SHARED src/sbm/python_api.cpp)
+target_link_libraries(sbm_python PRIVATE sbm)
 
 add_executable(maxcut_generate src/benchmark/generate_maxcut.cpp)
 target_link_libraries(maxcut_generate PRIVATE sbm)

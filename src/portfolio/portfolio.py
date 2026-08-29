@@ -8,7 +8,7 @@ from download_unit import Instrument
 
 @dataclass
 class Portfolio:
-    """Represent stock quantities and uninvested cash."""
+    """Represent MarginLab-style instrument return weights and cash."""
 
-    positions: dict[Instrument, Decimal] = field(default_factory=dict)
+    weights: dict[Instrument, Decimal] = field(default_factory=dict)
     cash: Decimal = Decimal("0")

@@ -1,13 +1,13 @@
 """Download command data objects."""
 
 from .command import Command
-from .unified_format import Instrument, Period, UnifiedFormatCommand
+from .data_request import DataRequest, Instrument, Period
 from .yfinance import YfinanceCommand
 
 __all__ = [
     "Command",
+    "DataRequest",
     "Instrument",
     "Period",
-    "UnifiedFormatCommand",
     "YfinanceCommand",
 ]

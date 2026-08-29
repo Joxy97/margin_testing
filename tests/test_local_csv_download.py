@@ -14,7 +14,7 @@ from download_unit import (
     LocalCSVDataProvider,
     Period,
     SingleRequestDownloadUnit,
-    UnifiedFormatCommand,
+    DataRequest,
 )
 
 
@@ -31,12 +31,13 @@ class LocalCSVDownloadTest(unittest.TestCase):
                 "2024-01-04,13,23,33\n",
                 encoding="utf-8",
             )
-            command = UnifiedFormatCommand(
+            command = DataRequest(
                 instruments=["NVDA", "AAPL"],
                 start_date=date(2024, 1, 2),
                 end_date=date(2024, 1, 3),
                 period=Period.ONE_DAY,
-                location=str(csv_path),
+                data_type="closePrices",
+                provider_parameters={"location": str(csv_path)},
             )
 
             result = SingleRequestDownloadUnit().getData(
@@ -54,12 +55,13 @@ class LocalCSVDownloadTest(unittest.TestCase):
 
     def test_provider_conversion_methods_return_their_input(self) -> None:
         provider = LocalCSVDataProvider()
-        command = UnifiedFormatCommand(
-            instruments=[],
+        command = DataRequest(
+            instruments=["AAPL"],
             start_date=date(2024, 1, 1),
             end_date=date(2024, 1, 1),
             period=Period.ONE_DAY,
-            location="prices.csv",
+            data_type="closePrices",
+            provider_parameters={"location": "prices.csv"},
         )
         raw_data = object()
 
