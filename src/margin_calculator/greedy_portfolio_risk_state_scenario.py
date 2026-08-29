@@ -48,18 +48,25 @@ class GreedyPortfolioRiskStateScenario:
     ) -> float:
         riskState: ReturnsVolaGridRiskState = portfolioRiskState.riskState
         portfolio = portfolioRiskState.portfolio
-        portfolio_pnl = 0.0
-        for instrument, grid in riskState.returnsVolaGrid.items():
-            values = numpy.asarray(grid)
-            if values.ndim != 2 or values.shape[1] < 1:
-                raise ValueError(
-                    f"{instrument} risk states must be a two-dimensional grid"
-                )
-            if len(values) == 0:
-                raise ValueError(f"{instrument} has no risk states")
-            position = float(portfolio.weights.get(instrument, 0))
-            bin_pnls = values[:, 0]
-            if not numpy.isfinite(bin_pnls).all() or not numpy.isfinite(position):
-                raise ValueError(f"{instrument} contains a non-finite PnL")
-            portfolio_pnl += position * float(numpy.min(bin_pnls))
-        return portfolio_pnl
+        dense_grid = riskState.returnsVolaGrid
+        if numpy.any(dense_grid.stateCounts == 0):
+            empty_asset = int(numpy.flatnonzero(dense_grid.stateCounts == 0)[0])
+            raise ValueError(
+                f"{dense_grid.instruments[empty_asset]} has no risk states"
+            )
+        positions = numpy.fromiter(
+            (
+                float(portfolio.weights.get(instrument, 0))
+                for instrument in dense_grid.instruments
+            ),
+            dtype=float,
+            count=len(dense_grid),
+        )
+        if not numpy.isfinite(positions).all():
+            raise ValueError("portfolio contains a non-finite position")
+        worst_returns = numpy.where(
+            positions >= 0.0,
+            dense_grid.returnBounds[:, 0],
+            dense_grid.returnBounds[:, 1],
+        )
+        return float(positions @ worst_returns)

@@ -29,6 +29,7 @@ class ReturnsPCAGrid(PCAGrid):
     factors: numpy.ndarray | None = field(init=False, default=None)
     pcaMean: numpy.ndarray | None = field(init=False, default=None)
     residuals: numpy.ndarray | None = field(init=False, default=None)
+    residualScale: numpy.ndarray | None = field(init=False, default=None)
     maxAbsoluteZ: numpy.ndarray | None = field(init=False, default=None)
     logReturnMean: numpy.ndarray | None = field(init=False, default=None)
     logReturnScale: numpy.ndarray | None = field(init=False, default=None)
@@ -167,6 +168,7 @@ class ReturnsPCAGrid(PCAGrid):
         self.factors = centered_returns @ self.loadings.T
         reconstructed_returns = self.pcaMean + self.factors @ self.loadings
         self.residuals = standardizedReturns - reconstructed_returns
+        self.residualScale = numpy.nanstd(self.residuals, axis=0, ddof=1)
         self.maxAbsoluteZ = numpy.nanmax(
             numpy.abs(standardizedReturns),
             axis=0,

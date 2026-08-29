@@ -6,8 +6,6 @@ from dataclasses import dataclass
 
 import numpy
 
-from download_unit import Instrument
-
 from .returns_vola_grid_risk_state import ReturnsVolaGridRiskState
 
 
@@ -67,5 +65,4 @@ class CorrelationFactors:
 class CorrelatedReturnsVolaGridRiskState(ReturnsVolaGridRiskState):
     """Add compact pairwise compatibility factors to a returns grid."""
 
-    returnsVolaGrid: dict[Instrument, numpy.ndarray]
     correlations: CorrelationFactors

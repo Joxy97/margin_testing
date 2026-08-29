@@ -22,6 +22,7 @@ from .portfolio_risk_state_bqm_manager import (
 from .risk_state import (
     CorrelationFactors,
     CorrelatedReturnsVolaGridRiskState,
+    DenseReturnsVolaGrid,
     PortfolioCorrelatedReturnsVolaGridRiskState,
     PortfolioReturnsVolaGridRiskState,
     PortfolioRiskState,
@@ -41,6 +42,7 @@ __all__ = [
     "CorrelatedReturnsVolaGridRiskStateGeneratorConfig",
     "CorrelatedReturnsVolaGridRiskState",
     "CorrelationFactors",
+    "DenseReturnsVolaGrid",
     "LRUCache",
     "PCAGrid",
     "PCAGridFactory",

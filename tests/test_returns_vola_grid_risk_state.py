@@ -15,6 +15,7 @@ from portfolio import Portfolio
 from risk_state_generator import (
     CorrelationFactors,
     CorrelatedReturnsVolaGridRiskState,
+    DenseReturnsVolaGrid,
     PortfolioCorrelatedReturnsVolaGridRiskState,
     PortfolioReturnsVolaGridRiskState,
     PortfolioRiskState,
@@ -35,7 +36,30 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
         risk_state = ReturnsVolaGridRiskState(grids)
 
         self.assertIsInstance(risk_state, RiskState)
-        self.assertIs(risk_state.returnsVolaGrid, grids)
+        self.assertIsInstance(risk_state.returnsVolaGrid, DenseReturnsVolaGrid)
+        self.assertEqual(tuple(risk_state.returnsVolaGrid), tuple(grids))
+        for instrument, expected in grids.items():
+            numpy.testing.assert_array_equal(
+                risk_state.returnsVolaGrid[instrument],
+                expected,
+            )
+
+    def test_returns_grid_pads_variable_state_counts_densely(self) -> None:
+        risk_state = ReturnsVolaGridRiskState(
+            {
+                "AAPL": numpy.array([[0.01, 0.20], [0.02, 0.25]]),
+                "MSFT": numpy.array([[0.03, 0.15]]),
+            }
+        )
+        grid = risk_state.returnsVolaGrid
+
+        self.assertEqual(grid.gridValues.shape, (2, 2, 2))
+        numpy.testing.assert_array_equal(
+            grid.validStateMask,
+            numpy.array([[True, True], [True, False]]),
+        )
+        numpy.testing.assert_array_equal(grid.stateCounts, [2, 1])
+        numpy.testing.assert_allclose(grid.validReturns, [0.01, 0.02, 0.03])
 
     def test_correlated_risk_state_stores_its_correlations(self) -> None:
         grids = {"AAPL": numpy.array([[0.01, 0.20]])}
@@ -49,7 +73,11 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
         risk_state = CorrelatedReturnsVolaGridRiskState(grids, correlations)
 
         self.assertIsInstance(risk_state, ReturnsVolaGridRiskState)
-        self.assertIs(risk_state.returnsVolaGrid, grids)
+        self.assertIsInstance(risk_state.returnsVolaGrid, DenseReturnsVolaGrid)
+        numpy.testing.assert_array_equal(
+            risk_state.returnsVolaGrid["AAPL"],
+            grids["AAPL"],
+        )
         self.assertIs(risk_state.correlations, correlations)
 
     def test_portfolio_risk_states_dispatch_encoding_and_decoding(self) -> None:
