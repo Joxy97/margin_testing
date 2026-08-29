@@ -39,7 +39,6 @@ class PartitionedPickleDataStore(DataBackingStore[Key, Data]):
 
     def __init__(self, directory: str | Path) -> None:
         self.directory = Path(directory).expanduser().resolve()
-        self.directory.mkdir(parents=True, exist_ok=True)
 
     def get(self, key: Key) -> Data | None:
         path = self._path(key)
@@ -52,6 +51,7 @@ class PartitionedPickleDataStore(DataBackingStore[Key, Data]):
         return data
 
     def put(self, key: Key, data: Data) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
         path = self._path(key)
         temporary = path.with_suffix(f".{os.getpid()}.tmp")
         try:
