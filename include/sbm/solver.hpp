@@ -26,7 +26,13 @@ struct SolverResult {
 [[nodiscard]] double estimate_c0(const IsingModel& model);
 [[nodiscard]] SolverResult solve_cpu(
     const BinaryQuadraticModel& bqm, const SolverParameters& parameters = {});
+[[nodiscard]] std::vector<SolverResult> solve_cpu_candidates(
+    const BinaryQuadraticModel& bqm,
+    const SolverParameters& parameters = {});
 [[nodiscard]] std::vector<SolverResult> solve_cpu_batch(
+    const std::vector<BinaryQuadraticModel>& bqms,
+    const SolverParameters& parameters = {});
+[[nodiscard]] std::vector<std::vector<SolverResult>> solve_cpu_candidates_batch(
     const std::vector<BinaryQuadraticModel>& bqms,
     const SolverParameters& parameters = {});
 

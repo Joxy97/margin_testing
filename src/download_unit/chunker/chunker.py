@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 
-from ..command import UnifiedFormatCommand
+from ..command import DataRequest
 
 
 class Chunker(ABC):
@@ -12,7 +12,7 @@ class Chunker(ABC):
     @abstractmethod
     def createChunks(
         self,
-        command: UnifiedFormatCommand,
-    ) -> Iterable[UnifiedFormatCommand]:
+        command: DataRequest,
+    ) -> Iterable[DataRequest]:
         """Create chunks from ``command``."""
         raise NotImplementedError

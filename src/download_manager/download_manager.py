@@ -1,28 +1,41 @@
-"""Singleton registry for data providers."""
+"""Registry and selection service for data providers."""
 
 from __future__ import annotations
 
-from threading import Lock
-from typing import Any, ClassVar, Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
-from download_unit import DownloadUnitFactory, UnifiedFormatCommand
+from download_unit import DataRequest, DownloadUnitFactory
 from download_unit.data_provider import DataProvider
+
+from .provider_selection import LocalFirstProviderSelection, ProviderSelection
 
 
 class DownloadManager:
-    """Maintain the application's named data providers in one shared registry."""
-
-    _instance: ClassVar[DownloadManager | None] = None
-    _instance_lock: ClassVar[Lock] = Lock()
+    """Maintain one engine's named data-provider registry."""
     providers: dict[str, DataProvider]
+    providerSelection: ProviderSelection
+    downloadAlgorithm: str
+    downloadParameters: dict[str, Any]
 
-    def __new__(cls) -> DownloadManager:
-        if cls._instance is None:
-            with cls._instance_lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance.providers = {}
-        return cls._instance
+    def __init__(
+        self,
+        providers: Mapping[str, DataProvider] | None = None,
+        providerSelection: ProviderSelection | None = None,
+        downloadAlgorithm: str = "single_request",
+        downloadParameters: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.providers = dict(providers or {})
+        self.providerSelection = providerSelection or LocalFirstProviderSelection()
+        self.downloadAlgorithm = downloadAlgorithm
+        self.downloadParameters = dict(downloadParameters or {})
+
+    def returnProviders(self, dataType: str) -> list[DataProvider]:
+        """Return registered providers capable of supplying ``dataType``."""
+        return [
+            provider
+            for provider in self.providers.values()
+            if dataType in provider.getDataTypes()
+        ]
 
     def addProvider(self, key: str, provider: DataProvider) -> None:
         """Add a provider, replacing the provider already stored under ``key``."""
@@ -51,7 +64,7 @@ class DownloadManager:
     def downloadData(
         self,
         key: str,
-        command: UnifiedFormatCommand,
+        command: DataRequest,
         downloadAlgorithm: str,
         parameters: Mapping[str, Any],
     ) -> Any:
@@ -61,4 +74,18 @@ class DownloadManager:
             parameters,
         )
         provider = self.providers[key]
+        return download_unit.getData(provider, command)
+
+    def downloadDataType(
+        self,
+        dataType: str,
+        command: DataRequest,
+    ) -> Any:
+        """Select a provider and download the requested type of data."""
+        providers = self.returnProviders(dataType)
+        provider = self.providerSelection.selectProvider(providers)
+        download_unit = DownloadUnitFactory.createDownloadUnit(
+            self.downloadAlgorithm,
+            self.downloadParameters,
+        )
         return download_unit.getData(provider, command)

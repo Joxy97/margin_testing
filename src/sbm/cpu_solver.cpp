@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <random>
 #include <stdexcept>
 
@@ -121,13 +120,12 @@ double estimate_c0(const IsingModel& model) {
     return sigma > 0.0 ? 0.5 / (sigma * std::sqrt(matrix_n)) : 1.0;
 }
 
-SolverResult solve_cpu(const BinaryQuadraticModel& bqm, const SolverParameters& parameters) {
+std::vector<SolverResult> solve_cpu_candidates(
+    const BinaryQuadraticModel& bqm, const SolverParameters& parameters) {
     validate(bqm, parameters);
     const auto model = to_ising(bqm);
     const double c0 = parameters.c0 > 0.0 ? parameters.c0 : estimate_c0(model);
 
-    SolverResult best;
-    best.energy = std::numeric_limits<double>::infinity();
     std::vector<SolverResult> candidates(parameters.runs);
 #ifdef _OPENMP
     const bool inside_parallel_region = omp_in_parallel();
@@ -145,16 +143,39 @@ SolverResult solve_cpu(const BinaryQuadraticModel& bqm, const SolverParameters& 
         candidates[run] = {std::move(sample), 0.0};
         candidates[run].energy = bqm.energy(candidates[run].sample);
     }
-    for (auto& candidate : candidates) {
-        if (candidate.energy < best.energy) best = std::move(candidate);
-    }
-    return best;
+    return candidates;
+}
+
+SolverResult solve_cpu(const BinaryQuadraticModel& bqm, const SolverParameters& parameters) {
+    auto candidates = solve_cpu_candidates(bqm, parameters);
+    auto best = std::min_element(
+        candidates.begin(), candidates.end(),
+        [](const auto& left, const auto& right) {
+            return left.energy < right.energy;
+        });
+    return std::move(*best);
 }
 
 std::vector<SolverResult> solve_cpu_batch(
     const std::vector<BinaryQuadraticModel>& bqms, const SolverParameters& parameters) {
+    auto candidate_batches = solve_cpu_candidates_batch(bqms, parameters);
+    std::vector<SolverResult> results;
+    results.reserve(candidate_batches.size());
+    for (auto& candidates : candidate_batches) {
+        auto best = std::min_element(
+            candidates.begin(), candidates.end(),
+            [](const auto& left, const auto& right) {
+                return left.energy < right.energy;
+            });
+        results.push_back(std::move(*best));
+    }
+    return results;
+}
+
+std::vector<std::vector<SolverResult>> solve_cpu_candidates_batch(
+    const std::vector<BinaryQuadraticModel>& bqms, const SolverParameters& parameters) {
     if (bqms.empty()) return {};
-    std::vector<SolverResult> results(bqms.size());
+    std::vector<std::vector<SolverResult>> results(bqms.size());
     const auto largest_model = std::max_element(
         bqms.begin(), bqms.end(),
         [](const auto& left, const auto& right) { return left.size() < right.size(); });
@@ -168,13 +189,13 @@ std::vector<SolverResult> solve_cpu_batch(
             auto local_parameters = parameters;
             local_parameters.seed +=
                 0xd1b54a32d192ed03ULL * static_cast<std::uint64_t>(i);
-            results[i] = solve_cpu(bqms[i], local_parameters);
+            results[i] = solve_cpu_candidates(bqms[i], local_parameters);
         }
     } else {
         for (std::size_t i = 0; i < bqms.size(); ++i) {
             auto local_parameters = parameters;
             local_parameters.seed += 0xd1b54a32d192ed03ULL * i;
-            results[i] = solve_cpu(bqms[i], local_parameters);
+            results[i] = solve_cpu_candidates(bqms[i], local_parameters);
         }
     }
     return results;

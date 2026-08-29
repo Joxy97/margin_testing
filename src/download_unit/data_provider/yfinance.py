@@ -1,30 +1,44 @@
 """yfinance-backed data provider."""
 
+from datetime import timedelta
 from typing import Any
 
 import yfinance
 
-from ..command import UnifiedFormatCommand, YfinanceCommand
+from ..command import DataRequest, YfinanceCommand
 from .data_provider import DataProvider
 
 
 class YfinanceDataProvider(DataProvider):
     """Download market data through the yfinance package."""
 
-    def convertRawData(self, raw_data: Any) -> Any:
-        """Return yfinance data without modification."""
-        return raw_data
+    def getDataTypes(self) -> set[str]:
+        """Return the market data types supplied by yfinance."""
+        return {"closePrices"}
 
-    def convertCommand(self, command: UnifiedFormatCommand) -> YfinanceCommand:
+    def convertRawData(self, raw_data: Any) -> Any:
+        """Extract close prices into the application's tabular format."""
+        import pandas
+
+        if isinstance(raw_data, list):
+            raw_data = pandas.concat(raw_data).sort_index()
+        close_prices = raw_data["Close"]
+        if isinstance(close_prices, pandas.Series):
+            close_prices = close_prices.to_frame()
+        close_prices = close_prices.copy()
+        close_prices.index.name = "date"
+        return close_prices.reset_index()
+
+    def convertCommand(self, command: DataRequest) -> YfinanceCommand:
         """Convert a unified command to yfinance download parameters."""
-        if not isinstance(command, dict):
-            raise TypeError("command must be a dictionary")
+        if not isinstance(command, DataRequest):
+            raise TypeError("command must be a DataRequest")
         return YfinanceCommand(
             parameters=(
-                command["instruments"],
-                command["start_date"],
-                command["end_date"],
-                command["period"].value,
+                command.instruments,
+                command.start_date,
+                command.end_date + timedelta(days=1),
+                command.period.value,
             )
         )
 

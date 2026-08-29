@@ -4,7 +4,7 @@ from time import sleep
 from typing import Any
 
 from .chunker import Chunker
-from .command import UnifiedFormatCommand
+from .command import DataRequest
 from .data_provider import DataProvider
 from .download_unit import DownloadUnit
 
@@ -27,11 +27,11 @@ class ExponentialBackoffDownloadUnit(DownloadUnit):
     def getRawData(
         self,
         provider: DataProvider,
-        command: UnifiedFormatCommand,
+        command: DataRequest,
     ) -> list[Any]:
         """Download every instrument/date chunk and return its raw responses."""
-        if not isinstance(command, dict):
-            raise TypeError("command must be a dictionary")
+        if not isinstance(command, DataRequest):
+            raise TypeError("command must be a DataRequest")
         raw_data: list[Any] = []
         delay = self.time
 

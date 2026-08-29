@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 
-from ..command import UnifiedFormatCommand
+from ..command import DataRequest
 from .chunker import Chunker
 
 
@@ -16,11 +16,11 @@ class InstrumentChunker(Chunker):
 
     def createChunks(
         self,
-        command: UnifiedFormatCommand,
-    ) -> Iterable[UnifiedFormatCommand]:
+        command: DataRequest,
+    ) -> Iterable[DataRequest]:
         """Yield copies of ``command`` containing instrument batches."""
-        instruments = command["instruments"]
+        instruments = command.instruments
         for start in range(0, len(instruments), self.batchSize):
-            chunk = command.copy()
-            chunk["instruments"] = instruments[start : start + self.batchSize]
-            yield chunk
+            yield command.withChanges(
+                instruments=instruments[start : start + self.batchSize]
+            )
