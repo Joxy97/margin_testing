@@ -44,6 +44,43 @@ class RecordingMarginCalculator(MarginCalculator):
 
 
 class MarginEngineTest(unittest.TestCase):
+    def test_prepares_the_complete_backtest_range_with_one_download(self) -> None:
+        portfolio = Portfolio(weights={"AAPL": Decimal("1")})
+        generator_config = ReturnsVolaGridRiskStateGeneratorConfig(
+            ew_window=2,
+            components=1,
+            scenariosPerComponents=(1,),
+            nZBins=3,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prices.csv"
+            rows = ["date,AAPL"]
+            for day in range(15):
+                current_date = date(2024, 1, 1) + timedelta(days=day)
+                rows.append(f"{current_date.isoformat()},{100 + day}")
+            path.write_text("\n".join(rows), encoding="utf-8")
+            provider = Mock(spec=DataProvider, wraps=LocalCSVDataProvider())
+            engine = MarginEngine(
+                MarginEngineConfig(
+                    downloadManager=DownloadManagerConfig(
+                        providers={"localCSV": provider},
+                        requestParameters={"location": str(path)},
+                    ),
+                    riskStateGenerator=generator_config,
+                    marginCalculator=GreedyMarginCalculatorConfig(),
+                )
+            )
+            dates = (date(2024, 1, 8), date(2024, 1, 12))
+
+            engine.prepareBacktest(portfolio, dates)
+            engine.generateReport(portfolio, dates[0])
+            engine.generateReport(portfolio, dates[1])
+
+        provider.downloadData.assert_called_once()
+        prepared_request = provider.downloadData.call_args.args[0]
+        self.assertEqual(prepared_request.start_date, date(2024, 1, 4))
+        self.assertEqual(prepared_request.end_date, date(2024, 1, 12))
+
     def test_generates_report_and_reuses_cached_close_prices(self) -> None:
         margin_date = date(2024, 1, 11)
         portfolio = Portfolio(weights={"AAPL": Decimal("1")})

@@ -1,4 +1,4 @@
-# MarginLab Vanguard 2024-26 portfolio rolling backtest.
+# Greedy MarginLab Vanguard 2024-26 portfolio rolling backtest.
 marginDate: 2025-01-01
 
 portfolio:
@@ -8,7 +8,7 @@ portfolio:
 
 backtest:
   confidenceLevel: 0.998
-  outputDirectory: ../../backtest_results/vanguard_202426
+  outputDirectory: ../../backtest_results/greedy/vanguard_202426
   datesFromCsv:
     path: ../../vanguard_market/vanguard_portfolio_202426_marginlab_close_backtest_2025.csv
     startDate: 2025-01-01
@@ -33,7 +33,7 @@ engine:
     maxMemoryBytes: 268435456
 
   riskStateGenerator:
-    type: correlated_returns_vola_grid
+    type: returns_vola_grid
     pcaGridProvider:
       cacheType: lru
       memorySize: 128
@@ -49,33 +49,5 @@ engine:
     distanceInflationAlpha: 0.5
     distanceInflationPower: 2.0
     maxInflationFactor: 5.0
-    topKNeighbors: 5
-    correlationBlockBytes: 134217728
-
   marginCalculator:
-    type: bqm
-    modelParameters:
-      lambdaOneHot: 1.0
-      lambdaCompat: 0.1
-    structuralCacheMemorySize: 16
-    executionPolicy:
-      type: batch
-      batchSize: 105
-      maxBatchBytes: 536870912
-      memoryMultiplier: 3.0
-    solver:
-      type: torch_sbm
-      constructorParameters:
-        device: auto
-      solverParameters:
-        steps: 1000
-        runs: 16
-        dt: 0.1
-        a0: 1.0
-        c0: 0.02
-        gamma: 0.0
-        initial_scale: 0.1
-        seed: 20260603
-        dtype: float32
-        run_batch_size: null
-        energy_chunk_size: 1000000
+    type: greedy

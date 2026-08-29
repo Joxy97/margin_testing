@@ -49,6 +49,7 @@ class MarginBacktesterTest(unittest.TestCase):
             )
 
         engine.getPortfolioMarketData = Mock(side_effect=market_data)
+        engine.prepareBacktest = Mock()
         return engine
 
     def test_records_daily_margin_pnl_exposure_and_margin_percent(self) -> None:
@@ -80,6 +81,12 @@ class MarginBacktesterTest(unittest.TestCase):
         self.assertFalse(result.dailyResults[0].covered)
         self.assertFalse(result.dailyResults[1].breach)
         self.assertEqual(result.violations, 1)
+        engine = self._engine(reports, realized_pnls)
+        MarginBacktester().backtest(engine, portfolio, dates)
+        engine.prepareBacktest.assert_called_once_with(
+            portfolio,
+            (date(2024, 1, 2), date(2024, 1, 3)),
+        )
 
     def test_basel_color_matches_marginlab_binomial_rule(self) -> None:
         start = date(2024, 1, 1)

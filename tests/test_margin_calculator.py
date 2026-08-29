@@ -71,7 +71,7 @@ class BatchTrackingSolver(BQMSolver):
 
 
 class MarginCalculatorTest(unittest.TestCase):
-    def test_greedy_visitor_sums_position_times_lowest_bin_pnl(self) -> None:
+    def test_greedy_visitor_minimizes_each_signed_position_pnl(self) -> None:
         risk_state = ReturnsVolaGridRiskState(
             {
                 "AAPL": numpy.array([[-0.05, 0.20], [0.02, 0.25]]),
@@ -88,7 +88,7 @@ class MarginCalculatorTest(unittest.TestCase):
             portfolio,
         ).acceptGreedy(visitor)
 
-        self.assertAlmostEqual(pnl, -0.3)
+        self.assertAlmostEqual(pnl, -0.65)
 
     def test_greedy_calculator_returns_the_worst_nonnegative_loss(self) -> None:
         risk_states = (
@@ -106,6 +106,23 @@ class MarginCalculatorTest(unittest.TestCase):
         )
 
         self.assertAlmostEqual(margin, 0.7)
+
+    def test_greedy_visitor_uses_compact_return_bounds(self) -> None:
+        risk_state = ReturnsVolaGridRiskState(
+            {
+                "LONG": numpy.array([[-0.05, 0.2], [0.02, 0.2]]),
+                "SHORT": numpy.array([[-0.04, 0.2], [0.03, 0.2]]),
+            },
+        )
+
+        pnl = PortfolioRiskState.fromRiskState(
+            risk_state,
+            Portfolio(
+                weights={"LONG": Decimal("10"), "SHORT": Decimal("-5")}
+            ),
+        ).acceptGreedy(GreedyPortfolioRiskStateScenario())
+
+        self.assertAlmostEqual(pnl, -0.65)
 
     def test_correlated_risk_state_has_its_own_greedy_dispatch(self) -> None:
         risk_state = CorrelatedReturnsVolaGridRiskState(

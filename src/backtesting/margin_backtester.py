@@ -40,6 +40,12 @@ class BacktestMarginEngine(Protocol):
         asOfDate: date,
     ) -> pandas.DataFrame: ...
 
+    def prepareBacktest(
+        self,
+        portfolio: Portfolio,
+        dates: Sequence[date],
+    ) -> None: ...
+
 
 class MarginBacktester:
     """Evaluate daily margin coverage through the MarginEngine public API."""
@@ -65,8 +71,18 @@ class MarginBacktester:
         if len(backtest_dates) != len(set(backtest_dates)):
             raise ValueError("dates must not contain duplicates")
 
+        preparation_started = perf_counter()
+        marginEngine.prepareBacktest(portfolio, backtest_dates)
+        preparation_seconds_per_day = (
+            perf_counter() - preparation_started
+        ) / len(backtest_dates)
         daily_results = tuple(
-            self._backtestDay(marginEngine, portfolio, backtest_date)
+            self._backtestDay(
+                marginEngine,
+                portfolio,
+                backtest_date,
+                preparation_seconds_per_day,
+            )
             for backtest_date in backtest_dates
         )
         violations = sum(result.breach for result in daily_results)
@@ -117,6 +133,7 @@ class MarginBacktester:
         marginEngine: BacktestMarginEngine,
         portfolio: Portfolio,
         backtestDate: date,
+        preparationSeconds: float = 0.0,
     ) -> DailyBacktestResult:
         total_started = perf_counter()
         report = marginEngine.generateReport(portfolio, backtestDate)
@@ -151,7 +168,10 @@ class MarginBacktester:
             marginPercent=100.0 * report.margin / gross_exposure,
             breach=realized_loss > report.margin,
             timings=DailyBacktestTimings(
-                dataAcquisitionSeconds=report.timings.dataAcquisitionSeconds,
+                dataAcquisitionSeconds=(
+                    report.timings.dataAcquisitionSeconds
+                    + preparationSeconds
+                ),
                 riskStateGenerationSeconds=(
                     report.timings.riskStateGenerationSeconds
                 ),
@@ -160,7 +180,9 @@ class MarginBacktester:
                 ),
                 realizedDataAcquisitionSeconds=realized_data_seconds,
                 realizedPnLCalculationSeconds=realized_pnl_seconds,
-                totalSeconds=perf_counter() - total_started,
+                totalSeconds=(
+                    perf_counter() - total_started + preparationSeconds
+                ),
             ),
         )
 

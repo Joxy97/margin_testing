@@ -15,7 +15,7 @@ from .pca_grid import ReturnsPCAGrid
 from .pca_grid_provider import PCAGridProvider
 from .pca_key import ReturnsPCAKey
 from .pca_scenario import ReturnsVolaGridPCAScenario
-from .risk_state import ReturnsVolaGridRiskState
+from .risk_state import DenseReturnsVolaGrid, ReturnsVolaGridRiskState
 from .risk_state_generation_context import RiskStateGenerationContext
 from .risk_state_generator import RiskStateGenerator
 
@@ -27,6 +27,7 @@ class _RiskStateContext:
     pcaMean: numpy.ndarray
     factorsRecent: numpy.ndarray
     residualsRecent: numpy.ndarray
+    fallbackResidualSigma: numpy.ndarray
     componentScale: numpy.ndarray
     maxAbsoluteZ: numpy.ndarray
     logReturnMean: numpy.ndarray
@@ -37,7 +38,7 @@ class _RiskStateContext:
 class _ConditionedRiskState:
     """Intermediate result reusable by specialized risk-state generators."""
 
-    returnsVolaGrid: dict[str, numpy.ndarray]
+    returnsVolaGrid: DenseReturnsVolaGrid
     context: _RiskStateContext
     scenarioCenter: numpy.ndarray
     nearestResiduals: numpy.ndarray
@@ -286,15 +287,26 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
             pcaScenario,
             pcaGrid,
         )
-        return ReturnsVolaGridRiskState(conditioned_state.returnsVolaGrid)
+        return self._createRiskState(pcaGrid, conditioned_state)
+
+    def _createRiskState(
+        self,
+        pcaGrid: ReturnsPCAGrid,
+        conditionedState: _ConditionedRiskState,
+    ) -> ReturnsVolaGridRiskState:
+        """Create the concrete state from shared conditioned values."""
+        return ReturnsVolaGridRiskState(
+            conditionedState.returnsVolaGrid,
+        )
 
     def _buildConditionedRiskState(
         self,
         pcaScenario: ReturnsVolaGridPCAScenario,
         pcaGrid: ReturnsPCAGrid,
+        riskStateContext: _RiskStateContext | None = None,
     ) -> _ConditionedRiskState:
         """Build reusable scenario-conditioned state-space values."""
-        context = self._buildRiskStateContext(pcaGrid)
+        context = riskStateContext or self._buildRiskStateContext(pcaGrid)
         scenario_center = self._getScenarioCenter(
             pcaScenario,
             pcaGrid,
@@ -308,10 +320,10 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
         inflation_factor = self._getInflationFactor(scenario_distance)
         residual_sigma = self._getInflatedResidualSigma(
             nearest_residuals,
-            context.residualsRecent,
+            context.fallbackResidualSigma,
             inflation_factor,
         )
-        returns_vola_grid = self._buildReturnsVolaGrid(
+        returns_vola_grid = self._buildReturnsVolaGridData(
             pcaGrid,
             scenario_center,
             residual_sigma,
@@ -335,6 +347,7 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
             or pcaGrid.factors is None
             or pcaGrid.pcaMean is None
             or pcaGrid.residuals is None
+            or pcaGrid.residualScale is None
             or pcaGrid.maxAbsoluteZ is None
             or pcaGrid.logReturnMean is None
             or pcaGrid.logReturnScale is None
@@ -348,10 +361,12 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
         """Select recent fitted values needed for risk-state construction."""
         self._requirePCAValues(pcaGrid)
         recent_start = max(0, len(pcaGrid.factors) - pcaGrid.ew_window)
+        residuals_recent = pcaGrid.residuals[recent_start:]
         return _RiskStateContext(
             pcaMean=pcaGrid.pcaMean,
             factorsRecent=pcaGrid.factors[recent_start:],
-            residualsRecent=pcaGrid.residuals[recent_start:],
+            residualsRecent=residuals_recent,
+            fallbackResidualSigma=pcaGrid.residualScale,
             componentScale=numpy.sqrt(
                 numpy.maximum(pcaGrid.lambdas, 1e-12)
             ),
@@ -410,26 +425,21 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
     @staticmethod
     def _getInflatedResidualSigma(
         nearestResiduals: numpy.ndarray,
-        fallbackResiduals: numpy.ndarray,
+        fallbackResidualSigma: numpy.ndarray,
         inflationFactor: float,
     ) -> numpy.ndarray:
         """Estimate local residual volatility with stable fallbacks."""
-        asset_count = fallbackResiduals.shape[1]
+        asset_count = fallbackResidualSigma.shape[0]
         local_sigma = (
             numpy.nanstd(nearestResiduals, axis=0, ddof=1)
             if len(nearestResiduals) > 1
-            else numpy.full(asset_count, numpy.nan)
-        )
-        fallback_sigma = (
-            numpy.nanstd(fallbackResiduals, axis=0, ddof=1)
-            if len(fallbackResiduals) > 1
             else numpy.full(asset_count, numpy.nan)
         )
         valid_local = numpy.isfinite(local_sigma) & (local_sigma > 1e-12)
         residual_sigma = numpy.where(
             valid_local,
             local_sigma,
-            fallback_sigma,
+            fallbackResidualSigma,
         )
         valid_fallback = numpy.isfinite(residual_sigma) & (
             residual_sigma > 1e-12
@@ -443,60 +453,83 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
         scenarioCenter: numpy.ndarray,
         residualSigma: numpy.ndarray,
         context: _RiskStateContext,
-    ) -> dict[str, numpy.ndarray]:
+    ) -> DenseReturnsVolaGrid:
         """Build a return-volatility state grid for every instrument."""
-        return {
-            instrument: self._buildInstrumentGrid(
-                scenarioCenter[asset],
-                residualSigma[asset],
-                context.maxAbsoluteZ[asset],
-                context.logReturnMean[asset],
-                context.logReturnScale[asset],
-                instrument,
-            )
-            for asset, instrument in enumerate(pcaGrid.instruments)
-        }
+        return self._buildReturnsVolaGridData(
+            pcaGrid, scenarioCenter, residualSigma, context
+        )
 
-    def _buildInstrumentGrid(
+    def _buildReturnsVolaGridData(
         self,
-        scenarioCenter: float,
-        residualSigma: float,
-        maximumAbsoluteZ: float,
-        logReturnMean: float,
-        logReturnScale: float,
-        instrument: str,
-    ) -> numpy.ndarray:
-        """Build all retained return-volatility states for one instrument."""
-        full_range = (
-            scenarioCenter - maximumAbsoluteZ,
-            scenarioCenter + maximumAbsoluteZ,
+        pcaGrid: ReturnsPCAGrid,
+        scenarioCenter: numpy.ndarray,
+        residualSigma: numpy.ndarray,
+        context: _RiskStateContext,
+    ) -> DenseReturnsVolaGrid:
+        """Build a single padded numeric grid for every instrument."""
+        scenario_center = numpy.asarray(scenarioCenter, dtype=float)
+        residual_sigma = numpy.asarray(residualSigma, dtype=float)
+        maximum_absolute_z = numpy.asarray(context.maxAbsoluteZ, dtype=float)
+        log_return_mean = numpy.asarray(context.logReturnMean, dtype=float)
+        log_return_scale = numpy.asarray(context.logReturnScale, dtype=float)
+        instruments = tuple(pcaGrid.instruments)
+        asset_count = len(instruments)
+        expected_shape = (asset_count,)
+        values = (
+            scenario_center,
+            residual_sigma,
+            maximum_absolute_z,
+            log_return_mean,
+            log_return_scale,
         )
-        bin_edges = numpy.linspace(*full_range, self.nZBins + 1)
-        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        residual_range = (
-            scenarioCenter - self.residualSigmaRange * residualSigma,
-            scenarioCenter + self.residualSigmaRange * residualSigma,
-        )
-        keep_mask = (bin_edges[:-1] >= residual_range[0]) & (
-            bin_edges[1:] <= residual_range[1]
-        )
-        if not numpy.any(keep_mask):
-            if not self.allowEmptyBinFallback:
-                raise ValueError(f"No valid return bins for {instrument}")
-            nearest_center = numpy.argmin(
-                numpy.abs(bin_centers - scenarioCenter)
-            )
-            keep_mask[int(nearest_center)] = True
+        if any(value.shape != expected_shape for value in values):
+            raise ValueError("risk-state inputs must contain one value per asset")
 
-        standardized_grid = bin_centers[keep_mask]
-        log_return_grid = (
-            logReturnMean + logReturnScale * standardized_grid
+        # Every asset uses the same normalized bin positions. Broadcasting the
+        # calculation avoids tens of thousands of tiny NumPy allocations while
+        # retaining the existing per-instrument grid representation at the API.
+        edge_offsets = numpy.linspace(-1.0, 1.0, self.nZBins + 1)
+        center_offsets = 0.5 * (edge_offsets[:-1] + edge_offsets[1:])
+        bin_edges = (
+            scenario_center[:, None]
+            + maximum_absolute_z[:, None] * edge_offsets[None, :]
         )
-        simple_return_grid = numpy.expm1(log_return_grid)
-        conditional_volatility = logReturnScale * residualSigma
-        return numpy.column_stack(
-            (
-                simple_return_grid,
-                numpy.full(len(simple_return_grid), conditional_volatility),
+        standardized_grids = (
+            scenario_center[:, None]
+            + maximum_absolute_z[:, None] * center_offsets[None, :]
+        )
+        residual_half_width = self.residualSigmaRange * residual_sigma
+        keep_masks = (
+            bin_edges[:, :-1]
+            >= scenario_center[:, None] - residual_half_width[:, None]
+        ) & (
+            bin_edges[:, 1:]
+            <= scenario_center[:, None] + residual_half_width[:, None]
+        )
+        empty_assets = numpy.flatnonzero(~numpy.any(keep_masks, axis=1))
+        if len(empty_assets):
+            if not self.allowEmptyBinFallback:
+                instrument = instruments[int(empty_assets[0])]
+                raise ValueError(f"No valid return bins for {instrument}")
+            nearest_centers = numpy.argmin(
+                numpy.abs(
+                    standardized_grids[empty_assets]
+                    - scenario_center[empty_assets, None]
+                ),
+                axis=1,
             )
+            keep_masks[empty_assets, nearest_centers] = True
+
+        simple_return_grids = numpy.expm1(
+            log_return_mean[:, None]
+            + log_return_scale[:, None] * standardized_grids
+        )
+        conditional_volatility = log_return_scale * residual_sigma
+        dense_values = numpy.empty((asset_count, self.nZBins, 2))
+        dense_values[:, :, 0] = simple_return_grids
+        dense_values[:, :, 1] = conditional_volatility[:, None]
+        return DenseReturnsVolaGrid(
+            instruments,
+            dense_values,
+            keep_masks,
         )

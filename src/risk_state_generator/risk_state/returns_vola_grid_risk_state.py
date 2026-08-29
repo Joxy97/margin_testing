@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+
+import numpy
 
 from download_unit import Instrument
 
 from .risk_state import RiskState
-
-if TYPE_CHECKING:
-    import numpy
+from .dense_returns_vola_grid import DenseReturnsVolaGrid
 
 @dataclass
 class ReturnsVolaGridRiskState(RiskState):
     """Associate each instrument with its two-dimensional risk-state grid."""
 
-    returnsVolaGrid: dict[Instrument, numpy.ndarray]
+    returnsVolaGrid: DenseReturnsVolaGrid | Mapping[Instrument, numpy.ndarray]
+
+    def __post_init__(self) -> None:
+        self.returnsVolaGrid = DenseReturnsVolaGrid.fromMapping(
+            self.returnsVolaGrid
+        )
+
+    @property
+    def returnBounds(self) -> numpy.ndarray:
+        return self.returnsVolaGrid.returnBounds

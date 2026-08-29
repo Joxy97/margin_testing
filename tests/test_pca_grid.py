@@ -269,6 +269,14 @@ class PCAGridTest(unittest.TestCase):
             self.assertLessEqual(len(instrument_grid), 5)
             self.assertTrue(numpy.isfinite(instrument_grid).all())
             self.assertTrue((instrument_grid[:, 1] > 0.0).all())
+        self.assertIsNotNone(risk_state.returnBounds)
+        expected_bounds = numpy.array(
+            [
+                [grid[:, 0].min(), grid[:, 0].max()]
+                for grid in risk_state.returnsVolaGrid.values()
+            ]
+        )
+        numpy.testing.assert_allclose(risk_state.returnBounds, expected_bounds)
 
     def test_correlated_generator_adds_state_pair_coefficients(self) -> None:
         data = self._price_data()

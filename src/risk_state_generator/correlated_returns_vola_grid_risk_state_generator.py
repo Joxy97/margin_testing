@@ -6,13 +6,11 @@ from typing import Any
 import numpy
 
 from .pca_grid import ReturnsPCAGrid
-from .pca_scenario import ReturnsVolaGridPCAScenario
 from .returns_vola_grid_risk_state_generator import (
     ReturnsVolaGridRiskStateGenerator,
     _ConditionedRiskState,
 )
 from .risk_state import CorrelatedReturnsVolaGridRiskState, CorrelationFactors
-from .risk_state_generation_context import RiskStateGenerationContext
 
 
 class CorrelatedReturnsVolaGridRiskStateGenerator(
@@ -43,22 +41,17 @@ class CorrelatedReturnsVolaGridRiskStateGenerator(
         self.topKNeighbors = int(topKNeighbors)
         self.correlationBlockBytes = int(correlationBlockBytes)
 
-    def getRiskState(
+    def _createRiskState(
         self,
-        pcaScenario: ReturnsVolaGridPCAScenario,
         pcaGrid: ReturnsPCAGrid,
-        context: RiskStateGenerationContext,
+        conditionedState: _ConditionedRiskState,
     ) -> CorrelatedReturnsVolaGridRiskState:
-        """Create one correlated risk state conditioned on ``pcaScenario``."""
-        conditioned_state = self._buildConditionedRiskState(
-            pcaScenario,
-            pcaGrid,
-        )
+        """Add conditional correlations to a conditioned risk state."""
         return CorrelatedReturnsVolaGridRiskState(
-            returnsVolaGrid=conditioned_state.returnsVolaGrid,
+            returnsVolaGrid=conditionedState.returnsVolaGrid,
             correlations=self._buildCorrelations(
                 pcaGrid,
-                conditioned_state,
+                conditionedState,
             ),
         )
 
@@ -180,15 +173,20 @@ class CorrelatedReturnsVolaGridRiskStateGenerator(
         conditionedState: _ConditionedRiskState,
     ) -> list[numpy.ndarray]:
         """Recover standardized state coordinates from simple-return grids."""
+        dense_grid = conditionedState.returnsVolaGrid
         return [
             (
                 numpy.log1p(
-                    conditionedState.returnsVolaGrid[instrument][:, 0]
+                    dense_grid.gridValues[
+                        asset,
+                        dense_grid.validStateMask[asset],
+                        0,
+                    ]
                 )
                 - pcaGrid.logReturnMean[asset]
             )
             / pcaGrid.logReturnScale[asset]
-            for asset, instrument in enumerate(pcaGrid.instruments)
+            for asset in range(len(dense_grid))
         ]
 
     @staticmethod

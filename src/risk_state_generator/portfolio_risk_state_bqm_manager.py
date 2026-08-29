@@ -140,13 +140,17 @@ class PortfolioRiskStateBQMManager:
         if not isinstance(sample, Mapping) and isinstance(sample, (str, bytes)):
             raise TypeError("BQM sample must be a mapping or a binary sequence")
 
+        dense_grid = riskState.returnsVolaGrid
         portfolio_return = 0.0
         variable_position = 0
-        for asset, (instrument, state_grid) in enumerate(
-            riskState.returnsVolaGrid.items()
-        ):
+        for asset, instrument in enumerate(dense_grid.instruments):
+            state_returns = dense_grid.gridValues[
+                asset,
+                dense_grid.validStateMask[asset],
+                0,
+            ]
             selected_states = []
-            for state in range(len(state_grid)):
+            for state in range(len(state_returns)):
                 variable = f"x_{asset}_{state}"
                 value = (
                     sample.get(variable, 0)
@@ -161,15 +165,17 @@ class PortfolioRiskStateBQMManager:
             if len(selected_states) == 1:
                 selected_state = selected_states[0]
             else:
-                candidate_states = selected_states or list(range(len(state_grid)))
+                candidate_states = selected_states or list(
+                    range(len(state_returns))
+                )
                 weight = float(portfolio.weights.get(instrument, 0))
                 selected_state = min(
                     candidate_states,
-                    key=lambda state: weight * float(state_grid[state, 0]),
+                    key=lambda state: weight * float(state_returns[state]),
                 )
             portfolio_return += float(
                 portfolio.weights.get(instrument, 0)
-            ) * float(state_grid[selected_state, 0])
+            ) * float(state_returns[selected_state])
         return portfolio_return
 
     def _createBQM(
@@ -190,17 +196,10 @@ class PortfolioRiskStateBQMManager:
         lambda_one_hot = float(lambdaOneHot)
         lambda_compat = float(lambdaCompat)
 
-        instruments = tuple(riskState.returnsVolaGrid)
-        state_counts = tuple(
-            len(riskState.returnsVolaGrid[instrument])
-            for instrument in instruments
-        )
+        dense_grid = riskState.returnsVolaGrid
+        instruments = dense_grid.instruments
+        state_counts = tuple(int(count) for count in dense_grid.stateCounts)
         for instrument, state_count in zip(instruments, state_counts):
-            grid = riskState.returnsVolaGrid[instrument]
-            if grid.ndim != 2 or grid.shape[1] < 1:
-                raise ValueError(
-                    f"{instrument} risk states must be a two-dimensional grid"
-                )
             if state_count == 0:
                 raise ValueError(f"{instrument} has no risk states")
 
@@ -246,19 +245,22 @@ class PortfolioRiskStateBQMManager:
             self.structuralCache.insert(template_key, template)
 
         offsets = template.offsets
-        portfolio_linear_parts = []
-        for instrument in instruments:
-            weight = float(portfolio.weights.get(instrument, 0))
-            grid_returns = numpy.asarray(
-                riskState.returnsVolaGrid[instrument][:, 0],
-                dtype=float,
-            )
-            if not math.isfinite(weight):
-                raise ValueError(f"{instrument} has a non-finite portfolio weight")
-            if not numpy.isfinite(grid_returns).all():
-                raise ValueError(f"{instrument} contains a non-finite return")
-            portfolio_linear_parts.append(weight * grid_returns)
-        linear = template.linear + numpy.concatenate(portfolio_linear_parts)
+        portfolio_weights = numpy.fromiter(
+            (
+                float(portfolio.weights.get(instrument, 0))
+                for instrument in instruments
+            ),
+            dtype=float,
+            count=len(instruments),
+        )
+        if not numpy.isfinite(portfolio_weights).all():
+            raise ValueError("portfolio contains a non-finite weight")
+        weighted_returns = (
+            portfolio_weights[:, None] * dense_grid.gridValues[:, :, 0]
+        )
+        linear = template.linear + weighted_returns[
+            dense_grid.validStateMask
+        ]
 
         if len(correlations) and lambda_compat != 0.0:
             asset_count = len(state_counts)

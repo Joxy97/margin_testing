@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from time import perf_counter
 from typing import TYPE_CHECKING
@@ -81,6 +82,43 @@ class MarginEngine:
             ),
         )
 
+    def prepareBacktest(
+        self,
+        portfolio: Portfolio,
+        dates: Sequence[date],
+    ) -> None:
+        """Prefetch the union of market data needed by a rolling backtest."""
+        backtest_dates = tuple(dates)
+        if not backtest_dates:
+            raise ValueError("dates must not be empty")
+        if any(not isinstance(item, date) for item in backtest_dates):
+            raise TypeError("dates must contain date objects")
+        first_date = min(backtest_dates)
+        last_date = max(backtest_dates)
+        first_request = self.riskStateGenerator.createDataRequest(
+            portfolio,
+            first_date,
+        )
+        last_request = self.riskStateGenerator.createDataRequest(
+            portfolio,
+            last_date,
+        )
+        if (
+            first_request.instruments != last_request.instruments
+            or first_request.data_type != last_request.data_type
+            or first_request.period != last_request.period
+        ):
+            raise ValueError(
+                "risk-state generator produced incompatible backtest requests"
+            )
+        request = first_request.withChanges(
+            start_date=min(first_request.start_date, last_request.start_date),
+            end_date=max(first_request.end_date, last_request.end_date),
+        ).withProviderParameters(
+            self.configs.downloadManager.requestParameters
+        )
+        self._acquireRequest(request)
+
     def getPortfolioMarketData(
         self,
         portfolio: Portfolio,
@@ -102,6 +140,10 @@ class MarginEngine:
         ).withProviderParameters(
             self.configs.downloadManager.requestParameters
         )
+        return request, self._acquireRequest(request)
+
+    def _acquireRequest(self, request: DataRequest) -> pandas.DataFrame:
+        """Acquire one exact request through cache and configured providers."""
         data = self.dataManager.getData(request)
         if data is None:
             missing_requests = self.dataManager.getMissingRequests(request)
@@ -122,4 +164,4 @@ class MarginEngine:
             raise RuntimeError(
                 f"Unable to store downloaded {request.data_type}"
             )
-        return request, data
+        return data
