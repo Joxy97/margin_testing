@@ -45,7 +45,12 @@ class _PackedIsingBatch:
 
 
 class TorchSBMBQMSolver(BQMSolver):
-    """Solve scenario and trajectory batches through Torch sparse SpMM."""
+    """Solve scenario and trajectory batches through Torch sparse SpMM.
+
+    AMD ROCm builds of PyTorch intentionally expose GPUs through the
+    ``torch.cuda`` API. Constructor aliases ``rocm``, ``amd``, and ``hip``
+    therefore resolve to the same internal ``cuda`` device as NVIDIA GPUs.
+    """
 
     _defaults = {
         "steps": 10_000,
@@ -72,6 +77,13 @@ class TorchSBMBQMSolver(BQMSolver):
         if self._resolvedDevice is None:
             self._resolvedDevice = self._resolveDevice(self.requestedDevice)
         return self._resolvedDevice
+
+    @property
+    def acceleratorBackend(self) -> str:
+        """Return ``cpu``, ``cuda``, or ``rocm`` for the resolved device."""
+        if self.device == "cpu":
+            return "cpu"
+        return "rocm" if self._torch().version.hip is not None else "cuda"
 
     def solve(
         self,
@@ -488,7 +500,7 @@ class TorchSBMBQMSolver(BQMSolver):
         except ImportError as error:
             raise ImportError(
                 "TorchSBMBQMSolver requires PyTorch; install the appropriate "
-                "CPU or CUDA wheel for this machine"
+                "CPU, CUDA, or ROCm wheel for this machine"
             ) from error
         return torch
 
@@ -500,17 +512,35 @@ class TorchSBMBQMSolver(BQMSolver):
             return "cuda" if torch.cuda.is_available() else "cpu"
         if normalized == "gpu":
             normalized = "cuda"
+        requested_rocm = normalized in {"rocm", "amd", "hip"}
+        if requested_rocm:
+            if torch.version.hip is None:
+                raise RuntimeError(
+                    "Torch SBM requested an AMD ROCm device, but the installed "
+                    "PyTorch build has no HIP support; install a ROCm-enabled "
+                    "PyTorch wheel compatible with this GPU"
+                )
+            normalized = "cuda"
         device = torch.device(normalized)
         if device.type not in {"cpu", "cuda"}:
-            raise ValueError("Torch SBM supports only CPU and CUDA devices")
+            raise ValueError(
+                "Torch SBM supports CPU, CUDA, and ROCm devices"
+            )
         if device.type == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError("Torch SBM requested CUDA, but CUDA is unavailable")
+            backend = "ROCm" if torch.version.hip is not None else "CUDA"
+            raise RuntimeError(
+                f"Torch SBM requested {backend}, but no compatible GPU is "
+                "available to PyTorch"
+            )
         if (
             device.type == "cuda"
             and device.index is not None
             and not 0 <= device.index < torch.cuda.device_count()
         ):
-            raise ValueError(f"Torch SBM CUDA device is unavailable: {device}")
+            backend = "ROCm" if torch.version.hip is not None else "CUDA"
+            raise ValueError(
+                f"Torch SBM {backend} device is unavailable: {device}"
+            )
         return str(device)
 
 
