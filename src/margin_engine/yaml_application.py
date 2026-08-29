@@ -478,8 +478,20 @@ class _YamlConfigParser:
             self._only(config, set(), path)
             return SequentialBQMExecutionPolicy()
         if policy_type == "batch":
-            self._only(config, {"batchSize"}, path)
-            return BatchBQMExecutionPolicy(int(config.get("batchSize", 4)))
+            self._only(
+                config,
+                {"batchSize", "maxBatchBytes", "memoryMultiplier"},
+                path,
+            )
+            return BatchBQMExecutionPolicy(
+                batchSize=int(config.get("batchSize", 4)),
+                maxBatchBytes=(
+                    None
+                    if config.get("maxBatchBytes") is None
+                    else int(config["maxBatchBytes"])
+                ),
+                memoryMultiplier=float(config.get("memoryMultiplier", 3.0)),
+            )
         raise ValueError(f"Unknown BQM execution policy: {policy_type!r}")
 
     def _portfolio(self, value: Any) -> Portfolio:

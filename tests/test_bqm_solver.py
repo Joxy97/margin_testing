@@ -2,6 +2,7 @@
 
 import unittest
 from collections.abc import Mapping
+from importlib.util import find_spec
 from typing import Any
 
 import dimod
@@ -21,6 +22,7 @@ from margin_calculator.optimization.optimization_solver.bqm_solver import (
     SimulatedAnnealingBQMSolver,
     SteepestDescentBQMSolver,
     TabuBQMSolver,
+    TorchSBMBQMSolver,
     TreeDecompositionBQMSolver,
     TreeDecompositionSamplerBQMSolver,
 )
@@ -86,6 +88,7 @@ class BQMSolverTest(unittest.TestCase):
             "simulated_annealing": SimulatedAnnealingBQMSolver,
             "steepest_descent": SteepestDescentBQMSolver,
             "tabu": TabuBQMSolver,
+            "torch_sbm": TorchSBMBQMSolver,
             "tree_decomposition_solver": TreeDecompositionBQMSolver,
             "tree_decomposition_sampler": TreeDecompositionSamplerBQMSolver,
         }
@@ -180,9 +183,158 @@ class BQMSolverTest(unittest.TestCase):
             self.assertEqual(len(result.sample), problem.variableCount)
             self.assertAlmostEqual(result.energy, problem.energy(result.sample))
 
+    @unittest.skipUnless(
+        SBMBQMSolver().libraryPath.is_file(),
+        "build the sbm_python CMake target to run this integration test",
+    )
+    def test_sbm_adaptive_solver_returns_valid_warm_started_samples(self) -> None:
+        problem = QUBOProblem(
+            numpy.array([-1.0, -1.0]),
+            numpy.array([0], dtype=numpy.uint32),
+            numpy.array([1], dtype=numpy.uint32),
+            numpy.array([2.0]),
+            oneHotGroups=((0, 1),),
+        )
+        solver = SBMBQMSolver()
+        parameters = {
+            "steps": 100,
+            "runs": 8,
+            "adaptive": True,
+            "min_runs": 2,
+            "runs_per_batch": 2,
+            "stability_batches": 1,
+            "warm_start": True,
+            "topology_cache_bytes": 1024 * 1024,
+            "seed": 17,
+        }
+
+        solver.beginSeries()
+        first = solver.solveMany([problem], parameters)[0]
+        solver.endSeries()
+        solver.beginSeries()
+        second = solver.solveMany([problem], parameters)[0]
+        solver.endSeries()
+
+        self.assertEqual(sum(first.sample), 1)
+        self.assertEqual(sum(second.sample), 1)
+        self.assertGreaterEqual(solver.lastRunCounts[0], 2)
+        self.assertLessEqual(solver.lastRunCounts[0], 8)
+
     def test_sbm_parameters_are_validated_before_native_allocation(self) -> None:
         with self.assertRaisesRegex(ValueError, "steps and runs"):
             SBMBQMSolver._getParameters({"runs": 0})
+
+    def test_sbm_adaptive_parameters_are_validated(self) -> None:
+        with self.assertRaisesRegex(ValueError, "min_runs"):
+            SBMBQMSolver._getParameters(
+                {"adaptive": True, "runs": 4, "min_runs": 5}
+            )
+
+    def test_torch_sbm_parameters_are_validated_without_loading_torch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dtype"):
+            TorchSBMBQMSolver._getParameters({"dtype": "float16"})
+
+    def test_torch_sbm_qubo_to_ising_conversion_preserves_energies(self) -> None:
+        problem = QUBOProblem(
+            numpy.array([-1.2, 0.3, 0.7]),
+            numpy.array([0, 1, 1, 2], dtype=numpy.uint32),
+            numpy.array([1, 0, 2, 2], dtype=numpy.uint32),
+            numpy.array([0.4, -0.1, 0.8, -0.25]),
+            offset=0.6,
+        )
+        converted = TorchSBMBQMSolver._toIsingProblem(
+            problem,
+            numpy.float64,
+            configuredC0=0.02,
+        )
+        differences = []
+        for mask in range(1 << problem.variableCount):
+            binary = numpy.array(
+                [
+                    (mask >> variable) & 1
+                    for variable in range(problem.variableCount)
+                ],
+                dtype=numpy.uint8,
+            )
+            spins = 2.0 * binary - 1.0
+            ising_energy = -converted.forceField @ spins - numpy.sum(
+                converted.couplings
+                * spins[converted.heads]
+                * spins[converted.tails]
+            )
+            differences.append(problem.energy(binary) - ising_energy)
+
+        numpy.testing.assert_allclose(
+            differences,
+            numpy.full(len(differences), differences[0]),
+            atol=1e-12,
+        )
+
+    @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
+    def test_torch_sbm_batches_scenarios_and_trajectories(self) -> None:
+        problems = [
+            QUBOProblem(
+                numpy.array([-1.0, -1.0]),
+                numpy.array([0], dtype=numpy.uint32),
+                numpy.array([1], dtype=numpy.uint32),
+                numpy.array([2.0]),
+                oneHotGroups=((0, 1),),
+            ),
+            QUBOProblem(
+                numpy.array([-0.8, 0.2, -0.6]),
+                numpy.array([0, 1], dtype=numpy.uint32),
+                numpy.array([1, 2], dtype=numpy.uint32),
+                numpy.array([0.3, -0.2]),
+            ),
+        ]
+        parameters = {
+            "steps": 100,
+            "runs": 4,
+            "run_batch_size": 2,
+            "dt": 0.1,
+            "dtype": "float64",
+            "seed": 31,
+        }
+
+        results = TorchSBMBQMSolver("cpu").solveMany(problems, parameters)
+
+        self.assertEqual(len(results), 2)
+        for problem, result in zip(problems, results):
+            self.assertEqual(len(result.sample), problem.variableCount)
+            self.assertAlmostEqual(
+                result.energy,
+                problem.energy(result.sample),
+                places=12,
+            )
+        self.assertEqual(sum(results[0].sample), 1)
+
+    @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
+    def test_torch_sbm_run_batching_preserves_seeded_result(self) -> None:
+        problem = QUBOProblem(
+            numpy.array([-0.7, 0.2, -0.1]),
+            numpy.array([0, 1], dtype=numpy.uint32),
+            numpy.array([1, 2], dtype=numpy.uint32),
+            numpy.array([0.5, -0.4]),
+        )
+        parameters = {
+            "steps": 25,
+            "runs": 4,
+            "dt": 0.1,
+            "dtype": "float64",
+            "seed": 11,
+        }
+
+        together = TorchSBMBQMSolver("cpu").solve(
+            problem,
+            parameters,
+        )
+        split = TorchSBMBQMSolver("cpu").solve(
+            problem,
+            parameters | {"run_batch_size": 1},
+        )
+
+        self.assertEqual(tuple(together.sample), tuple(split.sample))
+        self.assertAlmostEqual(together.energy, split.energy, places=12)
 
     def test_numeric_qubo_arrays_are_immutable(self) -> None:
         problem = QUBOProblem(

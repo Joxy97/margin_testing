@@ -20,8 +20,9 @@ SolverResult solve_fpga_sim(const BinaryQuadraticModel& bqm, const SolverParamet
     const auto n = model.size();
     std::vector<sbm_fpga_value> dense(n * n, 0), fields(model.fields.begin(), model.fields.end());
     for (std::size_t row = 0; row < n; ++row) {
-        for (std::size_t edge = model.row_offsets[row]; edge < model.row_offsets[row + 1]; ++edge) {
-            dense[row * n + model.columns[edge]] = model.couplings[edge];
+        for (std::size_t edge = model.topology->row_offsets[row];
+             edge < model.topology->row_offsets[row + 1]; ++edge) {
+            dense[row * n + model.topology->columns[edge]] = model.couplings[edge];
         }
     }
     const auto c0 = static_cast<sbm_fpga_value>(p.c0 > 0.0 ? p.c0 : estimate_c0(model));

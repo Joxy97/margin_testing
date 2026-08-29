@@ -149,6 +149,27 @@ class MarginCalculatorTest(unittest.TestCase):
         self.assertAlmostEqual(margin, 0.4)
         self.assertEqual(solver.batchSizes, [2, 2])
 
+    def test_batch_policy_respects_the_numeric_memory_budget(self) -> None:
+        solver = BatchTrackingSolver()
+        policy = BatchBQMExecutionPolicy(
+            batchSize=10,
+            maxBatchBytes=80,
+            memoryMultiplier=1.0,
+        )
+        problems = [
+            QUBOProblem(
+                numpy.zeros(4),
+                numpy.array([], dtype=numpy.uint32),
+                numpy.array([], dtype=numpy.uint32),
+                numpy.array([]),
+            )
+            for _ in range(3)
+        ]
+
+        list(policy.execute(solver, enumerate(problems)))
+
+        self.assertEqual(solver.batchSizes, [2, 1])
+
     def test_bqm_calculator_returns_the_largest_scenario_loss(self) -> None:
         risk_states = [
             ReturnsVolaGridRiskState(

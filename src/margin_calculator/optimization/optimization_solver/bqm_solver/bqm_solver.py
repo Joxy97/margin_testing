@@ -32,6 +32,12 @@ class BQMSolver(OptimizationSolver):
         """Solve several problems; concrete solvers may provide a native batch."""
         return [self.solve(problem, solverParameters) for problem in problems]
 
+    def beginSeries(self) -> None:
+        """Begin an ordered problem series; stateful solvers may warm-start it."""
+
+    def endSeries(self) -> None:
+        """End the current ordered problem series."""
+
     @classmethod
     def _selectBestSample(
         cls,
