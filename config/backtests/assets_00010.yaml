@@ -1,0 +1,81 @@
+# MarginLab-equivalent synthetic-market rolling backtest.
+marginDate: 2025-01-01
+
+portfolio:
+  csv: ../../synthetic_market/assets_00010/portfolio.csv
+  clientId: synthetic_0000
+  cash: "0"
+
+backtest:
+  confidenceLevel: 0.998
+  outputDirectory: ../../backtest_results/assets_00010
+  datesFromCsv:
+    path: ../../synthetic_market/assets_00010/backtest_close.csv
+    startDate: 2025-01-01
+    endDate: 2025-12-26
+
+engine:
+  downloadManager:
+    providers:
+      synthetic_csv:
+        type: local_csv
+    providerSelection: local_first
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    requestParameters:
+      locations:
+        - ../../synthetic_market/assets_00010/historical_close.csv
+        - ../../synthetic_market/assets_00010/backtest_close.csv
+
+  dataManager:
+    cacheType: lru
+    memorySize: 16
+    maxMemoryBytes: 268435456
+
+  riskStateGenerator:
+    type: correlated_returns_vola_grid
+    pcaGridProvider:
+      cacheType: lru
+      memorySize: 128
+    ew_window: 125
+    ew_lambda: 0.93
+    components: 2
+    scenariosPerComponents: [21, 5]
+    tailDensityGamma: 1.0
+    nZBins: 21
+    nNearest: null
+    residualSigmaRange: 5.0
+    allowEmptyBinFallback: true
+    distanceInflationAlpha: 0.5
+    distanceInflationPower: 2.0
+    maxInflationFactor: 5.0
+    topKNeighbors: 5
+    correlationBlockBytes: 134217728
+
+  marginCalculator:
+    type: bqm
+    modelParameters:
+      lambdaOneHot: 1.0
+      lambdaCompat: 0.1
+    structuralCacheMemorySize: 16
+    executionPolicy:
+      type: batch
+      batchSize: 105
+      maxBatchBytes: 536870912
+      memoryMultiplier: 3.0
+    solver:
+      type: torch_sbm
+      constructorParameters:
+        device: auto
+      solverParameters:
+        steps: 1000
+        runs: 16
+        dt: 0.1
+        a0: 1.0
+        c0: 0.02
+        gamma: 0.0
+        initial_scale: 0.1
+        seed: 20260603
+        dtype: float32
+        run_batch_size: null
+        energy_chunk_size: 1000000

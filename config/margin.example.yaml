@@ -1,0 +1,75 @@
+# Complete application configuration. Relative paths are resolved from this file.
+marginDate: 2024-01-31
+
+portfolio:
+  weights:
+    AAPL: "10"
+    MSFT: "5"
+  cash: "0"
+
+# Optional rolling backtest. The root portfolio is named "default" here.
+backtest:
+  confidenceLevel: 0.998
+  outputDirectory: ../backtest_results/example
+  dates: [2024-01-29, 2024-01-30, 2024-01-31]
+
+engine:
+  downloadManager:
+    providers:
+      yahoo:
+        type: yfinance
+    providerSelection: local_first
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    requestParameters: {}
+
+  dataManager:
+    cacheType: lru
+    memorySize: 16
+    maxMemoryBytes: 268435456
+    backingStore:
+      type: partitioned_pickle
+      directory: .cache/market-data
+
+  riskStateGenerator:
+    type: correlated_returns_vola_grid
+    pcaGridProvider:
+      cacheType: lru
+      memorySize: 128
+    ew_window: 60
+    ew_lambda: 0.94
+    components: 2
+    scenariosPerComponents: [21, 5]
+    tailDensityGamma: 1.0
+    nZBins: 21
+    nNearest: 40
+    residualSigmaRange: 5.0
+    allowEmptyBinFallback: true
+    distanceInflationAlpha: 0.5
+    distanceInflationPower: 2.0
+    maxInflationFactor: 5.0
+    topKNeighbors: 5
+    correlationBlockBytes: 134217728
+
+  marginCalculator:
+    type: bqm
+    modelParameters:
+      lambdaOneHot: 2.0
+      lambdaCompat: 0.1
+    structuralCacheMemorySize: 16
+    executionPolicy:
+      type: batch
+      batchSize: 105
+      maxBatchBytes: 536870912
+      memoryMultiplier: 3.0
+    solver:
+      type: torch_sbm
+      constructorParameters:
+        device: auto
+      solverParameters:
+        steps: 10000
+        runs: 16
+        seed: 1
+        dtype: float32
+        run_batch_size: null
+        energy_chunk_size: 1000000
