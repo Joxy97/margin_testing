@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -22,6 +23,43 @@ from risk_state_generator import (
 
 
 class YamlConfigurationTest(unittest.TestCase):
+    def test_loads_a_wide_portfolio_and_capitalized_csv_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "portfolio.csv").write_text(
+                "client_id,AAPL,MSFT\nclient,0.6,0.4\n",
+                encoding="utf-8",
+            )
+            (root / "prices.csv").write_text(
+                "Date,AAPL,MSFT\n2025-01-02,10,20\n2025-01-03,11,21\n",
+                encoding="utf-8",
+            )
+            config_path = root / "margin.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "marginDate": "2025-01-02",
+                        "portfolio": {
+                            "csv": "portfolio.csv",
+                            "clientId": "client",
+                        },
+                        "backtest": {
+                            "datesFromCsv": {"path": "prices.csv"},
+                        },
+                        "engine": {"marginCalculator": {"type": "greedy"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            application = MarginApplicationConfig.fromYaml(config_path)
+
+        self.assertEqual(application.portfolio.weights["AAPL"], Decimal("0.6"))
+        self.assertEqual(
+            application.backtestRequests["default"].dates,
+            (date(2025, 1, 2), date(2025, 1, 3)),
+        )
+
     def test_loads_and_runs_a_complete_local_greedy_application(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -114,6 +152,18 @@ class YamlConfigurationTest(unittest.TestCase):
         self.assertEqual(generator.components, 2)
         self.assertEqual(generator.scenariosPerComponents, (5, 5))
         self.assertEqual(generator.nZBins, 21)
+        self.assertEqual(
+            application.backtestOutputDirectory,
+            Path("backtest_results/example").resolve(),
+        )
+        self.assertEqual(
+            application.backtestRequests["default"].dates,
+            (
+                date(2024, 1, 29),
+                date(2024, 1, 30),
+                date(2024, 1, 31),
+            ),
+        )
 
     def test_builds_nested_download_chunkers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

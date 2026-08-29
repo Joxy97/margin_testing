@@ -42,13 +42,36 @@ class LocalCSVDataProvider(DataProvider):
 
         import pandas
 
-        data = pandas.read_csv(command.provider_parameters.get("location", ""))
+        locations = command.provider_parameters.get("locations")
+        if locations is None:
+            locations = (command.provider_parameters.get("location", ""),)
+        elif isinstance(locations, (str, bytes)):
+            raise TypeError("locations must be an iterable of CSV paths")
+        frames = [
+            self._normalizeDateColumn(pandas.read_csv(location))
+            for location in locations
+        ]
+        if not frames:
+            raise ValueError("at least one CSV location must be supplied")
+        data = pandas.concat(frames, ignore_index=True)
+        data["date"] = pandas.to_datetime(data["date"], errors="raise")
+        data = data.drop_duplicates(subset="date", keep="last").sort_values("date")
         data = self._extractInstruments(data, list(command.instruments))
         return self._extractDates(
             data,
             command.start_date,
             command.end_date,
         )
+
+    @staticmethod
+    def _normalizeDateColumn(data: pandas.DataFrame) -> pandas.DataFrame:
+        """Normalize common CSV date-column capitalization."""
+        date_columns = [
+            column for column in data.columns if str(column).casefold() == "date"
+        ]
+        if len(date_columns) != 1:
+            raise ValueError("CSV data must contain exactly one date column")
+        return data.rename(columns={date_columns[0]: "date"})
 
     def _extractInstruments(
         self,
