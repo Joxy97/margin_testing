@@ -25,6 +25,7 @@ from .classical_dwave_bqm_solvers import (
     TreeDecompositionSamplerBQMSolver,
 )
 from .sbm_bqm_solver import SBMBQMSolver
+from .torch_sbm_bqm_solver import TorchSBMBQMSolver
 from ...optimization_problem.qubo_problem import QUBOProblem
 
 __all__ = [
@@ -45,6 +46,7 @@ __all__ = [
     "SequentialBQMExecutionPolicy",
     "SteepestDescentBQMSolver",
     "TabuBQMSolver",
+    "TorchSBMBQMSolver",
     "TreeDecompositionBQMSolver",
     "TreeDecompositionSamplerBQMSolver",
 ]

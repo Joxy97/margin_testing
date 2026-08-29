@@ -153,16 +153,10 @@ class ReturnsPCAGrid(PCAGrid):
             eigenvalues = numpy.maximum(eigenvalues[order], 0.0)
             loadings = eigenvectors[:, order[: self.components]].T
         else:
-            # The singular values of sqrt(W)X are the square roots of the
-            # eigenvalues of X'WX. This avoids allocating an assets-by-assets
-            # covariance matrix when the return window is much narrower.
-            weighted_centered = numpy.sqrt(weights[:, None]) * centered_returns
-            _, singular_values, right_vectors = numpy.linalg.svd(
-                weighted_centered,
-                full_matrices=False,
+            eigenvalues, loadings = self._fitObservationSpacePCA(
+                centered_returns,
+                weights,
             )
-            eigenvalues = singular_values**2
-            loadings = right_vectors[: self.components]
 
         total_variance = float(eigenvalues.sum())
         if total_variance <= 0.0:
@@ -177,3 +171,30 @@ class ReturnsPCAGrid(PCAGrid):
             numpy.abs(standardizedReturns),
             axis=0,
         )
+
+    def _fitObservationSpacePCA(
+        self,
+        centeredReturns: numpy.ndarray,
+        weights: numpy.ndarray,
+    ) -> tuple[numpy.ndarray, numpy.ndarray]:
+        """Fit wide data through the equivalent observation-space problem."""
+        weighted_centered = numpy.sqrt(weights[:, None]) * centeredReturns
+        gram = weighted_centered @ weighted_centered.T
+        eigenvalues, left_eigenvectors = numpy.linalg.eigh(gram)
+        order = numpy.argsort(eigenvalues)[::-1]
+        eigenvalues = numpy.maximum(eigenvalues[order], 0.0)
+        selected_eigenvalues = eigenvalues[: self.components]
+        if numpy.any(selected_eigenvalues <= numpy.finfo(float).eps):
+            raise ValueError(
+                "requested PCA components include a zero-variance mode"
+            )
+
+        selected_left_eigenvectors = left_eigenvectors[
+            :,
+            order[: self.components],
+        ]
+        right_eigenvectors = (
+            weighted_centered.T @ selected_left_eigenvectors
+        )
+        right_eigenvectors /= numpy.sqrt(selected_eigenvalues)[None, :]
+        return eigenvalues, right_eigenvectors.T

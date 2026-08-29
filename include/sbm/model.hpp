@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -25,12 +26,16 @@ struct BinaryQuadraticModel {
 
 // Paper convention: H(s) = offset - 1/2 s^T J s - h^T s.
 // J is symmetric and stored as full CSR (both directions, zero diagonal).
-struct IsingModel {
+struct IsingTopology {
     std::vector<std::size_t> row_offsets;
     std::vector<std::uint32_t> columns;
-    std::vector<double> couplings;
-    std::vector<double> fields;
-    double offset = 0.0;
+};
+
+struct IsingModel {
+    std::shared_ptr<const IsingTopology> topology;
+    std::vector<float> couplings;
+    std::vector<float> fields;
+    float offset = 0.0F;
 
     [[nodiscard]] std::size_t size() const noexcept { return fields.size(); }
     [[nodiscard]] double energy(const std::vector<std::int8_t>& spins) const;

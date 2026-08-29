@@ -10,6 +10,8 @@ the paper's optional heating term, in three forms:
   reductions and time evolution use SIMD lanes. `solve_cpu_batch` additionally
   schedules independent small QUBOs across cores.
 - `solve_gpu`: CUDA CSR kernels, enabled with `SBM_ENABLE_CUDA`.
+- `TorchSBMBQMSolver`: block-diagonal sparse matrix-matrix updates that batch
+  both independent QUBOs and randomized trajectories on CPU or CUDA.
 - `dsb_hls`: a fixed-size, fixed-point-capable Vitis HLS kernel with `P_r` row
   and `P_c` column unrolling plus `P_b` replicated row blocks. `solve_fpga_sim`
   runs the same kernel as ordinary C++ with floating-point values for verification.
@@ -29,6 +31,42 @@ GPU are required. The HLS source is in `fpga/dsb_hls.cpp`; define
 spins, `P_c=16`, `P_r=16`, and `P_b=1`; override `SBM_FPGA_MAX_SPINS`,
 `SBM_FPGA_PC`, `SBM_FPGA_PR`, and `SBM_FPGA_PB` at compile time. Biases should be scaled to fit the configured
 `ap_fixed<24,8>` range before loading a physical FPGA.
+
+## Batched Torch solver
+
+Select the Torch implementation in application YAML without changing the
+margin engine or its execution policy:
+
+```yaml
+engine:
+  marginCalculator:
+    type: bqm
+    executionPolicy:
+      type: batch
+      batchSize: 105
+      maxBatchBytes: 536870912
+    solver:
+      type: torch_sbm
+      constructorParameters:
+        device: auto  # CUDA when available, otherwise CPU
+      solverParameters:
+        steps: 1000
+        runs: 16
+        run_batch_size: 16
+        dtype: float32
+        dt: 0.1
+        a0: 1.0
+        c0: 0.02
+        gamma: 0.0
+        initial_scale: 0.1
+        seed: 20260603
+```
+
+The ordinary `torch` dependency provides CPU execution. For CUDA, install the
+wheel selected for the machine's CUDA version by the official PyTorch package
+selector. `run_batch_size` bounds trajectory-state memory; the outer BQM batch
+size bounds the block-diagonal scenario matrix. Use `float64` when validating
+against the native solver and `float32` for the higher-throughput path.
 
 ## Compact QUBO format
 

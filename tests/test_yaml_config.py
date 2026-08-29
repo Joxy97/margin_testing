@@ -15,6 +15,9 @@ from margin_calculator import (
     BatchBQMExecutionPolicy,
     GreedyMarginCalculatorConfig,
 )
+from margin_calculator.optimization.optimization_solver.bqm_solver import (
+    TorchSBMBQMSolver,
+)
 from margin_engine import MarginApplicationConfig, MarginReport
 from risk_state_generator import (
     CorrelatedReturnsVolaGridRiskStateGeneratorConfig,
@@ -142,15 +145,25 @@ class YamlConfigurationTest(unittest.TestCase):
         calculator = application.engine.marginCalculator
         generator = application.engine.riskStateGenerator
         self.assertIsInstance(calculator, BQMMarginCalculatorConfig)
-        self.assertEqual(calculator.solver.solverType, "sbm")
+        self.assertEqual(calculator.solver.solverType, "torch_sbm")
+        self.assertEqual(
+            calculator.solver.constructorParameters,
+            {"device": "auto"},
+        )
+        self.assertEqual(calculator.solver.solverParameters["runs"], 16)
+        self.assertEqual(
+            calculator.solver.solverParameters["dtype"],
+            "float32",
+        )
         self.assertIsInstance(calculator.executionPolicy, BatchBQMExecutionPolicy)
-        self.assertEqual(calculator.executionPolicy.batchSize, 2)
+        self.assertEqual(calculator.executionPolicy.batchSize, 105)
+        self.assertEqual(calculator.executionPolicy.maxBatchBytes, 536870912)
         self.assertIsInstance(
             generator,
             CorrelatedReturnsVolaGridRiskStateGeneratorConfig,
         )
         self.assertEqual(generator.components, 2)
-        self.assertEqual(generator.scenariosPerComponents, (5, 5))
+        self.assertEqual(generator.scenariosPerComponents, (21, 5))
         self.assertEqual(generator.nZBins, 21)
         self.assertEqual(
             application.backtestOutputDirectory,
@@ -205,6 +218,42 @@ class YamlConfigurationTest(unittest.TestCase):
             application.engine.downloadManager.downloadParameters["chunker"],
             ProductChunker,
         )
+
+    def test_constructs_torch_sbm_from_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "torch.yaml"
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        "marginDate": "2024-01-11",
+                        "portfolio": {"weights": {"AAPL": 1}},
+                        "engine": {
+                            "marginCalculator": {
+                                "type": "bqm",
+                                "solver": {
+                                    "type": "torch_sbm",
+                                    "constructorParameters": {"device": "cpu"},
+                                    "solverParameters": {
+                                        "steps": 25,
+                                        "runs": 4,
+                                        "dtype": "float64",
+                                    },
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            application = MarginApplicationConfig.fromYaml(path)
+
+        calculator = application.engine.marginCalculator
+        self.assertIsInstance(calculator, BQMMarginCalculatorConfig)
+        solver = calculator.solver.createBQMSolver()
+        self.assertIsInstance(solver, TorchSBMBQMSolver)
+        self.assertEqual(solver.device, "cpu")
+        self.assertEqual(calculator.solver.solverParameters["runs"], 4)
 
     def test_rejects_unknown_yaml_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from itertools import islice
 from numbers import Integral
 from typing import Any, Generic, TypeVar
 
@@ -43,8 +42,12 @@ class SequentialBQMExecutionPolicy(BQMExecutionPolicy[Context]):
         items: Iterable[tuple[Context, QUBOProblem]],
         solverParameters: Mapping[str, Any] | None = None,
     ) -> Iterator[tuple[Context, BQMOptimizationResult]]:
-        for context, problem in items:
-            yield context, solver.solve(problem, solverParameters)
+        solver.beginSeries()
+        try:
+            for context, problem in items:
+                yield context, solver.solve(problem, solverParameters)
+        finally:
+            solver.endSeries()
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,8 @@ class BatchBQMExecutionPolicy(BQMExecutionPolicy[Context]):
     """Submit bounded batches through a solver's native batch interface."""
 
     batchSize: int = 4
+    maxBatchBytes: int | None = None
+    memoryMultiplier: float = 3.0
 
     def __post_init__(self) -> None:
         if (
@@ -60,6 +65,10 @@ class BatchBQMExecutionPolicy(BQMExecutionPolicy[Context]):
             or self.batchSize <= 0
         ):
             raise ValueError("batchSize must be a positive integer")
+        if self.maxBatchBytes is not None and self.maxBatchBytes <= 0:
+            raise ValueError("maxBatchBytes must be positive or None")
+        if self.memoryMultiplier < 1.0:
+            raise ValueError("memoryMultiplier must be at least one")
 
     def execute(
         self,
@@ -68,9 +77,36 @@ class BatchBQMExecutionPolicy(BQMExecutionPolicy[Context]):
         solverParameters: Mapping[str, Any] | None = None,
     ) -> Iterator[tuple[Context, BQMOptimizationResult]]:
         iterator = iter(items)
-        while batch := tuple(islice(iterator, self.batchSize)):
-            contexts, problems = zip(*batch)
-            results = solver.solveMany(problems, solverParameters)
-            if len(results) != len(batch):
-                raise RuntimeError("BQM solver returned an incomplete batch")
-            yield from zip(contexts, results)
+        pending: tuple[Context, QUBOProblem] | None = None
+        solver.beginSeries()
+        try:
+            while True:
+                batch: list[tuple[Context, QUBOProblem]] = []
+                estimated_bytes = 0
+                while len(batch) < self.batchSize:
+                    try:
+                        item = pending if pending is not None else next(iterator)
+                    except StopIteration:
+                        break
+                    pending = None
+                    item_bytes = int(
+                        item[1].numericMemoryBytes * self.memoryMultiplier
+                    )
+                    if (
+                        batch
+                        and self.maxBatchBytes is not None
+                        and estimated_bytes + item_bytes > self.maxBatchBytes
+                    ):
+                        pending = item
+                        break
+                    batch.append(item)
+                    estimated_bytes += item_bytes
+                if not batch:
+                    return
+                contexts, problems = zip(*batch)
+                results = solver.solveMany(problems, solverParameters)
+                if len(results) != len(batch):
+                    raise RuntimeError("BQM solver returned an incomplete batch")
+                yield from zip(contexts, results)
+        finally:
+            solver.endSeries()

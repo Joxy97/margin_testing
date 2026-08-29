@@ -33,8 +33,9 @@ double IsingModel::energy(const std::vector<std::int8_t>& spins) const {
     double value = offset;
     for (std::size_t i = 0; i < size(); ++i) {
         value -= fields[i] * spins[i];
-        for (std::size_t p = row_offsets[i]; p < row_offsets[i + 1]; ++p) {
-            value -= 0.5 * couplings[p] * spins[i] * spins[columns[p]];
+        for (std::size_t p = topology->row_offsets[i];
+             p < topology->row_offsets[i + 1]; ++p) {
+            value -= 0.5 * couplings[p] * spins[i] * spins[topology->columns[p]];
         }
     }
     return value;
@@ -43,43 +44,46 @@ double IsingModel::energy(const std::vector<std::int8_t>& spins) const {
 IsingModel to_ising(const BinaryQuadraticModel& bqm) {
     const auto n = bqm.size();
     IsingModel model;
+    auto topology = std::make_shared<IsingTopology>();
+    model.topology = topology;
     model.fields.resize(n);
-    model.offset = bqm.offset;
+    model.offset = static_cast<float>(bqm.offset);
 
     std::vector<std::size_t> degrees(n, 0);
     for (std::size_t i = 0; i < n; ++i) {
-        model.offset += 0.5 * bqm.linear[i];
-        model.fields[i] = -0.5 * bqm.linear[i];
+        model.offset += 0.5F * static_cast<float>(bqm.linear[i]);
+        model.fields[i] = -0.5F * static_cast<float>(bqm.linear[i]);
     }
     for (const auto& term : bqm.quadratic) {
         if (term.u >= n || term.v >= n || term.u == term.v) {
             throw std::invalid_argument("invalid off-diagonal quadratic bias");
         }
-        const double j = -0.25 * term.bias;
-        model.offset += 0.25 * term.bias;
-        model.fields[term.u] -= 0.25 * term.bias;
-        model.fields[term.v] -= 0.25 * term.bias;
-        if (j != 0.0) {
+        const float bias = static_cast<float>(term.bias);
+        const float j = -0.25F * bias;
+        model.offset += 0.25F * bias;
+        model.fields[term.u] -= 0.25F * bias;
+        model.fields[term.v] -= 0.25F * bias;
+        if (j != 0.0F) {
             ++degrees[term.u];
             ++degrees[term.v];
         }
     }
 
-    model.row_offsets.resize(n + 1);
+    topology->row_offsets.resize(n + 1);
     for (std::size_t i = 0; i < n; ++i) {
-        model.row_offsets[i + 1] = model.row_offsets[i] + degrees[i];
+        topology->row_offsets[i + 1] = topology->row_offsets[i] + degrees[i];
     }
-    model.columns.resize(model.row_offsets.back());
-    model.couplings.resize(model.row_offsets.back());
-    auto cursor = model.row_offsets;
+    topology->columns.resize(topology->row_offsets.back());
+    model.couplings.resize(topology->row_offsets.back());
+    auto cursor = topology->row_offsets;
     for (const auto& term : bqm.quadratic) {
-        const double j = -0.25 * term.bias;
-        if (j == 0.0) continue;
+        const float j = -0.25F * static_cast<float>(term.bias);
+        if (j == 0.0F) continue;
         const auto uv = cursor[term.u]++;
         const auto vu = cursor[term.v]++;
-        model.columns[uv] = term.v;
+        topology->columns[uv] = term.v;
         model.couplings[uv] = j;
-        model.columns[vu] = term.u;
+        topology->columns[vu] = term.u;
         model.couplings[vu] = j;
     }
     return model;

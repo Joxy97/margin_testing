@@ -78,6 +78,19 @@ class QUBOProblem(OptimizationProblem):
     def interactionCount(self) -> int:
         return len(self.quadraticBiases)
 
+    @property
+    def numericMemoryBytes(self) -> int:
+        """Return bytes occupied by the contiguous numeric coefficient arrays."""
+        return sum(
+            array.nbytes
+            for array in (
+                self.linear,
+                self.quadraticHeads,
+                self.quadraticTails,
+                self.quadraticBiases,
+            )
+        )
+
     def energy(self, sample: Mapping[int, int] | Sequence[int]) -> float:
         """Evaluate a binary sample against this QUBO."""
         if isinstance(sample, Mapping):

@@ -39,7 +39,7 @@ engine:
     ew_window: 60
     ew_lambda: 0.94
     components: 2
-    scenariosPerComponents: [5, 5]
+    scenariosPerComponents: [21, 5]
     tailDensityGamma: 1.0
     nZBins: 21
     nNearest: 40
@@ -59,12 +59,17 @@ engine:
     structuralCacheMemorySize: 16
     executionPolicy:
       type: batch
-      batchSize: 2
+      batchSize: 105
+      maxBatchBytes: 536870912
+      memoryMultiplier: 3.0
     solver:
-      type: sbm
+      type: torch_sbm
       constructorParameters:
-        libraryPath: ../build/libsbm_python.so
+        device: auto
       solverParameters:
         steps: 10000
         runs: 16
         seed: 1
+        dtype: float32
+        run_batch_size: null
+        energy_chunk_size: 1000000
