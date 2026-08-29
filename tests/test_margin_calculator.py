@@ -71,7 +71,7 @@ class BatchTrackingSolver(BQMSolver):
 
 
 class MarginCalculatorTest(unittest.TestCase):
-    def test_greedy_visitor_selects_the_worst_pnl_for_longs_and_shorts(self) -> None:
+    def test_greedy_visitor_sums_position_times_lowest_bin_pnl(self) -> None:
         risk_state = ReturnsVolaGridRiskState(
             {
                 "AAPL": numpy.array([[-0.05, 0.20], [0.02, 0.25]]),
@@ -88,7 +88,7 @@ class MarginCalculatorTest(unittest.TestCase):
             portfolio,
         ).acceptGreedy(visitor)
 
-        self.assertAlmostEqual(pnl, -0.65)
+        self.assertAlmostEqual(pnl, -0.3)
 
     def test_greedy_calculator_returns_the_worst_nonnegative_loss(self) -> None:
         risk_states = (

@@ -84,9 +84,12 @@ class MarginEngineTest(unittest.TestCase):
 
             first_report = engine.generateReport(portfolio, margin_date)
             second_report = engine.generateReport(portfolio, margin_date)
+            market_data = engine.getPortfolioMarketData(portfolio, margin_date)
 
-        self.assertEqual(first_report, MarginReport(12.5))
+        self.assertEqual(first_report.margin, 12.5)
+        self.assertGreaterEqual(first_report.timings.totalSeconds, 0.0)
         self.assertEqual(second_report.margin, 12.5)
+        self.assertEqual(market_data["AAPL"].iloc[-1], 110)
         self.assertEqual(provider.downloadData.call_count, 1)
         self.assertEqual(len(calculator.calls), 2)
         self.assertTrue(calculator.calls[0][0])

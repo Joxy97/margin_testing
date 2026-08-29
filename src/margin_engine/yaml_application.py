@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+import csv
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -42,6 +44,9 @@ from .config import MarginEngineConfig
 from .margin_engine import MarginEngine
 from .margin_report import MarginReport
 
+if TYPE_CHECKING:
+    from backtesting import BacktestBatchResults, PortfolioBacktestRequest
+
 
 @dataclass(frozen=True)
 class MarginApplicationConfig:
@@ -50,6 +55,18 @@ class MarginApplicationConfig:
     engine: MarginEngineConfig
     portfolio: Portfolio
     marginDate: date
+    backtestRequests: Mapping[str, PortfolioBacktestRequest] = field(
+        default_factory=dict
+    )
+    backtestConfidenceLevel: float = 0.998
+    backtestOutputDirectory: Path | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "backtestRequests",
+            MappingProxyType(dict(self.backtestRequests)),
+        )
 
     @classmethod
     def fromYaml(cls, path: str | Path) -> MarginApplicationConfig:
@@ -66,6 +83,18 @@ class MarginApplicationConfig:
         """Construct the engine and run the configured margin calculation."""
         return self.createEngine().generateReport(self.portfolio, self.marginDate)
 
+    def generateBacktest(self) -> BacktestBatchResults:
+        """Run every named portfolio request from the YAML backtest block."""
+        from backtesting import MarginBacktester
+
+        if not self.backtestRequests:
+            raise ValueError("YAML configuration does not contain a backtest block")
+        return MarginBacktester().backtestMany(
+            self.createEngine(),
+            self.backtestRequests,
+            self.backtestConfidenceLevel,
+        )
+
 
 class _YamlConfigParser:
     """Translate primitive YAML values into typed application configuration."""
@@ -75,17 +104,109 @@ class _YamlConfigParser:
 
     def parse(self, document: Any) -> MarginApplicationConfig:
         root = self._mapping(document, "root")
-        self._only(root, {"engine", "portfolio", "marginDate"}, "root")
+        self._only(
+            root,
+            {"engine", "portfolio", "marginDate", "backtest"},
+            "root",
+        )
+        portfolio = self._portfolio(
+            self._required(root, "portfolio", "root")
+        )
+        requests, confidence_level, output_directory = self._backtest(
+            root.get("backtest"),
+            portfolio,
+        )
         return MarginApplicationConfig(
             engine=self._engine(self._required(root, "engine", "root")),
-            portfolio=self._portfolio(
-                self._required(root, "portfolio", "root")
-            ),
+            portfolio=portfolio,
             marginDate=self._date(
                 self._required(root, "marginDate", "root"),
                 "marginDate",
             ),
+            backtestRequests=requests,
+            backtestConfidenceLevel=confidence_level,
+            backtestOutputDirectory=output_directory,
         )
+
+    def _backtest(
+        self,
+        value: Any,
+        defaultPortfolio: Portfolio,
+    ) -> tuple[Mapping[str, Any], float, Path | None]:
+        if value is None:
+            return {}, 0.998, None
+        from backtesting import PortfolioBacktestRequest
+
+        path = "backtest"
+        config = self._mapping(value, path)
+        self._only(
+            config,
+            {
+                "dates",
+                "datesFromCsv",
+                "portfolios",
+                "confidenceLevel",
+                "outputDirectory",
+            },
+            path,
+        )
+        requests: dict[str, PortfolioBacktestRequest] = {}
+        if "dates" in config and "datesFromCsv" in config:
+            raise ValueError("backtest must not define both dates and datesFromCsv")
+        if "dates" in config or "datesFromCsv" in config:
+            dates = (
+                self._dates(config["dates"], f"{path}.dates")
+                if "dates" in config
+                else self._datesFromCsv(
+                    config["datesFromCsv"],
+                    f"{path}.datesFromCsv",
+                )
+            )
+            requests["default"] = PortfolioBacktestRequest(
+                defaultPortfolio,
+                dates,
+            )
+        portfolios = self._mapping(config.get("portfolios", {}), f"{path}.portfolios")
+        for name, value in portfolios.items():
+            request_path = f"{path}.portfolios.{name}"
+            request = self._mapping(value, request_path)
+            self._only(
+                request,
+                {"portfolio", "dates", "datesFromCsv"},
+                request_path,
+            )
+            if "dates" in request and "datesFromCsv" in request:
+                raise ValueError(
+                    f"{request_path} must not define both dates and datesFromCsv"
+                )
+            if "dates" not in request and "datesFromCsv" not in request:
+                raise ValueError(
+                    f"Missing required YAML key: {request_path}.dates"
+                )
+            requests[str(name)] = PortfolioBacktestRequest(
+                self._portfolio(
+                    self._required(request, "portfolio", request_path)
+                ),
+                (
+                    self._dates(request["dates"], f"{request_path}.dates")
+                    if "dates" in request
+                    else self._datesFromCsv(
+                        request["datesFromCsv"],
+                        f"{request_path}.datesFromCsv",
+                    )
+                ),
+            )
+        if not requests:
+            raise ValueError("backtest must define dates or named portfolios")
+        confidence_level = float(config.get("confidenceLevel", 0.998))
+        if not 0.0 < confidence_level < 1.0:
+            raise ValueError("backtest.confidenceLevel must be between zero and one")
+        output_directory = (
+            self._path(config["outputDirectory"])
+            if "outputDirectory" in config
+            else None
+        )
+        return requests, confidence_level, output_directory
 
     def _engine(self, value: Any) -> MarginEngineConfig:
         config = self._mapping(value, "engine")
@@ -155,6 +276,18 @@ class _YamlConfigParser:
         if "location" in request_parameters:
             request_parameters["location"] = str(
                 self._path(request_parameters["location"])
+            )
+        if "locations" in request_parameters:
+            locations = request_parameters["locations"]
+            if isinstance(locations, (str, bytes)) or not isinstance(
+                locations, list
+            ):
+                raise TypeError(
+                    "engine.downloadManager.requestParameters.locations "
+                    "must be a list"
+                )
+            request_parameters["locations"] = tuple(
+                str(self._path(location)) for location in locations
             )
         return DownloadManagerConfig(
             providers=providers,
@@ -352,15 +485,92 @@ class _YamlConfigParser:
     def _portfolio(self, value: Any) -> Portfolio:
         path = "portfolio"
         config = self._mapping(value, path)
-        self._only(config, {"weights", "cash"}, path)
-        weights = self._mapping(
-            self._required(config, "weights", path),
-            f"{path}.weights",
-        )
+        self._only(config, {"weights", "csv", "clientId", "cash"}, path)
+        if "weights" in config and "csv" in config:
+            raise ValueError("portfolio must not define both weights and csv")
+        if "csv" in config:
+            weights = self._portfolioWeightsFromCsv(
+                config["csv"],
+                config.get("clientId"),
+            )
+        else:
+            weights = self._mapping(
+                self._required(config, "weights", path),
+                f"{path}.weights",
+            )
         return Portfolio(
             weights={str(key): Decimal(str(amount)) for key, amount in weights.items()},
             cash=Decimal(str(config.get("cash", 0))),
         )
+
+    def _portfolioWeightsFromCsv(
+        self,
+        value: Any,
+        clientId: Any,
+    ) -> Mapping[str, str]:
+        csv_path = self._path(value)
+        with csv_path.open("r", encoding="utf-8", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        required_columns = {"client_id", "ticker", "weight"}
+        if not rows:
+            raise ValueError(f"Portfolio CSV {csv_path} must contain data")
+        if required_columns.issubset(rows[0]):
+            return self._longPortfolioWeights(csv_path, rows, clientId)
+        if "client_id" in rows[0]:
+            return self._widePortfolioWeights(csv_path, rows, clientId)
+        raise ValueError(
+            f"Portfolio CSV {csv_path} must use long-form "
+            "client_id/ticker/weight columns or a wide client_id row"
+        )
+
+    @staticmethod
+    def _selectPortfolioRows(
+        csvPath: Path,
+        rows: list[dict[str, str]],
+        clientId: Any,
+    ) -> list[dict[str, str]]:
+        available_clients = tuple(dict.fromkeys(row["client_id"] for row in rows))
+        selected_client = (
+            str(clientId)
+            if clientId is not None
+            else available_clients[0] if len(available_clients) == 1 else None
+        )
+        if selected_client is None:
+            raise ValueError("portfolio.clientId is required for a multi-client CSV")
+        selected_rows = [
+            row for row in rows if row["client_id"] == selected_client
+        ]
+        if not selected_rows:
+            raise ValueError(
+                f"Portfolio CSV {csvPath} has no client {selected_client!r}"
+            )
+        return selected_rows
+
+    def _longPortfolioWeights(
+        self,
+        csvPath: Path,
+        rows: list[dict[str, str]],
+        clientId: Any,
+    ) -> Mapping[str, str]:
+        selected_rows = self._selectPortfolioRows(csvPath, rows, clientId)
+        return {row["ticker"]: row["weight"] for row in selected_rows}
+
+    def _widePortfolioWeights(
+        self,
+        csvPath: Path,
+        rows: list[dict[str, str]],
+        clientId: Any,
+    ) -> Mapping[str, str]:
+        selected_rows = self._selectPortfolioRows(csvPath, rows, clientId)
+        if len(selected_rows) != 1:
+            raise ValueError(
+                f"Wide portfolio CSV {csvPath} must have one row per client"
+            )
+        return {
+            ticker: weight
+            for ticker, weight in selected_rows[0].items()
+            if ticker != "client_id" and weight not in {None, ""}
+        }
 
     def _path(self, value: Any) -> Path:
         path = Path(str(value)).expanduser()
@@ -374,6 +584,45 @@ class _YamlConfigParser:
             return date.fromisoformat(str(value))
         except ValueError as error:
             raise ValueError(f"{path} must be an ISO date") from error
+
+    def _dates(self, value: Any, path: str) -> tuple[date, ...]:
+        if isinstance(value, (str, bytes)) or not isinstance(value, list):
+            raise TypeError(f"{path} must be a list of dates")
+        return tuple(
+            self._date(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        )
+
+    def _datesFromCsv(self, value: Any, path: str) -> tuple[date, ...]:
+        config = self._mapping(value, path)
+        self._only(config, {"path", "startDate", "endDate"}, path)
+        csv_path = self._path(self._required(config, "path", path))
+        start = (
+            self._date(config["startDate"], f"{path}.startDate")
+            if "startDate" in config
+            else None
+        )
+        end = (
+            self._date(config["endDate"], f"{path}.endDate")
+            if "endDate" in config
+            else None
+        )
+        with csv_path.open("r", encoding="utf-8", newline="") as stream:
+            reader = csv.DictReader(stream)
+            date_columns = [
+                name
+                for name in (reader.fieldnames or ())
+                if name.casefold() == "date"
+            ]
+            if len(date_columns) != 1:
+                raise ValueError(f"Date CSV {csv_path} must contain a date column")
+            date_column = date_columns[0]
+            dates = tuple(self._date(row[date_column], path) for row in reader)
+        return tuple(
+            item
+            for item in dates
+            if (start is None or item >= start) and (end is None or item <= end)
+        )
 
     @staticmethod
     def _mapping(value: Any, path: str) -> Mapping[str, Any]:

@@ -58,8 +58,8 @@ class GreedyPortfolioRiskStateScenario:
             if len(values) == 0:
                 raise ValueError(f"{instrument} has no risk states")
             position = float(portfolio.weights.get(instrument, 0))
-            instrument_pnls = position * values[:, 0]
-            if not numpy.isfinite(instrument_pnls).all():
+            bin_pnls = values[:, 0]
+            if not numpy.isfinite(bin_pnls).all() or not numpy.isfinite(position):
                 raise ValueError(f"{instrument} contains a non-finite PnL")
-            portfolio_pnl += float(numpy.min(instrument_pnls))
+            portfolio_pnl += position * float(numpy.min(bin_pnls))
         return portfolio_pnl
