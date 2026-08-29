@@ -15,6 +15,7 @@ from .bqm_execution_policy import (
 )
 from .bqm_solver_factory import BQMSolverFactory
 from .bqm_solver_config import BQMSolverConfig
+from .adaptive_torch_sbm_bqm_solver import AdaptiveTorchSBMBQMSolver
 from .classical_dwave_bqm_solvers import (
     PlanarGraphBQMSolver,
     RandomBQMSolver,
@@ -35,6 +36,7 @@ __all__ = [
     "BQMSolverFactory",
     "BQMSolverConfig",
     "BQMOptimizationResult",
+    "AdaptiveTorchSBMBQMSolver",
     "OptimizationProblem",
     "OptimizationSolver",
     "OptimizationSolverResult",

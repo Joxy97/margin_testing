@@ -4,11 +4,13 @@ import unittest
 from collections.abc import Mapping
 from importlib.util import find_spec
 from typing import Any
+from unittest.mock import patch
 
 import dimod
 import numpy
 
 from margin_calculator.optimization.optimization_solver.bqm_solver import (
+    AdaptiveTorchSBMBQMSolver,
     BQMSolver,
     BQMSolverFactory,
     BQMOptimizationResult,
@@ -82,6 +84,7 @@ class BQMSolverTest(unittest.TestCase):
 
     def test_factory_includes_all_bqm_solvers(self) -> None:
         expected_solvers = {
+            "adaptive_torch_sbm": AdaptiveTorchSBMBQMSolver,
             "planar_graph": PlanarGraphBQMSolver,
             "random": RandomBQMSolver,
             "sbm": SBMBQMSolver,
@@ -233,6 +236,108 @@ class BQMSolverTest(unittest.TestCase):
     def test_torch_sbm_parameters_are_validated_without_loading_torch(self) -> None:
         with self.assertRaisesRegex(ValueError, "dtype"):
             TorchSBMBQMSolver._getParameters({"dtype": "float16"})
+
+    @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
+    def test_torch_sbm_accepts_rocm_device_aliases(self) -> None:
+        torch = TorchSBMBQMSolver._torch()
+        with (
+            patch.object(torch.version, "hip", "7.2"),
+            patch.object(torch.cuda, "is_available", return_value=True),
+        ):
+            for alias in ("rocm", "amd", "hip"):
+                self.assertEqual(
+                    TorchSBMBQMSolver._resolveDevice(alias),
+                    "cuda",
+                )
+
+    @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
+    def test_torch_sbm_explains_when_rocm_build_is_missing(self) -> None:
+        torch = TorchSBMBQMSolver._torch()
+        with patch.object(torch.version, "hip", None):
+            with self.assertRaisesRegex(RuntimeError, "HIP support"):
+                TorchSBMBQMSolver._resolveDevice("rocm")
+
+    def test_adaptive_torch_sbm_parameters_are_validated(self) -> None:
+        with self.assertRaisesRegex(ValueError, "mode"):
+            AdaptiveTorchSBMBQMSolver._getParameters({"mode": "unknown"})
+        with self.assertRaisesRegex(ValueError, "sampling_period"):
+            AdaptiveTorchSBMBQMSolver._getParameters({"sampling_period": 0})
+
+    def test_adaptive_torch_sbm_polish_preserves_one_hot_groups(self) -> None:
+        problem = QUBOProblem(
+            numpy.array([1.0, -2.0, 0.5, -1.0]),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([]),
+            oneHotGroups=((0, 1), (2, 3)),
+        )
+        initial = BQMOptimizationResult((1, 0, 1, 0), 1.5)
+
+        polished = AdaptiveTorchSBMBQMSolver._polish(
+            problem,
+            initial,
+            sweeps=2,
+            tolerance=1.0e-12,
+        )
+
+        self.assertEqual(polished.sample, (0, 1, 0, 1))
+        self.assertAlmostEqual(polished.energy, -3.0)
+        self.assertEqual(sum(polished.sample[:2]), 1)
+        self.assertEqual(sum(polished.sample[2:]), 1)
+
+    @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
+    def test_adaptive_torch_sbm_tracks_and_polishes_candidates(self) -> None:
+        problem = QUBOProblem(
+            numpy.array([-1.0, -0.5, -0.8, -0.2]),
+            numpy.array([0, 0, 1, 2], dtype=numpy.uint32),
+            numpy.array([2, 3, 2, 3], dtype=numpy.uint32),
+            numpy.array([0.2, -0.1, -0.3, 0.4]),
+            oneHotGroups=((0, 1), (2, 3)),
+        )
+        solver = AdaptiveTorchSBMBQMSolver("cpu")
+
+        result = solver.solve(
+            problem,
+            {
+                "steps": 60,
+                "runs": 4,
+                "dt": 0.1,
+                "sampling_period": 5,
+                "convergence_threshold": 2,
+                "dtype": "float32",
+                "seed": 37,
+            },
+        )
+
+        self.assertEqual(sum(result.sample[:2]), 1)
+        self.assertEqual(sum(result.sample[2:]), 1)
+        self.assertAlmostEqual(result.energy, problem.energy(result.sample))
+        self.assertLessEqual(solver.lastStepCount, 60)
+
+    @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
+    def test_adaptive_torch_sbm_stops_when_agent_energies_stabilize(self) -> None:
+        problem = QUBOProblem(
+            numpy.zeros(3),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([]),
+        )
+        solver = AdaptiveTorchSBMBQMSolver("cpu")
+
+        solver.solve(
+            problem,
+            {
+                "steps": 100,
+                "runs": 2,
+                "sampling_period": 5,
+                "convergence_threshold": 2,
+                "early_stopping": True,
+                "local_search_sweeps": 0,
+                "seed": 41,
+            },
+        )
+
+        self.assertLess(solver.lastStepCount, 100)
 
     def test_torch_sbm_qubo_to_ising_conversion_preserves_energies(self) -> None:
         problem = QUBOProblem(

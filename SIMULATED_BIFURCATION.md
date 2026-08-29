@@ -68,6 +68,58 @@ selector. `run_batch_size` bounds trajectory-state memory; the outer BQM batch
 size bounds the block-diagonal scenario matrix. Use `float64` when validating
 against the native solver and `float32` for the higher-throughput path.
 
+AMD GPUs use PyTorch's ROCm build. PyTorch exposes HIP/ROCm devices through its
+`torch.cuda` API, so the solver accepts `device: rocm`, `device: amd`, and
+`device: hip` as aliases for the internal `cuda` device. `device: auto` selects
+either a CUDA or ROCm accelerator whenever `torch.cuda.is_available()` is true.
+The installed wheel must report a non-null `torch.version.hip`, and the GPU must
+appear in AMD's ROCm compatibility matrix; the Python solver cannot add driver
+or hardware support for an unsupported Radeon generation.
+
+## Adaptive Torch solver
+
+`AdaptiveTorchSBMBQMSolver` is registered as `adaptive_torch_sbm`. It retains
+the sparse scenario/agent batching above and adds ideas used by the reference
+PyTorch implementation and the bSB/dSB literature:
+
+- selectable `discrete` and `ballistic` interaction activation;
+- a pressure-slope schedule and optional heated dynamics;
+- periodic per-agent Ising-energy monitoring, best-state retention, and early
+  stopping after energies remain stable;
+- exact float64 QUBO scoring followed by coordinate descent that repairs and
+  preserves every declared one-hot group.
+
+The last step is application-specific: SB remains an unconstrained heuristic,
+so a low-energy terminal state is not guaranteed to satisfy one-hot groups.
+The repair/polish step makes that constraint explicit without adding it to the
+general SBM dynamics.
+
+```yaml
+solver:
+  type: adaptive_torch_sbm
+  constructorParameters:
+    device: auto
+  solverParameters:
+    steps: 1000
+    runs: 16
+    dtype: float32
+    mode: discrete
+    dt: 0.1
+    pressure_slope: 0.01
+    heated: false
+    heat_coefficient: 0.06
+    early_stopping: true
+    sampling_period: 30
+    convergence_threshold: 5
+    track_best: true
+    local_search_sweeps: 1
+```
+
+The dynamics follow Goto et al., *Science Advances* 7, eabe7953 (2021),
+while the heating option follows Kanao and Goto, *Communications Physics* 5,
+153 (2022). Energy-window convergence and multi-agent execution follow the
+design of `bqth29/simulated-bifurcation-algorithm`.
+
 ## Compact QUBO format
 
 The solver consumes a sparse coordinate format. Variables are zero-based.
