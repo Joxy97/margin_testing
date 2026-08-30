@@ -3,7 +3,6 @@
 import unittest
 from datetime import date
 from decimal import Decimal
-from unittest.mock import Mock, call
 
 import numpy
 
@@ -16,10 +15,7 @@ from risk_state_generator import (
     CorrelationFactors,
     CorrelatedReturnsVolaGridRiskState,
     DenseReturnsVolaGrid,
-    PortfolioCorrelatedReturnsVolaGridRiskState,
-    PortfolioReturnsVolaGridRiskState,
-    PortfolioRiskState,
-    PortfolioRiskStateBQMManager,
+    PortfolioRiskStateBQMVisitor,
     RiskState,
     RiskStateGenerator,
     ReturnsVolaGridRiskState,
@@ -80,65 +76,8 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
         )
         self.assertIs(risk_state.correlations, correlations)
 
-    def test_portfolio_risk_states_dispatch_encoding_and_decoding(self) -> None:
-        risk_state = ReturnsVolaGridRiskState(
-            {"AAPL": numpy.array([[0.01, 0.20]])}
-        )
-        correlated_risk_state = CorrelatedReturnsVolaGridRiskState(
-            risk_state.returnsVolaGrid,
-            CorrelationFactors.empty(),
-        )
-        portfolio = Portfolio()
-        parameters = {"lambdaOneHot": 2.0}
-        result = BQMOptimizationResult({"x_0_0": 1})
-        manager = Mock()
-        greedy_visitor = Mock()
-        portfolio_state = PortfolioReturnsVolaGridRiskState(
-            risk_state,
-            portfolio,
-        )
-        correlated_portfolio_state = (
-            PortfolioCorrelatedReturnsVolaGridRiskState(
-                correlated_risk_state,
-                portfolio,
-            )
-        )
-
-        portfolio_state.acceptBQM(manager, parameters)
-        portfolio_state.acceptDecode(manager, result)
-        portfolio_state.acceptGreedy(greedy_visitor)
-        correlated_portfolio_state.acceptBQM(manager, parameters)
-        correlated_portfolio_state.acceptDecode(manager, result)
-        correlated_portfolio_state.acceptGreedy(greedy_visitor)
-
-        self.assertIsInstance(portfolio_state, PortfolioRiskState)
-        manager.createReturnsVolaGridBQM.assert_called_once_with(
-            risk_state,
-            portfolio,
-            parameters,
-        )
-        manager.decodeReturnsVolaGridRiskState.assert_called_once_with(
-            risk_state,
-            portfolio,
-            result,
-        )
-        manager.createCorrelatedReturnsVolaGridBQM.assert_called_once_with(
-            correlated_risk_state,
-            portfolio,
-            parameters,
-        )
-        manager.decodeCorrelatedReturnsVolaGridRiskState.assert_called_once_with(
-            correlated_risk_state,
-            portfolio,
-            result,
-        )
-        self.assertEqual(
-            greedy_visitor.getGreedyScenario.call_args_list,
-            [call(portfolio_state), call(correlated_portfolio_state)],
-        )
-
     def test_bqm_generator_builds_marginlab_terms(self) -> None:
-        manager = PortfolioRiskStateBQMManager()
+        visitor = PortfolioRiskStateBQMVisitor()
         grids = {
             "AAPL": numpy.array([[0.01, 0.20], [0.02, 0.25]]),
             "MSFT": numpy.array([[-0.03, 0.15]]),
@@ -162,12 +101,12 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
             }
         )
 
-        uncorrelated_bqm = manager.createReturnsVolaGridBQM(
+        uncorrelated_bqm = visitor.createBQM(
             risk_state,
             portfolio,
             {"lambdaOneHot": 2.0},
         )
-        correlated_bqm = manager.createCorrelatedReturnsVolaGridBQM(
+        correlated_bqm = visitor.createBQM(
             correlated_risk_state,
             portfolio,
             {"lambdaOneHot": 2.0, "lambdaCompat": 0.5},
@@ -192,12 +131,12 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
             [0.375, 4.0],
         )
         self.assertAlmostEqual(correlated_bqm.offset, 4.0)
-        manager.createReturnsVolaGridBQM(
+        visitor.createBQM(
             risk_state,
             portfolio,
             {"lambdaOneHot": 2.0},
         )
-        self.assertEqual(len(manager.structuralCache.cache.memory), 1)
+        self.assertEqual(len(visitor.structuralCache.cache.memory), 1)
 
     def test_bqm_manager_decodes_the_selected_portfolio_loss(self) -> None:
         risk_state = ReturnsVolaGridRiskState(
@@ -213,7 +152,7 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
             {"x_0_0": 1, "x_0_1": 0, "x_1_0": 1}
         )
 
-        margin = PortfolioRiskStateBQMManager().decodeReturnsVolaGridRiskState(
+        margin = PortfolioRiskStateBQMVisitor().decodeMargin(
             risk_state,
             portfolio,
             result,
@@ -228,13 +167,30 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
         portfolio = Portfolio(weights={"AAPL": Decimal("10")})
         result = BQMOptimizationResult({"x_0_0": 1, "x_0_1": 1})
 
-        margin = PortfolioRiskStateBQMManager().decodeReturnsVolaGridRiskState(
+        margin = PortfolioRiskStateBQMVisitor().decodeMargin(
             risk_state,
             portfolio,
             result,
         )
 
         self.assertAlmostEqual(margin, 0.5)
+
+    def test_bqm_manager_rejects_an_unsupported_risk_state(self) -> None:
+        visitor = PortfolioRiskStateBQMVisitor()
+        portfolio = Portfolio()
+
+        with self.assertRaisesRegex(
+            TypeError, "Unsupported risk state: RiskState"
+        ):
+            visitor.createBQM(RiskState(), portfolio, {})
+        with self.assertRaisesRegex(
+            TypeError, "Unsupported risk state: RiskState"
+        ):
+            visitor.decodeMargin(
+                RiskState(),
+                portfolio,
+                BQMOptimizationResult(()),
+            )
 
     def test_generator_builds_its_own_typed_data_request(self) -> None:
         generator = ReturnsVolaGridRiskStateGenerator(ew_window=5)

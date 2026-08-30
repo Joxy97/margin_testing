@@ -11,9 +11,9 @@ from margin_calculator import (
     BQMMarginCalculator,
     GreedyMarginCalculator,
     GreedyMarginCalculatorConfig,
-    GreedyPortfolioRiskStateScenario,
     MarginCalculator,
     OptimizationMarginCalculator,
+    StateAwareGreedyRiskStateVisitor,
 )
 from margin_calculator.optimization.optimization_result import BQMOptimizationResult
 from margin_calculator.optimization.optimization_solver.bqm_solver import (
@@ -26,7 +26,6 @@ from risk_state_generator import ReturnsVolaGridRiskState
 from risk_state_generator import (
     CorrelatedReturnsVolaGridRiskState,
     CorrelationFactors,
-    PortfolioRiskState,
 )
 
 
@@ -81,12 +80,9 @@ class MarginCalculatorTest(unittest.TestCase):
         portfolio = Portfolio(
             weights={"AAPL": Decimal("10"), "MSFT": Decimal("-5")}
         )
-        visitor = GreedyPortfolioRiskStateScenario()
+        visitor = StateAwareGreedyRiskStateVisitor()
 
-        pnl = PortfolioRiskState.fromRiskState(
-            risk_state,
-            portfolio,
-        ).acceptGreedy(visitor)
+        pnl = visitor.portfolioPnl(risk_state, portfolio)
 
         self.assertAlmostEqual(pnl, -0.65)
 
@@ -115,12 +111,12 @@ class MarginCalculatorTest(unittest.TestCase):
             },
         )
 
-        pnl = PortfolioRiskState.fromRiskState(
+        pnl = StateAwareGreedyRiskStateVisitor().portfolioPnl(
             risk_state,
             Portfolio(
                 weights={"LONG": Decimal("10"), "SHORT": Decimal("-5")}
             ),
-        ).acceptGreedy(GreedyPortfolioRiskStateScenario())
+        )
 
         self.assertAlmostEqual(pnl, -0.65)
 
@@ -138,12 +134,9 @@ class MarginCalculatorTest(unittest.TestCase):
         self.assertAlmostEqual(margin, 0.3)
 
     def test_greedy_margin_config_constructs_the_calculator(self) -> None:
-        visitor = GreedyPortfolioRiskStateScenario()
-
-        calculator = GreedyMarginCalculatorConfig(visitor).createMarginCalculator()
+        calculator = GreedyMarginCalculatorConfig().createMarginCalculator()
 
         self.assertIsInstance(calculator, GreedyMarginCalculator)
-        self.assertIs(calculator.scenarioVisitor, visitor)
 
     def test_batch_policy_submits_bounded_native_batches(self) -> None:
         solver = BatchTrackingSolver()

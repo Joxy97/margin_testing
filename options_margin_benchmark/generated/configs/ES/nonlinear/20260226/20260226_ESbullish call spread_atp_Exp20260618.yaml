@@ -1,0 +1,48 @@
+marginDate: '2026-02-26'
+portfolio:
+  positions:
+  - instrumentType: futures_option
+    symbol: ES
+    expirationDate: '2026-06-18'
+    quantity: 100
+    multiplier: 50
+    currency: USD
+    strike: 6950
+    optionType: C
+    exerciseStyle: E
+  - instrumentType: futures_option
+    symbol: ES
+    expirationDate: '2026-06-18'
+    quantity: -100
+    multiplier: 50
+    currency: USD
+    strike: 7150
+    optionType: C
+    exerciseStyle: E
+  metadata:
+    benchmarkCategory: nonlinear
+    source: ES/nonlinear/atp/20260226/20260226_ESbullish call spread_atp_Exp20260618.csv
+engine:
+  downloadManager:
+    providers:
+      quotes: derivative_csv
+    requestParameters:
+      location: ../../../../market/ES.csv
+  dataManager:
+    type: derivative_quotes
+  riskStateGenerator:
+    type: option_scenarios
+    historyDays: 365
+    riskFreeRate: 0.04
+    marginPeriodDays: 5
+    confidenceLevel: 0.99
+    priceScenarioSteps: 9
+    minimumPriceShock: 0.03
+    maximumPriceShock: 0.15
+    volatilityShifts:
+    - -0.03
+    - 0.0
+    - 0.03
+  marginCalculator:
+    type: state_aware_greedy
+    pnlAnchor: market

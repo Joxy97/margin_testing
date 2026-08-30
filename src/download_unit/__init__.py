@@ -10,6 +10,7 @@ from .command import (
 from .chunker import Chunker, DateChunker, InstrumentChunker, ProductChunker
 from .data_provider import (
     DataProvider,
+    DerivativeCSVDataProvider,
     LocalCSVDataProvider,
     YfinanceDataProvider,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "Chunker",
     "DataProvider",
     "DataRequest",
+    "DerivativeCSVDataProvider",
     "DownloadUnit",
     "DownloadUnitFactory",
     "DateChunker",
