@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,8 @@ if str(SRC) not in sys.path:
 
 from backtest_orchestrator import (  # noqa: E402
     BacktestConfig,
+    ScenarioData,
+    greedy_baseline_pnl,
     repair_one_hot,
     run_backtest,
 )
@@ -51,6 +54,46 @@ class TorchBatchSolverTests(unittest.TestCase):
 
 
 class QuboTests(unittest.TestCase):
+    def test_greedy_baseline_selects_each_assets_worst_state(self) -> None:
+        data = ScenarioData(
+            scenario_index=7,
+            shocks=None,
+            asset_grids=[],
+            group_offsets=np.array([0, 3, 6], dtype=np.int64),
+            portfolio_linear=np.array(
+                [0.4, -0.2, 0.1, -0.3, -0.5, 0.8], dtype=np.float64
+            ),
+        )
+        self.assertAlmostEqual(greedy_baseline_pnl(data), -0.7)
+
+    def test_neighbor_graph_uses_union_and_deduplicates_mutual_pairs(self) -> None:
+        asset_grids = [
+            {
+                "z": np.array([-1.0, 1.0]),
+                "log_return": np.array([-0.1, 0.1]),
+                "simple_return": np.expm1(np.array([-0.1, 0.1])),
+            }
+            for _ in range(3)
+        ]
+        # The 2 -> 0 nomination used to be dropped solely because 0 < 2.
+        neighbors = np.array([[2], [2], [0]], dtype=np.int64)
+        correlations = np.array([[0.4], [-0.3], [0.4]])
+        compact, _, compatibility_edges = build_qubos(
+            asset_grids,
+            np.zeros(3),
+            np.zeros(3),
+            np.ones(3),
+            neighbors,
+            correlations,
+            1.0,
+            0.1,
+            compact=True,
+        )
+        self.assertIsInstance(compact, CompactQubo)
+        self.assertEqual(compatibility_edges, 2)
+        # Three one-hot edges plus two 2x2 compatibility blocks.
+        self.assertEqual(compact.num_interactions, 3 + 2 * 4)
+
     def test_portfolio_overlay_changes_only_linear_coefficients(self) -> None:
         asset_grids = [
             {
@@ -191,6 +234,13 @@ class EndToEndTests(unittest.TestCase):
             self.assertAlmostEqual(float(row["signed_margin_error"]), expected_error)
             self.assertTrue(output.is_file())
             self.assertTrue(output.with_suffix(".summary.json").is_file())
+            diagnostics_path = output.with_suffix(".diagnostics.csv")
+            self.assertTrue(diagnostics_path.is_file())
+            diagnostics = pd.read_csv(diagnostics_path)
+            self.assertEqual(len(diagnostics), 1)
+            self.assertEqual(int(diagnostics.iloc[0]["scenario_batches"]), 1)
+            self.assertEqual(int(diagnostics.iloc[0]["build_workers"]), 1)
+            self.assertGreater(float(diagnostics.iloc[0]["peak_ram_mib"]), 0.0)
 
             # Alter the return being revealed and every later close.  The
             # issued margin must be unchanged because those prices were not in
@@ -209,6 +259,38 @@ class EndToEndTests(unittest.TestCase):
                 float(row["realized_pnl"]),
                 places=8,
             )
+
+            both_output = Path(temporary) / "both.csv"
+            both = run_backtest(replace(config, output=both_output, method="both"))
+            self.assertEqual(set(both["method"]), {"qubo", "baseline"})
+            self.assertEqual(len(both), 2)
+            qubo = both.loc[both["method"] == "qubo"].iloc[0]
+            baseline = both.loc[both["method"] == "baseline"].iloc[0]
+            self.assertLessEqual(
+                float(baseline["worst_scenario_pnl"]),
+                float(qubo["worst_scenario_pnl"]) + 1e-12,
+            )
+            self.assertGreaterEqual(
+                float(baseline["margin"]), float(qubo["margin"]) - 1e-12
+            )
+            self.assertEqual(float(baseline["qubo_build_seconds"]), 0.0)
+            self.assertEqual(float(baseline["solve_seconds"]), 0.0)
+            summary = json.loads(
+                both_output.with_suffix(".summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(set(summary["methods"]), {"baseline", "qubo"})
+
+            baseline_output = Path(temporary) / "baseline.csv"
+            baseline_only = run_backtest(
+                replace(config, output=baseline_output, method="baseline")
+            )
+            self.assertEqual(list(baseline_only["method"]), ["baseline"])
+            baseline_diagnostics = pd.read_csv(
+                baseline_output.with_suffix(".diagnostics.csv")
+            ).iloc[0]
+            self.assertEqual(baseline_diagnostics["correlation_device"], "not-used")
+            self.assertEqual(int(baseline_diagnostics["steps"]), 0)
+            self.assertEqual(int(baseline_diagnostics["runs"]), 0)
 
 
 if __name__ == "__main__":

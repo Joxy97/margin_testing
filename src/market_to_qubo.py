@@ -707,7 +707,7 @@ def build_qubos(
     ).astype(float, copy=False)
 
     one_hot_count = int(np.sum(state_counts * (state_counts - 1) // 2))
-    edge_specs: list[tuple[int, int, float, int]] = []
+    edge_specs: list[tuple[int, int, tuple[tuple[int, int, float], ...], int]] = []
     compatibility_edges = 0
 
     def compatibility_coefficients(asset: int, other: int, rho: float) -> np.ndarray:
@@ -722,26 +722,55 @@ def build_qubos(
             / denominator
         ) * lambda_compat
 
-    # First pass determines the exact allocation size. Recomputing each small
-    # state-pair block in the fill pass avoids a second graph-sized set of arrays.
-    compatibility_count = 0
+    # Form the undirected union of the directed top-k neighbor nominations. A
+    # pair is retained when either endpoint selects the other. If both endpoints
+    # nominate one another, average their directional conditional penalties;
+    # this deduplicates the pair without introducing asset-index ordering bias.
+    pair_nominations: dict[tuple[int, int], list[tuple[int, int, float]]] = {}
     for asset, neighbors in enumerate(neighbor_indices):
         for position, other_value in enumerate(neighbors):
             other = int(other_value)
-            # Preserve the notebook's directed-neighbor filtering exactly.
-            if other <= asset:
+            if other == asset:
                 continue
             rho = float(neighbor_correlations[asset, position])
             if abs(rho) < 1e-6:
                 continue
-            compatibility_edges += 1
+            pair = (min(asset, other), max(asset, other))
+            pair_nominations.setdefault(pair, []).append((asset, other, rho))
 
-            nonzero_count = int(
-                np.count_nonzero(compatibility_coefficients(asset, other, rho))
+    def union_compatibility_coefficients(
+        lower: int,
+        upper: int,
+        nominations: Sequence[tuple[int, int, float]],
+    ) -> np.ndarray:
+        combined: np.ndarray | None = None
+        for source, target, rho in nominations:
+            coefficients = compatibility_coefficients(source, target, rho)
+            if source != lower:
+                coefficients = coefficients.T
+            if combined is None:
+                combined = coefficients.copy()
+            else:
+                combined += coefficients
+        if combined is None:  # pragma: no cover - pairs always have a nomination
+            raise RuntimeError("neighbor union contains an empty asset pair")
+        combined /= len(nominations)
+        return combined
+
+    # First pass determines the exact allocation size. Recomputing each small
+    # state-pair block in the fill pass avoids a second graph-sized set of arrays.
+    compatibility_count = 0
+    for (lower, upper), nominations_list in pair_nominations.items():
+        nominations = tuple(nominations_list)
+        nonzero_count = int(
+            np.count_nonzero(
+                union_compatibility_coefficients(lower, upper, nominations)
             )
-            if nonzero_count:
-                edge_specs.append((asset, other, rho, nonzero_count))
-                compatibility_count += nonzero_count
+        )
+        if nonzero_count:
+            compatibility_edges += 1
+            edge_specs.append((lower, upper, nominations, nonzero_count))
+            compatibility_count += nonzero_count
 
     quadratic_count = one_hot_count + compatibility_count
     quadratic_heads = np.empty(quadratic_count, dtype=np.int32)
@@ -761,8 +790,10 @@ def build_qubos(
         quadratic_biases[cursor:next_cursor] = 2.0 * lambda_one_hot
         cursor = next_cursor
 
-    for asset, other, rho, nonzero_count in edge_specs:
-        flat_biases = compatibility_coefficients(asset, other, rho).ravel()
+    for asset, other, nominations, nonzero_count in edge_specs:
+        flat_biases = union_compatibility_coefficients(
+            asset, other, nominations
+        ).ravel()
         nonzero = flat_biases != 0.0
         next_cursor = cursor + nonzero_count
         asset_variables = variable_indices[asset]

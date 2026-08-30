@@ -1,0 +1,1413 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sparse QUBO Resource Scaling Lab</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: #0d1a2b;
+      --panel-2: #101f32;
+      --line: #24364b;
+      --text: #e8f0f8;
+      --muted: #93a8bd;
+      --cyan: #39d0c8;
+      --blue: #65a8ff;
+      --amber: #ffbe5c;
+      --rose: #ff6f86;
+      --lime: #a8dc6d;
+      --violet: #b595ff;
+      --good: #5bd39a;
+      --bad: #ff7188;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .24);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { color-scheme: dark; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 76% -10%, rgba(57, 208, 200, .12), transparent 35%),
+        radial-gradient(circle at 8% 20%, rgba(101, 168, 255, .09), transparent 25%),
+        var(--bg);
+      color: var(--text);
+      font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input, select { font: inherit; }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #14253a;
+      color: var(--text);
+      padding: 9px 12px;
+      cursor: pointer;
+      transition: border-color .15s, transform .15s, background .15s;
+    }
+
+    button:hover {
+      border-color: var(--cyan);
+      background: #19304a;
+      transform: translateY(-1px);
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 350px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      padding: 24px 20px 40px;
+      border-right: 1px solid var(--line);
+      background: rgba(7, 17, 31, .93);
+      backdrop-filter: blur(16px);
+      z-index: 5;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background:
+        linear-gradient(135deg, rgba(57, 208, 200, .95), rgba(101, 168, 255, .8));
+      box-shadow: 0 0 28px rgba(57, 208, 200, .25);
+      position: relative;
+    }
+
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      inset: 9px;
+      border: 2px solid #07111f;
+      border-radius: 5px;
+      transform: rotate(45deg);
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    .brand h1 {
+      font-size: 16px;
+      line-height: 1.2;
+      margin: 0;
+      letter-spacing: .01em;
+    }
+
+    .brand small, .subtitle, .muted { color: var(--muted); }
+
+    details {
+      border-top: 1px solid var(--line);
+      padding: 12px 0 4px;
+    }
+
+    summary {
+      cursor: pointer;
+      font-weight: 700;
+      letter-spacing: .02em;
+      margin-bottom: 10px;
+      user-select: none;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: 1fr 116px;
+      align-items: center;
+      gap: 10px;
+      margin: 9px 0;
+    }
+
+    .field label {
+      color: #c7d5e3;
+      font-size: 12px;
+    }
+
+    .field label span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      margin-top: 1px;
+    }
+
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #091625;
+      color: var(--text);
+      padding: 7px 8px;
+      outline: none;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(57, 208, 200, .09);
+    }
+
+    .side-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .file-load {
+      border: 1px dashed #31506a;
+      border-radius: 10px;
+      background: rgba(57, 208, 200, .045);
+      padding: 10px;
+      margin: 6px 0 12px;
+    }
+
+    .file-load label {
+      display: block;
+      color: #c7d5e3;
+      font-size: 12px;
+      font-weight: 650;
+      margin-bottom: 7px;
+    }
+
+    .file-load input {
+      font-size: 11px;
+      padding: 5px;
+    }
+
+    .file-load small {
+      display: block;
+      color: var(--muted);
+      margin-top: 7px;
+    }
+
+    main {
+      min-width: 0;
+      padding: 30px clamp(18px, 3vw, 44px) 60px;
+    }
+
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 24px;
+      margin-bottom: 18px;
+    }
+
+    .hero h1 {
+      font-size: clamp(26px, 3.2vw, 44px);
+      line-height: 1.05;
+      letter-spacing: -.04em;
+      margin-bottom: 10px;
+    }
+
+    .hero p {
+      max-width: 780px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(13, 26, 43, .75);
+      color: #c9d7e5;
+      padding: 5px 9px;
+      font-size: 11px;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 10px currentColor;
+    }
+
+    .status {
+      min-width: 180px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .status strong { display: block; font-size: 17px; }
+    .status small { color: var(--muted); }
+    .status.good { border-color: rgba(91, 211, 154, .55); }
+    .status.bad { border-color: rgba(255, 113, 136, .65); }
+
+    .warnings {
+      display: grid;
+      gap: 8px;
+      margin: 16px 0;
+    }
+
+    .warning {
+      border-left: 3px solid var(--amber);
+      border-radius: 8px;
+      background: rgba(255, 190, 92, .08);
+      color: #e8d2aa;
+      padding: 9px 12px;
+      font-size: 12px;
+    }
+
+    .warning.danger {
+      border-left-color: var(--rose);
+      background: rgba(255, 111, 134, .08);
+      color: #f4bac4;
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(140px, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: linear-gradient(160deg, rgba(16, 31, 50, .98), rgba(10, 23, 38, .98));
+      box-shadow: var(--shadow);
+    }
+
+    .kpi {
+      padding: 15px;
+      min-height: 104px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .kpi::after {
+      content: "";
+      position: absolute;
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      right: -28px;
+      bottom: -32px;
+      background: var(--kpi-color, var(--cyan));
+      opacity: .09;
+    }
+
+    .kpi .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .kpi .value {
+      font-size: clamp(20px, 2vw, 28px);
+      line-height: 1.2;
+      margin: 8px 0 3px;
+      font-weight: 760;
+      letter-spacing: -.025em;
+    }
+
+    .kpi .note { color: var(--muted); font-size: 11px; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin: 14px 0;
+    }
+
+    .panel {
+      padding: 17px;
+      min-width: 0;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .panel h2 {
+      margin: 0 0 4px;
+      font-size: 16px;
+      letter-spacing: -.01em;
+    }
+
+    .panel-head p {
+      color: var(--muted);
+      font-size: 11px;
+      margin: 0;
+    }
+
+    .model-tag {
+      white-space: nowrap;
+      color: var(--cyan);
+      background: rgba(57, 208, 200, .08);
+      border: 1px solid rgba(57, 208, 200, .25);
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 10px;
+    }
+
+    .chart-shell {
+      position: relative;
+      min-height: 330px;
+      overflow: hidden;
+    }
+
+    svg.chart {
+      width: 100%;
+      min-height: 320px;
+      display: block;
+      overflow: visible;
+      touch-action: none;
+    }
+
+    .chart-tooltip {
+      position: absolute;
+      display: none;
+      pointer-events: none;
+      min-width: 170px;
+      border: 1px solid #36506b;
+      border-radius: 10px;
+      background: rgba(5, 13, 23, .95);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, .35);
+      padding: 9px 10px;
+      font-size: 11px;
+      z-index: 4;
+    }
+
+    .chart-tooltip strong { display: block; margin-bottom: 4px; }
+    .tip-row { display: flex; justify-content: space-between; gap: 14px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    th, td {
+      text-align: right;
+      padding: 9px 8px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: 600; }
+
+    .pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .pill.good { color: var(--good); background: rgba(91, 211, 154, .1); }
+    .pill.bad { color: var(--bad); background: rgba(255, 113, 136, .1); }
+
+    .formula-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .formula {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #091625;
+      padding: 13px;
+      min-width: 0;
+    }
+
+    .formula code {
+      color: #bcd1e6;
+      word-break: break-word;
+      font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .formula strong {
+      display: block;
+      color: var(--cyan);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      margin-bottom: 6px;
+    }
+
+    .footnotes {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 14px;
+      columns: 2;
+      column-gap: 28px;
+    }
+
+    .footnotes p { break-inside: avoid; }
+
+    @media (max-width: 1280px) {
+      .kpis { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (max-width: 950px) {
+      .app { display: block; }
+      aside {
+        position: relative;
+        width: 100%;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .grid-2 { grid-template-columns: 1fr; }
+      .formula-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      .hero { display: block; }
+      .status { margin-top: 14px; }
+      .kpis { grid-template-columns: repeat(2, 1fr); }
+      .field { grid-template-columns: 1fr 105px; }
+      .footnotes { columns: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <h1>Sparse QUBO Scaling Lab</h1>
+          <small>Interactive planning model</small>
+        </div>
+      </div>
+
+      <details open>
+        <summary>Problem</summary>
+        <div class="field"><label for="assets">Assets A<span>Per scenario</span></label><input id="assets" type="number" min="1" step="1000"></div>
+        <div class="field"><label for="days">Backtest days<span>Independent GPU jobs</span></label><input id="days" type="number" min="1" step="1"></div>
+        <div class="field"><label for="scenarios">Scenarios / day<span>Default 21 × 5 = 105</span></label><input id="scenarios" type="number" min="1" step="1"></div>
+        <div class="field"><label for="zBins">Z-bins z<span>Binary states per asset</span></label><input id="zBins" type="number" min="1" step="2"></div>
+        <div class="field"><label for="topK">Top-k neighbors k<span>Directed nominations</span></label><input id="topK" type="number" min="0" step="1"></div>
+        <div class="field"><label for="reciprocalPct">Reciprocal share<span>0–100% of nominations</span></label><input id="reciprocalPct" type="number" min="0" max="100" step="0.1"></div>
+        <div class="field"><label for="nonzeroPct">Nonzero compatibility p<span>Percent retained</span></label><input id="nonzeroPct" type="number" min="0" max="100" step="0.1"></div>
+      </details>
+
+      <details open>
+        <summary>Solver and parallelism</summary>
+        <div class="field"><label for="steps">SBM steps<span>Memory-neutral; time-linear</span></label><input id="steps" type="number" min="1" step="100"></div>
+        <div class="field"><label for="runs">Total runs<span>Random trajectories</span></label><input id="runs" type="number" min="1" step="1"></div>
+        <div class="field"><label for="runBatch">Run batch size<span>Simultaneous trajectories</span></label><input id="runBatch" type="number" min="1" step="1"></div>
+        <div class="field"><label for="scenarioBatch">Scenario batch b<span>Block-diagonal QUBOs</span></label><input id="scenarioBatch" type="number" min="1" step="1"></div>
+        <div class="field"><label for="gpus">GPUs<span>Dates are sharded, not scenarios</span></label><input id="gpus" type="number" min="1" step="1"></div>
+        <div class="field"><label for="dtype">Solver dtype<span>FP64 model is approximate</span></label><select id="dtype"><option value="float32">float32</option><option value="float64">float64</option></select></div>
+      </details>
+
+      <details open>
+        <summary>Hardware and memory</summary>
+        <div class="field"><label for="vramGiB">VRAM / GPU<span>Physical GiB</span></label><input id="vramGiB" type="number" min="1" step="1"></div>
+        <div class="field"><label for="ramGiB">System RAM<span>Total physical GiB</span></label><input id="ramGiB" type="number" min="1" step="16"></div>
+        <div class="field"><label for="safetyPct">Safety factor η<span>Applied to free capacity</span></label><input id="safetyPct" type="number" min="10" max="100" step="1"></div>
+        <div class="field"><label for="fixedVramGiB">Fixed VRAM reserve<span>CUDA context and libraries</span></label><input id="fixedVramGiB" type="number" min="0" step="0.1"></div>
+        <div class="field"><label for="corrBlockMiB">Correlation block<span>Per active GPU</span></label><input id="corrBlockMiB" type="number" min="0" step="16"></div>
+        <div class="field"><label for="fixedRamGiB">Fixed RAM / worker<span>Imported-library baseline</span></label><input id="fixedRamGiB" type="number" min="0" step="0.1"></div>
+        <div class="field"><label for="parentRamGiB">Parent/data reserve<span>Not in the TeX QUBO formula</span></label><input id="parentRamGiB" type="number" min="0" step="0.5"></div>
+        <div class="field"><label for="ramBeta">Peak RAM β<span>Bytes / upper interaction</span></label><input id="ramBeta" type="number" min="1" step="0.5"></div>
+      </details>
+
+      <details>
+        <summary>Solve-time calibration</summary>
+        <div class="file-load">
+          <label for="diagnosticFile">Load orchestrator diagnostics CSV</label>
+          <input id="diagnosticFile" type="file" accept=".csv,text/csv">
+          <small id="calibrationSource">Bundled anchor: mean of 10 local diagnostic days.</small>
+        </div>
+        <div class="field"><label for="refAssets">Reference assets<span>Measured anchor</span></label><input id="refAssets" type="number" min="1" step="100"></div>
+        <div class="field"><label for="refSeconds">Reference seconds<span>One scenario, batch 1</span></label><input id="refSeconds" type="number" min="0.000001" step="0.01"></div>
+        <div class="field"><label for="refSteps">Reference steps</label><input id="refSteps" type="number" min="1" step="100"></div>
+        <div class="field"><label for="refRuns">Reference runs<span>Simultaneous</span></label><input id="refRuns" type="number" min="1" step="1"></div>
+        <div class="field"><label for="refDtype">Reference dtype</label><select id="refDtype"><option value="float32">float32</option><option value="float64">float64</option></select></div>
+        <div class="field"><label for="refZ">Reference z-bins</label><input id="refZ" type="number" min="1" step="2"></div>
+        <div class="field"><label for="refK">Reference top-k</label><input id="refK" type="number" min="0" step="1"></div>
+        <div class="field"><label for="refReciprocalPct">Reference reciprocal %</label><input id="refReciprocalPct" type="number" min="0" max="100" step="0.1"></div>
+        <div class="field"><label for="sizeExponent">Size exponent α<span>1 = linear sparse work</span></label><input id="sizeExponent" type="number" min="0.1" max="2" step="0.05"></div>
+        <div class="field"><label for="packingExponent">Packing exponent<span>1 = neutral; &gt;1 penalty</span></label><input id="packingExponent" type="number" min="0.1" max="2" step="0.01"></div>
+        <div class="field"><label for="runExponent">Run-width exponent<span>1 = time linear in runs</span></label><input id="runExponent" type="number" min="0.1" max="2" step="0.05"></div>
+        <div class="field"><label for="gpuSpeed">GPU speed factor<span>Relative to reference GPU</span></label><input id="gpuSpeed" type="number" min="0.01" step="0.1"></div>
+        <div class="field"><label for="fp64Slowdown">FP64 slowdown<span>Relative to FP32</span></label><input id="fp64Slowdown" type="number" min="1" step="0.1"></div>
+      </details>
+
+      <details>
+        <summary>Charts</summary>
+        <div class="field"><label for="chartMaxAssets">Maximum assets<span>Logarithmic x-axis</span></label><input id="chartMaxAssets" type="number" min="100" step="10000"></div>
+      </details>
+
+      <div class="side-actions">
+        <button id="resetButton" type="button">Reset</button>
+        <button id="exportButton" type="button">Export JSON</button>
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero">
+        <div>
+          <h1>How large can this sparse QUBO run?</h1>
+          <p>
+            Explore graph size, per-GPU VRAM, per-worker and concurrent RAM, the
+            int32 sparse-index ceiling, and calibrated SBM solve time. Memory
+            follows <strong>RESOURCE_ESTIMATION.tex</strong>; time is an
+            empirical projection that should be re-anchored with a pilot on the
+            target GPU.
+          </p>
+          <div class="badges">
+            <span class="badge"><span class="dot"></span>Undirected union graph</span>
+            <span class="badge">CSR int32 indices</span>
+            <span class="badge">Date-level multi-GPU sharding</span>
+            <span class="badge">Offline / no dependencies</span>
+          </div>
+        </div>
+        <div id="fitStatus" class="status">
+          <strong>Calculating…</strong>
+          <small>Safe-capacity model</small>
+        </div>
+      </section>
+
+      <div id="warnings" class="warnings"></div>
+
+      <section class="kpis">
+        <article class="card kpi" style="--kpi-color:var(--cyan)">
+          <div class="label">Binary variables</div>
+          <div id="kpiVariables" class="value">—</div>
+          <div id="kpiVariablesNote" class="note">A × z</div>
+        </article>
+        <article class="card kpi" style="--kpi-color:var(--violet)">
+          <div class="label">Upper interactions</div>
+          <div id="kpiEdges" class="value">—</div>
+          <div id="kpiDensity" class="note">— density</div>
+        </article>
+        <article class="card kpi" style="--kpi-color:var(--blue)">
+          <div class="label">VRAM / active GPU</div>
+          <div id="kpiVram" class="value">—</div>
+          <div id="kpiVramNote" class="note">—</div>
+        </article>
+        <article class="card kpi" style="--kpi-color:var(--amber)">
+          <div class="label">Concurrent RAM</div>
+          <div id="kpiRam" class="value">—</div>
+          <div id="kpiRamNote" class="note">—</div>
+        </article>
+        <article class="card kpi" style="--kpi-color:var(--lime)">
+          <div class="label">Safe asset ceiling</div>
+          <div id="kpiCapacity" class="value">—</div>
+          <div id="kpiCapacityNote" class="note">—</div>
+        </article>
+        <article class="card kpi" style="--kpi-color:var(--rose)">
+          <div class="label">Projected wall time</div>
+          <div id="kpiTime" class="value">—</div>
+          <div id="kpiTimeNote" class="note">Solver only</div>
+        </article>
+      </section>
+
+      <section class="grid-2">
+        <article class="card panel">
+          <div class="panel-head">
+            <div><h2>Memory scaling by assets</h2><p>Selected batching and active date workers</p></div>
+            <span class="model-tag">formula + empirical RAM</span>
+          </div>
+          <div class="chart-shell">
+            <svg id="memoryChart" class="chart" role="img" aria-label="Memory scaling graph"></svg>
+            <div class="chart-tooltip"></div>
+          </div>
+        </article>
+
+        <article class="card panel">
+          <div class="panel-head">
+            <div><h2>Safe capacity by installed memory</h2><p>VRAM is per GPU; RAM is shared by active workers</p></div>
+            <span class="model-tag">η-adjusted capacity</span>
+          </div>
+          <div class="chart-shell">
+            <svg id="capacityChart" class="chart" role="img" aria-label="Safe capacity graph"></svg>
+            <div class="chart-tooltip"></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="grid-2">
+        <article class="card panel">
+          <div class="panel-head">
+            <div><h2>Calibrated solve-time scaling</h2><p>Solver and packing only; PCA, QUBO build, decode, and I/O excluded</p></div>
+            <span class="model-tag">empirical projection</span>
+          </div>
+          <div class="chart-shell">
+            <svg id="timeChart" class="chart" role="img" aria-label="Solve time scaling graph"></svg>
+            <div class="chart-tooltip"></div>
+          </div>
+        </article>
+
+        <article class="card panel">
+          <div class="panel-head">
+            <div><h2>Selected run feasibility</h2><p>Required resources versus conservative safe ceilings</p></div>
+            <span id="activeWorkersTag" class="model-tag">— workers</span>
+          </div>
+          <table>
+            <thead><tr><th>Constraint</th><th>Required</th><th>Safe ceiling</th><th>Status</th></tr></thead>
+            <tbody id="feasibilityRows"></tbody>
+          </table>
+          <div style="height:16px"></div>
+          <table>
+            <thead><tr><th>Execution count</th><th>Value</th></tr></thead>
+            <tbody id="executionRows"></tbody>
+          </table>
+        </article>
+      </section>
+
+      <section class="card panel">
+        <div class="panel-head">
+          <div><h2>Live model</h2><p>Substituted values from the current controls</p></div>
+          <span class="model-tag">RESOURCE_ESTIMATION.tex</span>
+        </div>
+        <div class="formula-grid">
+          <div class="formula"><strong>Graph</strong><code id="formulaGraph"></code></div>
+          <div class="formula"><strong>VRAM</strong><code id="formulaVram"></code></div>
+          <div class="formula"><strong>RAM</strong><code id="formulaRam"></code></div>
+          <div class="formula"><strong>Capacity</strong><code id="formulaCapacity"></code></div>
+          <div class="formula"><strong>Time</strong><code id="formulaTime"></code></div>
+          <div class="formula"><strong>Parallelism</strong><code id="formulaParallel"></code></div>
+        </div>
+        <div class="footnotes">
+          <p><strong>Memory confidence.</strong> Graph counts are analytic for fixed union density. FP32 VRAM follows the measured formula. FP64 VRAM expands solver values and state tensors while preserving 32-bit CSR indices. Peak RAM uses the empirical β coefficient and can change if packing is refactored.</p>
+          <p><strong>Time confidence.</strong> The bundled reference is the mean of the current 10-asset diagnostics: 0.11105 seconds per scenario at 1,000 steps and 16 runs. It is launch-bound and is not a reliable large-universe anchor. Replace it with a one-day, one-scenario measurement from the target GPU.</p>
+          <p><strong>Multi-GPU behavior.</strong> The current orchestrator shards dates. GPUs do not split scenarios within one day, so effective GPUs are min(GPUs, days). Every active worker builds its own day and consumes its own process RAM.</p>
+          <p><strong>Not modeled.</strong> Market-data duplication, allocator fragmentation beyond η, OS processes, output I/O, PCA, QUBO construction time, decoding, thermal throttling, and GPU-to-GPU variation are outside the formulas. Treat the result as a planning envelope, then validate with diagnostics.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    "use strict";
+
+    var GiB = 1073741824;
+    var INT32_MAX = 2147483647;
+    var colors = {
+      cyan: "#39d0c8",
+      blue: "#65a8ff",
+      amber: "#ffbe5c",
+      rose: "#ff6f86",
+      lime: "#a8dc6d",
+      violet: "#b595ff",
+      muted: "#7890a7"
+    };
+
+    var defaults = {
+      assets: 100000,
+      days: 250,
+      scenarios: 105,
+      zBins: 21,
+      topK: 5,
+      reciprocalPct: 33.6,
+      nonzeroPct: 100,
+      steps: 10000,
+      runs: 16,
+      runBatch: 16,
+      scenarioBatch: 1,
+      gpus: 12,
+      dtype: "float32",
+      vramGiB: 12,
+      ramGiB: 384,
+      safetyPct: 75,
+      fixedVramGiB: 1.25,
+      corrBlockMiB: 256,
+      fixedRamGiB: 0.7,
+      parentRamGiB: 1,
+      ramBeta: 132.5,
+      refAssets: 10,
+      refSeconds: 0.11105156,
+      refSteps: 1000,
+      refRuns: 16,
+      refDtype: "float32",
+      refZ: 21,
+      refK: 5,
+      refReciprocalPct: 33.6,
+      sizeExponent: 1,
+      packingExponent: 1,
+      runExponent: 1,
+      gpuSpeed: 1,
+      fp64Slowdown: 2,
+      chartMaxAssets: 500000
+    };
+
+    var fieldIds = Object.keys(defaults);
+
+    function el(id) { return document.getElementById(id); }
+
+    function setDefaults() {
+      fieldIds.forEach(function (id) { el(id).value = defaults[id]; });
+      update();
+    }
+
+    function numberValue(id, minimum) {
+      var value = Number(el(id).value);
+      if (!Number.isFinite(value)) value = Number(defaults[id]);
+      return Math.max(minimum == null ? 0 : minimum, value);
+    }
+
+    function readConfig() {
+      return {
+        assets: Math.round(numberValue("assets", 1)),
+        days: Math.round(numberValue("days", 1)),
+        scenarios: Math.round(numberValue("scenarios", 1)),
+        z: Math.round(numberValue("zBins", 1)),
+        k: Math.round(numberValue("topK", 0)),
+        reciprocal: Math.min(1, numberValue("reciprocalPct", 0) / 100),
+        p: Math.min(1, numberValue("nonzeroPct", 0) / 100),
+        steps: Math.round(numberValue("steps", 1)),
+        runs: Math.round(numberValue("runs", 1)),
+        runBatch: Math.round(numberValue("runBatch", 1)),
+        scenarioBatch: Math.round(numberValue("scenarioBatch", 1)),
+        gpus: Math.round(numberValue("gpus", 1)),
+        dtype: el("dtype").value,
+        vram: numberValue("vramGiB", 0.001),
+        ram: numberValue("ramGiB", 0.001),
+        eta: Math.min(1, numberValue("safetyPct", 1) / 100),
+        fixedVram: numberValue("fixedVramGiB", 0),
+        corrGiB: numberValue("corrBlockMiB", 0) / 1024,
+        fixedRam: numberValue("fixedRamGiB", 0),
+        parentRam: numberValue("parentRamGiB", 0),
+        beta: numberValue("ramBeta", 1),
+        refAssets: Math.round(numberValue("refAssets", 1)),
+        refSeconds: numberValue("refSeconds", 0.000001),
+        refSteps: Math.round(numberValue("refSteps", 1)),
+        refRuns: Math.round(numberValue("refRuns", 1)),
+        refDtype: el("refDtype").value,
+        refZ: Math.round(numberValue("refZ", 1)),
+        refK: Math.round(numberValue("refK", 0)),
+        refReciprocal: Math.min(1, numberValue("refReciprocalPct", 0) / 100),
+        sizeExponent: numberValue("sizeExponent", 0.1),
+        packingExponent: numberValue("packingExponent", 0.1),
+        runExponent: numberValue("runExponent", 0.1),
+        gpuSpeed: numberValue("gpuSpeed", 0.01),
+        fp64Slowdown: numberValue("fp64Slowdown", 1),
+        chartMax: Math.round(numberValue("chartMaxAssets", 100))
+      };
+    }
+
+    function unionPairsPerAsset(k, reciprocal) {
+      return k * (1 - reciprocal / 2);
+    }
+
+    function edgesPerAsset(z, k, reciprocal, p) {
+      var u = unionPairsPerAsset(k, reciprocal);
+      return z * (z - 1) / 2 + p * u * z * z;
+    }
+
+    function graphAt(assets, c) {
+      var e = edgesPerAsset(c.z, c.k, c.reciprocal, c.p);
+      var variables = assets * c.z;
+      var upperEdges = assets * e;
+      var symmetricNnz = 2 * upperEdges;
+      var density = variables > 1 ? upperEdges / (variables * (variables - 1) / 2) : 0;
+      return { e: e, variables: variables, upperEdges: upperEdges, symmetricNnz: symmetricNnz, density: density };
+    }
+
+    function stateBytes(c) {
+      var valueBytes = c.dtype === "float64" ? 8 : 4;
+      return {
+        value: valueBytes,
+        csrPerUpper: 2 * (valueBytes + 4),
+        fixedPerVariable: 4 + 2 * valueBytes,
+        statePerVariableRun: 6 * valueBytes + 1
+      };
+    }
+
+    function memoryAt(assets, c) {
+      var graph = graphAt(assets, c);
+      var bytes = stateBytes(c);
+      var batch = Math.min(c.scenarioBatch, c.scenarios);
+      var width = Math.min(c.runBatch, c.runs);
+      var gpuPerAsset = bytes.csrPerUpper * graph.e +
+        bytes.fixedPerVariable * c.z +
+        bytes.statePerVariableRun * c.z * width;
+      var gpuDynamic = batch * assets * gpuPerAsset / GiB;
+      var vram = c.fixedVram + c.corrGiB + gpuDynamic;
+      var ramDynamicWorker = batch * assets * c.beta * graph.e / GiB;
+      var ramWorker = c.fixedRam + ramDynamicWorker;
+      var activeWorkers = Math.min(c.gpus, c.days);
+      var totalRam = c.parentRam + activeWorkers * ramWorker;
+      return {
+        graph: graph,
+        bytes: bytes,
+        batch: batch,
+        width: width,
+        gpuPerAsset: gpuPerAsset,
+        gpuDynamic: gpuDynamic,
+        vram: vram,
+        ramDynamicWorker: ramDynamicWorker,
+        ramWorker: ramWorker,
+        activeWorkers: activeWorkers,
+        totalRam: totalRam
+      };
+    }
+
+    function capacities(c) {
+      var sample = memoryAt(1, c);
+      var vramFree = Math.max(0, c.vram - c.fixedVram - c.corrGiB);
+      var vramAssets = c.eta * vramFree * GiB /
+        Math.max(1e-12, sample.batch * sample.gpuPerAsset);
+      var ramPerWorker = Math.max(0, (c.ram - c.parentRam) / sample.activeWorkers);
+      var ramFree = Math.max(0, ramPerWorker - c.fixedRam);
+      var ramAssets = c.eta * ramFree * GiB /
+        Math.max(1e-12, sample.batch * c.beta * sample.graph.e);
+      var indexAssets = INT32_MAX /
+        Math.max(1, 2 * sample.batch * sample.graph.e);
+      var variableIndexAssets = INT32_MAX /
+        Math.max(1, sample.batch * c.z);
+      indexAssets = Math.min(indexAssets, variableIndexAssets);
+      var practical = Math.min(vramAssets, ramAssets, indexAssets);
+      var binding = practical === vramAssets ? "VRAM" : practical === ramAssets ? "RAM" : "int32 CSR";
+      return {
+        vramAssets: vramAssets,
+        ramAssets: ramAssets,
+        indexAssets: indexAssets,
+        practical: practical,
+        binding: binding,
+        ramPerWorker: ramPerWorker
+      };
+    }
+
+    function powerGroupSum(total, width, exponent) {
+      width = Math.max(1, Math.min(width, total));
+      var full = Math.floor(total / width);
+      var remainder = total % width;
+      return full * Math.pow(width, exponent) +
+        (remainder ? Math.pow(remainder, exponent) : 0);
+    }
+
+    function solveTimeAt(assets, c) {
+      var e = edgesPerAsset(c.z, c.k, c.reciprocal, c.p);
+      var refE = edgesPerAsset(c.refZ, c.refK, c.refReciprocal, 1);
+      var graphRatio = (assets * e) / Math.max(1e-12, c.refAssets * refE);
+      var sizeFactor = Math.pow(graphRatio, c.sizeExponent);
+      var stepsFactor = c.steps / c.refSteps;
+      var scenarioFactor = powerGroupSum(c.scenarios, c.scenarioBatch, c.packingExponent);
+      var runFactor = powerGroupSum(c.runs, c.runBatch, c.runExponent) /
+        Math.pow(c.refRuns, c.runExponent);
+      var dtypeFactor = c.dtype === c.refDtype ? 1 :
+        c.dtype === "float64" ? c.fp64Slowdown : 1 / c.fp64Slowdown;
+      var daySeconds = c.refSeconds * sizeFactor * stepsFactor *
+        scenarioFactor * runFactor * dtypeFactor / c.gpuSpeed;
+      var activeWorkers = Math.min(c.gpus, c.days);
+      var waves = Math.ceil(c.days / activeWorkers);
+      return {
+        oneScenario: c.refSeconds * sizeFactor * stepsFactor *
+          runFactor * dtypeFactor / c.gpuSpeed,
+        daySeconds: daySeconds,
+        wallSeconds: daySeconds * waves,
+        gpuSeconds: daySeconds * c.days,
+        waves: waves,
+        graphRatio: graphRatio,
+        scenarioFactor: scenarioFactor,
+        runFactor: runFactor
+      };
+    }
+
+    function compactNumber(value, digits) {
+      if (!Number.isFinite(value)) return "∞";
+      var abs = Math.abs(value);
+      var units = [
+        [1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "k"]
+      ];
+      for (var i = 0; i < units.length; i += 1) {
+        if (abs >= units[i][0]) return (value / units[i][0]).toFixed(digits == null ? 2 : digits).replace(/\.00$/, "") + units[i][1];
+      }
+      return value.toFixed(digits == null ? 2 : digits).replace(/\.00$/, "");
+    }
+
+    function formatGiB(value) {
+      if (!Number.isFinite(value)) return "∞";
+      if (value < 0.01) return (value * 1024).toFixed(1) + " MiB";
+      return value.toFixed(value < 10 ? 2 : 1) + " GiB";
+    }
+
+    function duration(seconds) {
+      if (!Number.isFinite(seconds)) return "∞";
+      if (seconds < 0.001) return (seconds * 1e6).toFixed(1) + " μs";
+      if (seconds < 1) return (seconds * 1000).toFixed(1) + " ms";
+      if (seconds < 60) return seconds.toFixed(2) + " s";
+      if (seconds < 3600) return (seconds / 60).toFixed(2) + " min";
+      if (seconds < 86400) return (seconds / 3600).toFixed(2) + " h";
+      return (seconds / 86400).toFixed(2) + " d";
+    }
+
+    function percent(value) {
+      if (!Number.isFinite(value)) return "—";
+      if (value === 0) return "0%";
+      if (value < 0.001) return value.toExponential(2) + "%";
+      return value.toFixed(value < 1 ? 4 : 2) + "%";
+    }
+
+    function logPoints(minimum, maximum, count) {
+      minimum = Math.max(1, minimum);
+      maximum = Math.max(minimum * 1.01, maximum);
+      var start = Math.log(minimum);
+      var stop = Math.log(maximum);
+      var points = [];
+      for (var i = 0; i < count; i += 1) {
+        points.push(Math.exp(start + (stop - start) * i / (count - 1)));
+      }
+      return points;
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function lineChart(id, series, options) {
+      var svg = el(id);
+      var shell = svg.parentElement;
+      var tooltip = shell.querySelector(".chart-tooltip");
+      var width = 900;
+      var height = 330;
+      var pad = { left: 70, right: 22, top: 20, bottom: 48 };
+      var plotW = width - pad.left - pad.right;
+      var plotH = height - pad.top - pad.bottom;
+      var allX = [];
+      var allY = [];
+      series.forEach(function (s) {
+        s.values.forEach(function (v) {
+          if (Number.isFinite(v[0]) && Number.isFinite(v[1]) && v[1] >= 0) {
+            allX.push(v[0]);
+            allY.push(v[1]);
+          }
+        });
+      });
+      var xMin = options.xMin != null ? options.xMin : Math.min.apply(null, allX);
+      var xMax = options.xMax != null ? options.xMax : Math.max.apply(null, allX);
+      var positiveY = allY.filter(function (v) { return v > 0; });
+      var yMin = options.yLog ? Math.max(options.yMin || Math.min.apply(null, positiveY), 1e-9) : (options.yMin || 0);
+      var yMax = options.yMax || Math.max.apply(null, allY) * 1.1;
+      if (!Number.isFinite(yMax) || yMax <= yMin) yMax = yMin + 1;
+
+      function tx(x) {
+        var fraction = options.xLog ?
+          (Math.log(x) - Math.log(xMin)) / (Math.log(xMax) - Math.log(xMin)) :
+          (x - xMin) / (xMax - xMin);
+        return pad.left + fraction * plotW;
+      }
+
+      function ty(y) {
+        var fraction = options.yLog ?
+          (Math.log(Math.max(y, yMin)) - Math.log(yMin)) / (Math.log(yMax) - Math.log(yMin)) :
+          (y - yMin) / (yMax - yMin);
+        return pad.top + plotH - fraction * plotH;
+      }
+
+      var html = "";
+      html += '<rect x="0" y="0" width="' + width + '" height="' + height + '" fill="transparent"/>';
+
+      var tickCount = 5;
+      for (var yi = 0; yi <= tickCount; yi += 1) {
+        var yf = yi / tickCount;
+        var yValue = options.yLog ?
+          Math.exp(Math.log(yMin) + (Math.log(yMax) - Math.log(yMin)) * yf) :
+          yMin + (yMax - yMin) * yf;
+        var yp = ty(yValue);
+        html += '<line x1="' + pad.left + '" y1="' + yp + '" x2="' + (width - pad.right) + '" y2="' + yp + '" stroke="#203247" stroke-width="1"/>';
+        html += '<text x="' + (pad.left - 9) + '" y="' + (yp + 4) + '" text-anchor="end" fill="#7890a7" font-size="10">' + escapeHtml(options.yFormat(yValue)) + '</text>';
+      }
+
+      for (var xi = 0; xi <= tickCount; xi += 1) {
+        var xf = xi / tickCount;
+        var xValue = options.xLog ?
+          Math.exp(Math.log(xMin) + (Math.log(xMax) - Math.log(xMin)) * xf) :
+          xMin + (xMax - xMin) * xf;
+        var xp = tx(xValue);
+        html += '<line x1="' + xp + '" y1="' + pad.top + '" x2="' + xp + '" y2="' + (height - pad.bottom) + '" stroke="#17283b" stroke-width="1"/>';
+        html += '<text x="' + xp + '" y="' + (height - 22) + '" text-anchor="middle" fill="#7890a7" font-size="10">' + escapeHtml(options.xFormat(xValue)) + '</text>';
+      }
+
+      var selectedXs = options.selectedXs ||
+        (options.selectedX != null ? [{ value: options.selectedX, color: "#d6e2ee" }] : []);
+      selectedXs.forEach(function (selected, index) {
+        if (selected.value >= xMin && selected.value <= xMax) {
+          var selectedPx = tx(selected.value);
+          html += '<line id="' + id + 'Selected' + index + '" x1="' + selectedPx + '" y1="' + pad.top + '" x2="' + selectedPx + '" y2="' + (height - pad.bottom) + '" stroke="' + (selected.color || "#d6e2ee") + '" stroke-opacity=".48" stroke-dasharray="5 5"/>';
+        }
+      });
+
+      series.forEach(function (s) {
+        var path = "";
+        s.values.forEach(function (v, index) {
+          var px = tx(v[0]);
+          var py = ty(Math.max(v[1], yMin));
+          path += (index ? "L" : "M") + px.toFixed(2) + "," + py.toFixed(2);
+        });
+        html += '<path d="' + path + '" fill="none" stroke="' + s.color + '" stroke-width="' + (s.width || 2.2) + '" stroke-linejoin="round" stroke-linecap="round"' + (s.dash ? ' stroke-dasharray="' + s.dash + '"' : "") + '/>';
+      });
+
+      var legendX = pad.left + 8;
+      series.forEach(function (s, index) {
+        var lx = legendX + (index % 3) * 245;
+        var ly = pad.top + 12 + Math.floor(index / 3) * 18;
+        html += '<line x1="' + lx + '" y1="' + ly + '" x2="' + (lx + 18) + '" y2="' + ly + '" stroke="' + s.color + '" stroke-width="3"' + (s.dash ? ' stroke-dasharray="' + s.dash + '"' : "") + '/>';
+        html += '<text x="' + (lx + 24) + '" y="' + (ly + 4) + '" fill="#aabccd" font-size="10">' + escapeHtml(s.name) + '</text>';
+      });
+
+      html += '<text x="' + (pad.left + plotW / 2) + '" y="' + (height - 4) + '" text-anchor="middle" fill="#7890a7" font-size="10">' + escapeHtml(options.xLabel) + '</text>';
+      html += '<line id="' + id + 'Crosshair" x1="0" y1="' + pad.top + '" x2="0" y2="' + (height - pad.bottom) + '" stroke="#ffffff" stroke-opacity=".35" style="display:none"/>';
+      html += '<rect id="' + id + 'Hover" x="' + pad.left + '" y="' + pad.top + '" width="' + plotW + '" height="' + plotH + '" fill="transparent"/>';
+      svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+      svg.innerHTML = html;
+
+      var hover = el(id + "Hover");
+      var crosshair = el(id + "Crosshair");
+      hover.addEventListener("pointermove", function (event) {
+        var point = svg.createSVGPoint();
+        point.x = event.clientX;
+        point.y = event.clientY;
+        var local = point.matrixTransform(svg.getScreenCTM().inverse());
+        var fraction = Math.max(0, Math.min(1, (local.x - pad.left) / plotW));
+        var x = options.xLog ?
+          Math.exp(Math.log(xMin) + fraction * (Math.log(xMax) - Math.log(xMin))) :
+          xMin + fraction * (xMax - xMin);
+        crosshair.style.display = "";
+        crosshair.setAttribute("x1", tx(x));
+        crosshair.setAttribute("x2", tx(x));
+        var rows = series.map(function (s) {
+          var nearest = s.values.reduce(function (best, value) {
+            return Math.abs(value[0] - x) < Math.abs(best[0] - x) ? value : best;
+          }, s.values[0]);
+          return '<div class="tip-row"><span style="color:' + s.color + '">' + escapeHtml(s.name) + '</span><b>' + escapeHtml(options.yTooltip(nearest[1])) + '</b></div>';
+        }).join("");
+        tooltip.innerHTML = "<strong>" + escapeHtml(options.xTooltip(x)) + "</strong>" + rows;
+        tooltip.style.display = "block";
+        var bounds = shell.getBoundingClientRect();
+        var left = event.clientX - bounds.left + 12;
+        var top = event.clientY - bounds.top + 12;
+        if (left + 220 > bounds.width) left -= 230;
+        tooltip.style.left = Math.max(4, left) + "px";
+        tooltip.style.top = Math.max(4, top) + "px";
+      });
+      hover.addEventListener("pointerleave", function () {
+        crosshair.style.display = "none";
+        tooltip.style.display = "none";
+      });
+    }
+
+    function capacityAtResource(resourceGiB, kind, c) {
+      var sample = memoryAt(1, c);
+      if (kind === "vram") {
+        var free = Math.max(0, resourceGiB - c.fixedVram - c.corrGiB);
+        return c.eta * free * GiB / Math.max(1e-12, sample.batch * sample.gpuPerAsset);
+      }
+      var perWorker = Math.max(0, (resourceGiB - c.parentRam) / sample.activeWorkers);
+      var ramFree = Math.max(0, perWorker - c.fixedRam);
+      return c.eta * ramFree * GiB /
+        Math.max(1e-12, sample.batch * c.beta * sample.graph.e);
+    }
+
+    function statusPill(ok) {
+      return '<span class="pill ' + (ok ? "good" : "bad") + '">' + (ok ? "SAFE" : "EXCEEDS") + "</span>";
+    }
+
+    function tableRow(name, required, ceiling, ok) {
+      return "<tr><td>" + name + "</td><td>" + required + "</td><td>" + ceiling + "</td><td>" + statusPill(ok) + "</td></tr>";
+    }
+
+    function update() {
+      var c = readConfig();
+      var mem = memoryAt(c.assets, c);
+      var caps = capacities(c);
+      var timing = solveTimeAt(c.assets, c);
+      var safe = c.assets <= caps.practical;
+
+      var status = el("fitStatus");
+      status.className = "status " + (safe ? "good" : "bad");
+      status.innerHTML = "<strong>" + (safe ? "Fits safe model" : "Exceeds safe model") + "</strong><small>" +
+        escapeHtml(caps.binding) + " binds at " + compactNumber(caps.practical, 0) + " assets</small>";
+
+      el("kpiVariables").textContent = compactNumber(mem.graph.variables, 2);
+      el("kpiVariablesNote").textContent = compactNumber(mem.graph.symmetricNnz, 2) + " symmetric CSR nnz";
+      el("kpiEdges").textContent = compactNumber(mem.graph.upperEdges, 2);
+      el("kpiDensity").textContent = percent(mem.graph.density * 100) + " upper density";
+      el("kpiVram").textContent = formatGiB(mem.vram);
+      el("kpiVramNote").textContent = (100 * mem.vram / c.vram).toFixed(1) + "% of " + c.vram + " GiB physical";
+      el("kpiRam").textContent = formatGiB(mem.totalRam);
+      el("kpiRamNote").textContent = mem.activeWorkers + " workers × " + formatGiB(mem.ramWorker) + " + reserve";
+      el("kpiCapacity").textContent = compactNumber(caps.practical, 1);
+      el("kpiCapacityNote").textContent = caps.binding + " is binding";
+      el("kpiTime").textContent = duration(timing.wallSeconds);
+      el("kpiTimeNote").textContent = timing.waves + " date waves; solver only";
+
+      var warnings = [];
+      if (!safe) warnings.push({ danger: true, text: "Selected assets exceed the conservative " + caps.binding + " capacity. Reduce assets, batching, runs-in-memory, or active workers; or add the binding resource." });
+      if (c.gpus > c.days) warnings.push({ danger: false, text: "Only " + c.days + " of " + c.gpus + " GPUs can be active because the orchestrator shards dates rather than scenarios." });
+      if (timing.graphRatio > 10 || timing.graphRatio < 0.1) warnings.push({ danger: false, text: "Solve-time work is extrapolated " + compactNumber(timing.graphRatio, 1) + "× from the reference graph. Re-anchor refSeconds with a representative one-scenario pilot on the target GPU." });
+      if (c.scenarioBatch > 1) warnings.push({ danger: false, text: "Scenario packing multiplies graph/state memory approximately by b. Its time effect is controlled by the packing exponent and is empirical, not guaranteed." });
+      if (c.dtype === "float64") warnings.push({ danger: false, text: "FP64 VRAM expands values and state tensors using the current allocation structure. The RAM β coefficient and FP64 time multiplier remain user-calibrated approximations." });
+      if (mem.totalRam > c.ram) warnings.push({ danger: true, text: "Estimated concurrent worker RAM exceeds installed RAM before additional market-data duplication and OS overhead." });
+      el("warnings").innerHTML = warnings.map(function (w) {
+        return '<div class="warning' + (w.danger ? " danger" : "") + '">' + escapeHtml(w.text) + "</div>";
+      }).join("");
+
+      var maxAssets = Math.max(c.chartMax, c.assets * 1.05);
+      var assetX = logPoints(Math.max(10, maxAssets / 5000), maxAssets, 72);
+      var memorySeries = [
+        { name: "VRAM / GPU", color: colors.blue, values: assetX.map(function (a) { return [a, memoryAt(a, c).vram]; }) },
+        { name: "RAM / worker", color: colors.amber, values: assetX.map(function (a) { return [a, memoryAt(a, c).ramWorker]; }) },
+        { name: "Concurrent RAM", color: colors.rose, values: assetX.map(function (a) { return [a, memoryAt(a, c).totalRam]; }) },
+        { name: "Physical VRAM", color: colors.cyan, dash: "7 5", width: 1.4, values: assetX.map(function (a) { return [a, c.vram]; }) },
+        { name: "Physical RAM", color: colors.violet, dash: "7 5", width: 1.4, values: assetX.map(function (a) { return [a, c.ram]; }) }
+      ];
+      lineChart("memoryChart", memorySeries, {
+        xLog: true, yLog: false, xMin: assetX[0], xMax: assetX[assetX.length - 1],
+        selectedX: c.assets, xLabel: "Assets per scenario (log scale)",
+        xFormat: function (v) { return compactNumber(v, 0); },
+        xTooltip: function (v) { return compactNumber(v, 0) + " assets"; },
+        yFormat: function (v) { return compactNumber(v, 0) + " GiB"; },
+        yTooltip: formatGiB
+      });
+
+      var maxResource = Math.max(512, c.ram * 1.15, c.vram * 2);
+      var resourceX = logPoints(1, maxResource, 72);
+      var capacitySeries = [
+        { name: "VRAM-limited", color: colors.blue, values: resourceX.map(function (r) { return [r, capacityAtResource(r, "vram", c)]; }) },
+        { name: "RAM-limited", color: colors.amber, values: resourceX.map(function (r) { return [r, capacityAtResource(r, "ram", c)]; }) },
+        { name: "int32 CSR ceiling", color: colors.rose, dash: "7 5", width: 1.5, values: resourceX.map(function (r) { return [r, caps.indexAssets]; }) }
+      ];
+      lineChart("capacityChart", capacitySeries, {
+        xLog: true, yLog: true, xMin: 1, xMax: maxResource,
+        selectedXs: [
+          { value: c.vram, color: colors.blue },
+          { value: c.ram, color: colors.amber }
+        ],
+        xLabel: "Installed memory (GiB, log scale)",
+        xFormat: function (v) { return compactNumber(v, 0) + "G"; },
+        xTooltip: function (v) { return formatGiB(v); },
+        yFormat: function (v) { return compactNumber(v, 0); },
+        yTooltip: function (v) { return compactNumber(v, 1) + " assets"; }
+      });
+
+      var timeSeries = [
+        { name: "One scenario", color: colors.cyan, values: assetX.map(function (a) { return [a, solveTimeAt(a, c).oneScenario]; }) },
+        { name: "One day", color: colors.amber, values: assetX.map(function (a) { return [a, solveTimeAt(a, c).daySeconds]; }) },
+        { name: "Full backtest wall", color: colors.rose, values: assetX.map(function (a) { return [a, solveTimeAt(a, c).wallSeconds]; }) }
+      ];
+      lineChart("timeChart", timeSeries, {
+        xLog: true, yLog: true, xMin: assetX[0], xMax: assetX[assetX.length - 1],
+        selectedX: c.assets, xLabel: "Assets per scenario (log scale)",
+        xFormat: function (v) { return compactNumber(v, 0); },
+        xTooltip: function (v) { return compactNumber(v, 0) + " assets"; },
+        yFormat: duration, yTooltip: duration
+      });
+
+      el("activeWorkersTag").textContent = mem.activeWorkers + " active workers";
+      el("feasibilityRows").innerHTML =
+        tableRow("Per-GPU VRAM", formatGiB(mem.vram), compactNumber(caps.vramAssets, 1) + " assets", c.assets <= caps.vramAssets) +
+        tableRow("System RAM", formatGiB(mem.totalRam), compactNumber(caps.ramAssets, 1) + " assets", c.assets <= caps.ramAssets) +
+        tableRow("CSR int32 nnz", compactNumber(mem.batch * mem.graph.symmetricNnz, 2), compactNumber(caps.indexAssets, 1) + " assets", c.assets <= caps.indexAssets);
+
+      var scenarioBatches = Math.ceil(c.scenarios / mem.batch);
+      var runPasses = Math.ceil(c.runs / mem.width);
+      el("executionRows").innerHTML =
+        "<tr><td>Active GPU workers</td><td>" + mem.activeWorkers + " / " + c.gpus + "</td></tr>" +
+        "<tr><td>Date waves</td><td>" + timing.waves + "</td></tr>" +
+        "<tr><td>QUBOs</td><td>" + compactNumber(c.days * c.scenarios, 0) + "</td></tr>" +
+        "<tr><td>Scenario batches / day</td><td>" + scenarioBatches + "</td></tr>" +
+        "<tr><td>Run passes / scenario batch</td><td>" + runPasses + "</td></tr>" +
+        "<tr><td>Total solver calls</td><td>" + compactNumber(c.days * scenarioBatches, 0) + "</td></tr>" +
+        "<tr><td>Projected GPU compute</td><td>" + duration(timing.gpuSeconds) + "</td></tr>";
+
+      var u = unionPairsPerAsset(c.k, c.reciprocal);
+      var oneHot = c.z * (c.z - 1) / 2;
+      var compat = c.p * u * c.z * c.z;
+      el("formulaGraph").innerHTML =
+        "u = k(1 − reciprocal/2) = " + u.toFixed(3) + "<br>" +
+        "e = z(z−1)/2 + p·u·z²<br>" +
+        "e = " + oneHot.toFixed(1) + " + " + compat.toFixed(1) + " = " + mem.graph.e.toFixed(1) + " upper edges/asset<br>" +
+        "N = A·z = " + compactNumber(mem.graph.variables, 2) + "<br>" +
+        "E ≈ A·e = " + compactNumber(mem.graph.upperEdges, 2);
+      el("formulaVram").innerHTML =
+        "g = " + mem.bytes.csrPerUpper + "e + " + mem.bytes.fixedPerVariable + "z + " +
+        mem.bytes.statePerVariableRun + "zr<br>" +
+        "g = " + compactNumber(mem.gpuPerAsset, 2) + " bytes/asset/scenario<br>" +
+        "M = fixed + corr + b·A·g<br>" +
+        "M = " + formatGiB(mem.vram);
+      el("formulaRam").innerHTML =
+        "h = βe = " + c.beta.toFixed(1) + " × " + mem.graph.e.toFixed(1) + "<br>" +
+        "h = " + compactNumber(c.beta * mem.graph.e, 2) + " bytes/asset/scenario<br>" +
+        "worker = fixed + b·A·h = " + formatGiB(mem.ramWorker) + "<br>" +
+        "concurrent = parent + workers·worker = " + formatGiB(mem.totalRam);
+      el("formulaCapacity").innerHTML =
+        "A_VRAM = " + compactNumber(caps.vramAssets, 1) + "<br>" +
+        "A_RAM = " + compactNumber(caps.ramAssets, 1) + "<br>" +
+        "A_int32 = " + compactNumber(caps.indexAssets, 1) + "<br>" +
+        "A_safe = min(…) = " + compactNumber(caps.practical, 1) + " (" + caps.binding + ")";
+      el("formulaTime").innerHTML =
+        "work ratio = " + compactNumber(timing.graphRatio, 2) + "<br>" +
+        "t ∝ work^" + c.sizeExponent.toFixed(2) + " · steps · packed^" + c.packingExponent.toFixed(2) + " · runWidth^" + c.runExponent.toFixed(2) + "<br>" +
+        "scenario = " + duration(timing.oneScenario) + "<br>" +
+        "day = " + duration(timing.daySeconds) + "<br>" +
+        "wall = " + duration(timing.wallSeconds);
+      el("formulaParallel").innerHTML =
+        "active GPUs = min(" + c.gpus + ", " + c.days + ") = " + mem.activeWorkers + "<br>" +
+        "date waves = ceil(" + c.days + "/" + mem.activeWorkers + ") = " + timing.waves + "<br>" +
+        "scenario batches/day = ceil(" + c.scenarios + "/" + mem.batch + ") = " + scenarioBatches + "<br>" +
+        "run passes/batch = ceil(" + c.runs + "/" + mem.width + ") = " + runPasses;
+
+      window.lastSnapshot = {
+        generated_at: new Date().toISOString(),
+        inputs: c,
+        graph: mem.graph,
+        memory: {
+          vram_per_gpu_gib: mem.vram,
+          ram_per_worker_gib: mem.ramWorker,
+          concurrent_ram_gib: mem.totalRam,
+          active_workers: mem.activeWorkers
+        },
+        capacity: caps,
+        solve_time: timing,
+        caveat: "Solve time is an empirical projection; PCA, QUBO build, decode, I/O, and unmodeled overhead are excluded."
+      };
+    }
+
+    fieldIds.forEach(function (id) {
+      el(id).addEventListener("input", update);
+      el(id).addEventListener("change", update);
+    });
+
+    function parseCsvLine(line) {
+      var cells = [];
+      var cell = "";
+      var quoted = false;
+      for (var i = 0; i < line.length; i += 1) {
+        var char = line[i];
+        if (char === '"') {
+          if (quoted && line[i + 1] === '"') {
+            cell += '"';
+            i += 1;
+          } else {
+            quoted = !quoted;
+          }
+        } else if (char === "," && !quoted) {
+          cells.push(cell);
+          cell = "";
+        } else {
+          cell += char;
+        }
+      }
+      cells.push(cell);
+      return cells;
+    }
+
+    function loadDiagnostics(text, filename) {
+      var lines = text.split(/\r?\n/).filter(function (line) { return line.trim(); });
+      if (lines.length < 2) throw new Error("CSV has no data rows");
+      var headers = parseCsvLine(lines[0]);
+      var rows = lines.slice(1).map(function (line) {
+        var values = parseCsvLine(line);
+        var row = {};
+        headers.forEach(function (header, index) { row[header] = values[index]; });
+        return row;
+      }).filter(function (row) {
+        return Number(row.solve_seconds) > 0 && Number(row.scenarios) > 0 &&
+          (!row.method || row.method === "qubo" || row.method === "both");
+      });
+      if (!rows.length) throw new Error("no QUBO rows with positive solve_seconds");
+
+      var groups = {};
+      rows.forEach(function (row) {
+        var key = [
+          row.assets, row.steps, row.runs, row.run_batch_size,
+          row.scenario_batch_size, row.sbm_dtype
+        ].join("|");
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(row);
+      });
+      var selected = Object.keys(groups).map(function (key) { return groups[key]; })
+        .sort(function (a, b) {
+          function score(group) {
+            var row = group[0];
+            var batchOne = Number(row.scenario_batch_size) === 1 ? 100000 : 0;
+            var runsTogether = Number(row.run_batch_size) === Number(row.runs) ? 10000 : 0;
+            return batchOne + runsTogether + group.length;
+          }
+          return score(b) - score(a);
+        })[0];
+      var first = selected[0];
+      var meanSeconds = selected.reduce(function (sum, row) {
+        return sum + Number(row.solve_seconds) / Number(row.scenarios);
+      }, 0) / selected.length;
+
+      el("refAssets").value = Number(first.assets);
+      el("refSeconds").value = meanSeconds.toPrecision(8);
+      el("refSteps").value = Number(first.steps);
+      el("refRuns").value = Number(first.runs);
+      el("refDtype").value = first.sbm_dtype || "float32";
+      var packingNote = Number(first.scenario_batch_size) === 1 ? "" :
+        " Scenario batch " + first.scenario_batch_size + " is folded into this approximate anchor.";
+      var runNote = Number(first.run_batch_size) === Number(first.runs) ? "" :
+        " Run splitting is folded into this approximate anchor.";
+      el("calibrationSource").textContent =
+        filename + ": " + selected.length + " matching day(s), " +
+        meanSeconds.toFixed(6) + " s/scenario. Confirm reference z and top-k manually." +
+        packingNote + runNote;
+      update();
+    }
+
+    el("diagnosticFile").addEventListener("change", function (event) {
+      var file = event.target.files && event.target.files[0];
+      if (!file) return;
+      file.text().then(function (text) {
+        loadDiagnostics(text, file.name);
+      }).catch(function (error) {
+        el("calibrationSource").textContent = "Could not load CSV: " + error.message;
+      });
+    });
+
+    el("resetButton").addEventListener("click", function () {
+      el("diagnosticFile").value = "";
+      el("calibrationSource").textContent = "Bundled anchor: mean of 10 local diagnostic days.";
+      setDefaults();
+    });
+    el("exportButton").addEventListener("click", function () {
+      var blob = new Blob([JSON.stringify(window.lastSnapshot, null, 2) + "\n"], { type: "application/json" });
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = "qubo-resource-estimate.json";
+      link.click();
+      URL.revokeObjectURL(url);
+    });
+
+    setDefaults();
+  </script>
+</body>
+</html>

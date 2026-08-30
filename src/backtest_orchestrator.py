@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Rolling, leakage-safe scenario-QUBO margin backtester.
+"""Rolling, leakage-safe QUBO and greedy-baseline margin backtester.
 
-The orchestrator keeps BQMs in memory, batches independent scenario graphs for
-simulated bifurcation, and writes one compact record per backtesting day.  CUDA
-is selected automatically when a CUDA-enabled PyTorch installation and NVIDIA
-device are available; otherwise the identical sparse dynamics run on CPU.
+The orchestrator can evaluate either method or both from the same rolling PCA
+and scenarios.  The QUBO path keeps BQMs in memory and batches independent
+scenario graphs for simulated bifurcation.  The baseline path independently
+selects the minimum weighted-PnL state for every asset.  CUDA is selected
+automatically when a CUDA-enabled PyTorch installation and NVIDIA device are
+available; otherwise the identical sparse dynamics run on CPU.
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ import csv
 import json
 import math
 import multiprocessing as mp
+import subprocess
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -46,6 +50,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SYNTHETIC_MARKET_ROOT = PROJECT_ROOT / "synthetic_market"
 RESULT_COLUMNS = (
     "date",
+    "method",
     "calibration_start",
     "calibration_end",
     "calibration_returns",
@@ -61,13 +66,48 @@ RESULT_COLUMNS = (
     "gross_exposure",
     "signed_margin_error",
     "pca_seconds",
+    "scenario_build_seconds",
     "qubo_build_seconds",
     "solve_seconds",
+    "baseline_seconds",
     "day_seconds",
     "device",
     "steps",
     "runs",
     "seed",
+)
+RESOURCE_COLUMNS = (
+    "date",
+    "method",
+    "device",
+    "correlation_device",
+    "pca_dtype",
+    "sbm_dtype",
+    "assets",
+    "scenarios",
+    "scenario_batch_size",
+    "scenario_batches",
+    "build_workers",
+    "steps",
+    "runs",
+    "run_batch_size",
+    "solver_run_batches_per_scenario_batch",
+    "pca_seconds",
+    "scenario_build_seconds",
+    "qubo_build_seconds",
+    "solve_seconds",
+    "baseline_seconds",
+    "day_seconds",
+    "resource_samples",
+    "mean_cpu_percent",
+    "peak_cpu_percent",
+    "mean_ram_mib",
+    "peak_ram_mib",
+    "mean_gpu_percent",
+    "peak_gpu_percent",
+    "mean_vram_mib",
+    "peak_vram_mib",
+    "gpu_vram_total_mib",
 )
 
 
@@ -96,6 +136,15 @@ class ScenarioProblem:
     portfolio_linear: np.ndarray
 
 
+@dataclass
+class ScenarioData:
+    scenario_index: int
+    shocks: Any
+    asset_grids: Sequence[dict[str, np.ndarray]]
+    group_offsets: np.ndarray
+    portfolio_linear: np.ndarray
+
+
 @dataclass(frozen=True)
 class BacktestConfig:
     subfolder: Path
@@ -106,6 +155,7 @@ class BacktestConfig:
     ew_lambda: float = 0.93
     grid_points: tuple[int, int] = (21, 5)
     scenario_indices: tuple[int, ...] | None = None
+    method: str = "qubo"
     z_bins: int = 21
     nearest: int = 100
     residual_sigma_range: float = 5.0
@@ -116,7 +166,7 @@ class BacktestConfig:
     lambda_compat: float = 0.1
     top_k_neighbors: int = 5
     device: str = "auto"
-    pca_dtype: str = "float64"
+    pca_dtype: str = "float32"
     correlation_device: str = "auto"
     correlation_block_mib: int = 256
     scenario_batch_size: int = 1
@@ -165,7 +215,106 @@ class BacktestConfig:
             raise ValueError("day_limit must be positive")
         if self.scenario_indices is not None and not self.scenario_indices:
             raise ValueError("scenario_indices cannot be empty")
+        if self.method not in {"qubo", "baseline", "both"}:
+            raise ValueError("method must be qubo, baseline, or both")
         self.sbm.validate()
+
+
+class ResourceMonitor:
+    """Sample process resources and the selected NVIDIA device during one day."""
+
+    def __init__(self, device_name: str, interval_seconds: float = 1.0) -> None:
+        import psutil
+
+        self.process = psutil.Process()
+        self.device_name = device_name
+        self.interval_seconds = interval_seconds
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._started = 0.0
+        self._cpu_started = 0.0
+        self.ram_mib: list[float] = []
+        self.cpu_percent: list[float] = []
+        self.gpu_percent: list[float] = []
+        self.vram_mib: list[float] = []
+        self.gpu_vram_total_mib: float | None = None
+
+    def _gpu_index(self) -> str | None:
+        if not self.device_name.startswith("cuda"):
+            return None
+        return self.device_name.partition(":")[2] or "0"
+
+    def _sample(self) -> None:
+        try:
+            self.ram_mib.append(self.process.memory_info().rss / (1024 * 1024))
+            self.cpu_percent.append(float(self.process.cpu_percent(interval=None)))
+        except Exception:
+            pass
+        gpu_index = self._gpu_index()
+        if gpu_index is None:
+            return
+        try:
+            completed = subprocess.run(
+                [
+                    "nvidia-smi",
+                    f"--id={gpu_index}",
+                    "--query-gpu=utilization.gpu,memory.used,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5,
+            )
+            values = [float(item.strip()) for item in completed.stdout.splitlines()[0].split(",")]
+            self.gpu_percent.append(values[0])
+            self.vram_mib.append(values[1])
+            self.gpu_vram_total_mib = values[2]
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+            pass
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            self._sample()
+
+    def start(self) -> None:
+        cpu_times = self.process.cpu_times()
+        self._cpu_started = float(cpu_times.user + cpu_times.system)
+        self._started = time.perf_counter()
+        self.process.cpu_percent(interval=None)
+        self._sample()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> dict[str, float | int | None]:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self.interval_seconds + 1.0)
+        self._sample()
+        elapsed = max(time.perf_counter() - self._started, 1e-12)
+        cpu_times = self.process.cpu_times()
+        cpu_seconds = float(cpu_times.user + cpu_times.system) - self._cpu_started
+        # psutil's process convention is 100% for one fully occupied CPU core.
+        mean_cpu = 100.0 * cpu_seconds / elapsed
+
+        def mean(values: list[float]) -> float | None:
+            return float(np.mean(values)) if values else None
+
+        def peak(values: list[float]) -> float | None:
+            return float(np.max(values)) if values else None
+
+        return {
+            "resource_samples": max(len(self.ram_mib), len(self.gpu_percent)),
+            "mean_cpu_percent": mean_cpu,
+            "peak_cpu_percent": peak(self.cpu_percent),
+            "mean_ram_mib": mean(self.ram_mib),
+            "peak_ram_mib": peak(self.ram_mib),
+            "mean_gpu_percent": mean(self.gpu_percent),
+            "peak_gpu_percent": peak(self.gpu_percent),
+            "mean_vram_mib": mean(self.vram_mib),
+            "peak_vram_mib": peak(self.vram_mib),
+            "gpu_vram_total_mib": self.gpu_vram_total_mib,
+        }
 
 
 def resolve_market_folder(value: str | Path) -> Path:
@@ -400,7 +549,7 @@ def conditional_neighbors_torch(
     return standard_deviation.cpu().numpy(), indices, correlations_out
 
 
-def _scenario_problem(
+def _scenario_data(
     scenario_index: int,
     prepared: PreparedData,
     pca: PCAResult,
@@ -408,8 +557,7 @@ def _scenario_problem(
     shock_context: Any,
     market: MarketData,
     config: BacktestConfig,
-    correlation_device: str,
-) -> ScenarioProblem:
+) -> ScenarioData:
     shocks = create_z_shock_grids(
         prepared,
         pca,
@@ -425,28 +573,6 @@ def _scenario_problem(
         context=shock_context,
     )
     asset_grids = convert_z_to_returns(prepared.standardizer, shocks.asset_z_grids)
-    conditional_std, neighbor_indices, neighbor_correlations = (
-        conditional_neighbors_torch(
-            shocks.inflated_residuals,
-            config.top_k_neighbors,
-            correlation_device,
-            config.correlation_block_mib,
-        )
-    )
-    bqm, _, _ = build_qubos(
-        asset_grids,
-        market.weights,
-        shocks.z_hat,
-        conditional_std,
-        neighbor_indices,
-        neighbor_correlations,
-        config.lambda_one_hot,
-        config.lambda_compat,
-        numeric_labels=True,
-        compact=True,
-    )
-    if not isinstance(bqm, CompactQubo):  # pragma: no cover - fixed call contract
-        raise TypeError("rolling backtests require a compact QUBO")
     state_counts = np.fromiter(
         (len(grid["z"]) for grid in asset_grids),
         dtype=np.int64,
@@ -461,12 +587,56 @@ def _scenario_problem(
             for asset, grid in enumerate(asset_grids)
         ]
     ).astype(np.float64, copy=False)
-    return ScenarioProblem(
+    return ScenarioData(
         scenario_index=scenario_index,
-        bqm=bqm,
+        shocks=shocks,
+        asset_grids=asset_grids,
         group_offsets=group_offsets,
         portfolio_linear=portfolio_linear,
     )
+
+
+def _scenario_problem(
+    data: ScenarioData,
+    market: MarketData,
+    config: BacktestConfig,
+    correlation_device: str,
+) -> ScenarioProblem:
+    conditional_std, neighbor_indices, neighbor_correlations = (
+        conditional_neighbors_torch(
+            data.shocks.inflated_residuals,
+            config.top_k_neighbors,
+            correlation_device,
+            config.correlation_block_mib,
+        )
+    )
+    bqm, _, _ = build_qubos(
+        data.asset_grids,
+        market.weights,
+        data.shocks.z_hat,
+        conditional_std,
+        neighbor_indices,
+        neighbor_correlations,
+        config.lambda_one_hot,
+        config.lambda_compat,
+        numeric_labels=True,
+        compact=True,
+    )
+    if not isinstance(bqm, CompactQubo):  # pragma: no cover - fixed call contract
+        raise TypeError("rolling backtests require a compact QUBO")
+    return ScenarioProblem(
+        scenario_index=data.scenario_index,
+        bqm=bqm,
+        group_offsets=data.group_offsets,
+        portfolio_linear=data.portfolio_linear,
+    )
+
+
+def greedy_baseline_pnl(data: ScenarioData) -> float:
+    """Select each asset's minimum weighted PnL state independently."""
+
+    minima = np.minimum.reduceat(data.portfolio_linear, data.group_offsets[:-1])
+    return float(minima.sum())
 
 
 def repair_one_hot(
@@ -550,50 +720,100 @@ def _scenario_batches(indices: Sequence[int], size: int) -> list[list[int]]:
     return [list(indices[start : start + size]) for start in range(0, len(indices), size)]
 
 
-def _existing_dates(output: Path) -> set[str]:
+def _requested_methods(method: str) -> tuple[str, ...]:
+    return ("qubo", "baseline") if method == "both" else (method,)
+
+
+def _existing_method_dates(output: Path) -> set[tuple[str, str]]:
     if not output.exists():
         return set()
-    frame = pd.read_csv(output, usecols=["date"], dtype=str)
-    return set(frame["date"])
+    frame = pd.read_csv(output, dtype=str)
+    if "method" not in frame:
+        return {(date, "qubo") for date in frame["date"]}
+    return set(zip(frame["date"], frame["method"]))
 
 
-def _append_result(output: Path, row: dict[str, Any]) -> None:
+def _upgrade_csv_schema(
+    output: Path,
+    columns: Sequence[str],
+    defaults: dict[str, Any],
+) -> None:
+    """Upgrade older resumable CSVs before appending newly added columns."""
+
+    if not output.exists() or output.stat().st_size == 0:
+        return
+    frame = pd.read_csv(output)
+    if tuple(frame.columns) == tuple(columns):
+        return
+    unknown = [column for column in frame.columns if column not in columns]
+    if unknown:
+        raise ValueError(
+            f"cannot resume {output}: unrecognized columns {unknown}"
+        )
+    for column in columns:
+        if column not in frame:
+            frame[column] = defaults.get(column, np.nan)
+    temporary = output.with_suffix(output.suffix + ".schema.tmp")
+    frame.to_csv(temporary, index=False, columns=columns)
+    temporary.replace(output)
+
+
+def _diagnostics_path(output: Path) -> Path:
+    return output.with_suffix(".diagnostics.csv")
+
+
+def _append_csv(output: Path, row: dict[str, Any], columns: Sequence[str]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     exists = output.exists() and output.stat().st_size > 0
     with output.open("a", newline="", encoding="utf-8") as destination:
-        writer = csv.DictWriter(destination, fieldnames=RESULT_COLUMNS, lineterminator="\n")
+        writer = csv.DictWriter(destination, fieldnames=columns, lineterminator="\n")
         if not exists:
             writer.writeheader()
         writer.writerow(row)
         destination.flush()
 
 
+def _append_result(output: Path, row: dict[str, Any]) -> None:
+    _append_csv(output, row, RESULT_COLUMNS)
+
+
 def write_error_summary(output: Path) -> Path:
-    """Write distribution statistics over all checkpointed daily errors."""
+    """Write signed-error statistics separately for every margin method."""
 
     frame = pd.read_csv(output)
     if frame.empty:
         raise ValueError("cannot summarize an empty backtest result")
-    errors = frame["signed_margin_error"].to_numpy(dtype=float)
-    shortfalls = errors[errors < 0.0]
-    quantiles = np.quantile(errors, [0.01, 0.05, 0.50, 0.95, 0.99])
-    summary = {
-        "days": int(len(errors)),
-        "mean_signed_margin_error": float(errors.mean()),
-        "std_signed_margin_error": float(errors.std(ddof=1)) if len(errors) > 1 else 0.0,
-        "minimum": float(errors.min()),
-        "q01": float(quantiles[0]),
-        "q05": float(quantiles[1]),
-        "median": float(quantiles[2]),
-        "q95": float(quantiles[3]),
-        "q99": float(quantiles[4]),
-        "maximum": float(errors.max()),
-        "under_margin_days": int(len(shortfalls)),
-        "under_margin_rate": float(len(shortfalls) / len(errors)),
-        "mean_shortfall": float(shortfalls.mean()) if len(shortfalls) else 0.0,
-        "worst_shortfall": float(shortfalls.min()) if len(shortfalls) else 0.0,
-        "total_runtime_seconds": float(frame["day_seconds"].sum()),
-    }
+    if "method" not in frame:
+        frame.insert(1, "method", "qubo")
+    methods: dict[str, dict[str, Any]] = {}
+    for method, method_frame in frame.groupby("method", sort=False):
+        errors = method_frame["signed_margin_error"].to_numpy(dtype=float)
+        shortfalls = errors[errors < 0.0]
+        quantiles = np.quantile(errors, [0.01, 0.05, 0.50, 0.95, 0.99])
+        methods[str(method)] = {
+            "days": int(len(errors)),
+            "mean_signed_margin_error": float(errors.mean()),
+            "std_signed_margin_error": (
+                float(errors.std(ddof=1)) if len(errors) > 1 else 0.0
+            ),
+            "minimum": float(errors.min()),
+            "q01": float(quantiles[0]),
+            "q05": float(quantiles[1]),
+            "median": float(quantiles[2]),
+            "q95": float(quantiles[3]),
+            "q99": float(quantiles[4]),
+            "maximum": float(errors.max()),
+            "under_margin_days": int(len(shortfalls)),
+            "under_margin_rate": float(len(shortfalls) / len(errors)),
+            "mean_shortfall": float(shortfalls.mean()) if len(shortfalls) else 0.0,
+            "worst_shortfall": float(shortfalls.min()) if len(shortfalls) else 0.0,
+            "total_runtime_seconds": float(method_frame["day_seconds"].sum()),
+        }
+    summary: dict[str, Any] = {"methods": methods}
+    # Preserve the original top-level fields for single-method consumers while
+    # making the per-method grouping authoritative for comparisons.
+    if len(methods) == 1:
+        summary.update(next(iter(methods.values())))
     summary_path = output.with_suffix(".summary.json")
     temporary = summary_path.with_suffix(summary_path.suffix + ".tmp")
     temporary.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -603,20 +823,43 @@ def write_error_summary(output: Path) -> Path:
 
 def run_backtest(config: BacktestConfig) -> pd.DataFrame:
     config.validate()
+    requested_methods = _requested_methods(config.method)
+    run_qubo = "qubo" in requested_methods
+    run_baseline = "baseline" in requested_methods
     if not config.resume:
-        for generated in (config.output, config.output.with_suffix(".summary.json")):
+        for generated in (
+            config.output,
+            config.output.with_suffix(".summary.json"),
+            _diagnostics_path(config.output),
+        ):
             if generated.exists():
                 generated.unlink()
-    solver = TorchBatchSBMSolver(config.device)
-    pca_device = resolve_torch_device(config.device)
+    else:
+        _upgrade_csv_schema(
+            config.output,
+            RESULT_COLUMNS,
+            {"method": "qubo", "scenario_build_seconds": 0.0, "baseline_seconds": 0.0},
+        )
+        _upgrade_csv_schema(
+            _diagnostics_path(config.output),
+            RESOURCE_COLUMNS,
+            {"method": "qubo", "scenario_build_seconds": 0.0, "baseline_seconds": 0.0},
+        )
+    resolved_device = resolve_torch_device(config.device)
+    solver = TorchBatchSBMSolver(resolved_device) if run_qubo else None
+    pca_device = resolved_device
     correlation_requested = (
-        solver.device if config.correlation_device == "auto" else config.correlation_device
+        resolved_device
+        if config.correlation_device == "auto"
+        else config.correlation_device
     )
-    correlation_device = resolve_torch_device(correlation_requested)
-    if correlation_device != "cpu" and config.build_workers != 1:
+    correlation_device = (
+        resolve_torch_device(correlation_requested) if run_qubo else "not-used"
+    )
+    if run_qubo and correlation_device != "cpu" and config.build_workers != 1:
         raise ValueError("GPU correlation construction requires build_workers=1")
     market = load_market_data(config)
-    completed = _existing_dates(config.output) if config.resume else set()
+    completed = _existing_method_dates(config.output) if config.resume else set()
     output_rows: list[dict[str, Any]] = []
     all_scenario_count = int(np.prod(config.grid_points, dtype=np.int64))
     scenario_indices = (
@@ -632,10 +875,12 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
 
     for day_position, date in enumerate(market.evaluation_dates):
         date_text = pd.Timestamp(date).date().isoformat()
-        if date_text in completed:
+        if all((date_text, method) in completed for method in requested_methods):
             print(f"[{day_position + 1}/{len(market.evaluation_dates)}] {date_text}: resumed")
             continue
         day_started = time.perf_counter()
+        resources = ResourceMonitor(resolved_device)
+        resources.start()
         prior = market.log_returns.loc[market.log_returns.index < date].tail(config.window)
         if len(prior) != config.window:
             raise ValueError(
@@ -649,16 +894,20 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
         shock_context = prepare_shock_grid_context(prepared, pca, config.window)
         pca_seconds = time.perf_counter() - pca_started
 
-        best: tuple[float, int, float, int] | None = None
+        best_qubo: tuple[float, int, float, int] | None = None
+        best_baseline: tuple[float, int] | None = None
+        scenario_build_seconds = 0.0
         build_seconds = 0.0
         solve_seconds = 0.0
+        decode_seconds = 0.0
+        baseline_seconds = 0.0
         for scenario_batch in _scenario_batches(
             scenario_indices, config.scenario_batch_size
         ):
-            batch_build_started = time.perf_counter()
+            scenario_started = time.perf_counter()
             if config.build_workers == 1:
-                problems = [
-                    _scenario_problem(
+                scenario_data = [
+                    _scenario_data(
                         scenario_index,
                         prepared,
                         pca,
@@ -666,15 +915,14 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                         shock_context,
                         market,
                         config,
-                        correlation_device,
                     )
                     for scenario_index in scenario_batch
                 ]
             else:
                 with ThreadPoolExecutor(max_workers=config.build_workers) as executor:
-                    problems = list(
+                    scenario_data = list(
                         executor.map(
-                            lambda scenario_index: _scenario_problem(
+                            lambda scenario_index: _scenario_data(
                                 scenario_index,
                                 prepared,
                                 pca,
@@ -682,9 +930,46 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                                 shock_context,
                                 market,
                                 config,
-                                correlation_device,
                             ),
                             scenario_batch,
+                        )
+                    )
+            scenario_build_seconds += time.perf_counter() - scenario_started
+
+            if run_baseline:
+                baseline_started = time.perf_counter()
+                for data in scenario_data:
+                    candidate = (greedy_baseline_pnl(data), data.scenario_index)
+                    if best_baseline is None or candidate[0] < best_baseline[0]:
+                        best_baseline = candidate
+                baseline_seconds += time.perf_counter() - baseline_started
+
+            if not run_qubo:
+                del scenario_data
+                continue
+
+            batch_build_started = time.perf_counter()
+            if config.build_workers == 1:
+                problems = [
+                    _scenario_problem(
+                        data,
+                        market,
+                        config,
+                        correlation_device,
+                    )
+                    for data in scenario_data
+                ]
+            else:
+                with ThreadPoolExecutor(max_workers=config.build_workers) as executor:
+                    problems = list(
+                        executor.map(
+                            lambda data: _scenario_problem(
+                                data,
+                                market,
+                                config,
+                                correlation_device,
+                            ),
+                            scenario_data,
                         )
                     )
             build_seconds += time.perf_counter() - batch_build_started
@@ -697,10 +982,13 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                 % (2**63)
                 for problem in problems
             ]
+            if solver is None:  # pragma: no cover - protected by run_qubo
+                raise RuntimeError("QUBO method requires a solver")
             solved: list[SBMSolveResult] = solver.solve_batch(
                 [problem.bqm for problem in problems], config.sbm, seeds
             )
             solve_seconds += sum(result.solve_seconds for result in solved)
+            decode_started = time.perf_counter()
             for problem, result in zip(problems, solved):
                 decoded, violations, decoded_energy = repair_one_hot(
                     problem.bqm,
@@ -715,51 +1003,117 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                     decoded_energy,
                     violations,
                 )
-                if best is None or candidate[0] < best[0]:
-                    best = candidate
-            del problems, solved
+                if best_qubo is None or candidate[0] < best_qubo[0]:
+                    best_qubo = candidate
+            decode_seconds += time.perf_counter() - decode_started
+            del scenario_data, problems, solved
 
-        if best is None:  # pragma: no cover - scenario validation prevents this
-            raise RuntimeError("no scenario was solved")
-        worst_pnl, selected_scenario, selected_energy, raw_violations = best
+        if run_qubo and best_qubo is None:  # pragma: no cover
+            raise RuntimeError("no QUBO scenario was solved")
+        if run_baseline and best_baseline is None:  # pragma: no cover
+            raise RuntimeError("no baseline scenario was evaluated")
         realized_vector = market.simple_returns.loc[date].to_numpy(dtype=float)
         realized_pnl = float(np.dot(market.weights, realized_vector))
-        margin = max(0.0, -worst_pnl)
-        signed_error = (margin + realized_pnl) / market.gross_exposure
-        row: dict[str, Any] = {
+        resource_values = resources.stop()
+        actual_day_seconds = time.perf_counter() - day_started
+
+        method_results: list[tuple[str, float, int, float | None, int | None]] = []
+        if best_qubo is not None:
+            method_results.append(
+                ("qubo", best_qubo[0], best_qubo[1], best_qubo[2], best_qubo[3])
+            )
+        if best_baseline is not None:
+            method_results.append(
+                ("baseline", best_baseline[0], best_baseline[1], None, None)
+            )
+
+        for method, worst_pnl, selected_scenario, selected_energy, raw_violations in method_results:
+            if (date_text, method) in completed:
+                continue
+            margin = max(0.0, -worst_pnl)
+            signed_error = (margin + realized_pnl) / market.gross_exposure
+            method_day_seconds = (
+                pca_seconds
+                + scenario_build_seconds
+                + (
+                    build_seconds + solve_seconds + decode_seconds
+                    if method == "qubo"
+                    else baseline_seconds
+                )
+            )
+            row: dict[str, Any] = {
+                "date": date_text,
+                "method": method,
+                "calibration_start": prior.index[0].date().isoformat(),
+                "calibration_end": prior.index[-1].date().isoformat(),
+                "calibration_returns": len(prior),
+                "assets": len(market.tickers),
+                "scenarios": len(scenario_indices),
+                "selected_scenario": selected_scenario,
+                "selected_energy": selected_energy,
+                "raw_one_hot_violations": raw_violations,
+                "margin": margin,
+                "worst_scenario_pnl": worst_pnl,
+                "realized_pnl": realized_pnl,
+                "realized_loss": -realized_pnl,
+                "gross_exposure": market.gross_exposure,
+                "signed_margin_error": signed_error,
+                "pca_seconds": pca_seconds,
+                "scenario_build_seconds": scenario_build_seconds,
+                "qubo_build_seconds": build_seconds if method == "qubo" else 0.0,
+                "solve_seconds": solve_seconds if method == "qubo" else 0.0,
+                "baseline_seconds": baseline_seconds if method == "baseline" else 0.0,
+                "day_seconds": method_day_seconds,
+                "device": resolved_device,
+                "steps": config.sbm.steps if method == "qubo" else 0,
+                "runs": config.sbm.runs if method == "qubo" else 0,
+                "seed": config.seed,
+            }
+            _append_result(config.output, row)
+            output_rows.append(row)
+            print(
+                f"[{day_position + 1}/{len(market.evaluation_dates)}] {date_text} "
+                f"{method}: margin={margin:.8g} realized={realized_pnl:.8g} "
+                f"error={signed_error:.8g} scenario={selected_scenario} "
+                f"time={method_day_seconds:.2f}s",
+                flush=True,
+            )
+
+        scenario_batches = math.ceil(len(scenario_indices) / config.scenario_batch_size)
+        effective_run_batch_size = (
+            min(config.sbm.run_batch_size or config.sbm.runs, config.sbm.runs)
+            if run_qubo
+            else 0
+        )
+        resource_row: dict[str, Any] = {
             "date": date_text,
-            "calibration_start": prior.index[0].date().isoformat(),
-            "calibration_end": prior.index[-1].date().isoformat(),
-            "calibration_returns": len(prior),
+            "method": config.method,
+            "device": resolved_device,
+            "correlation_device": correlation_device,
+            "pca_dtype": config.pca_dtype,
+            "sbm_dtype": config.sbm.dtype,
             "assets": len(market.tickers),
             "scenarios": len(scenario_indices),
-            "selected_scenario": selected_scenario,
-            "selected_energy": selected_energy,
-            "raw_one_hot_violations": raw_violations,
-            "margin": margin,
-            "worst_scenario_pnl": worst_pnl,
-            "realized_pnl": realized_pnl,
-            "realized_loss": -realized_pnl,
-            "gross_exposure": market.gross_exposure,
-            "signed_margin_error": signed_error,
+            "scenario_batch_size": config.scenario_batch_size,
+            "scenario_batches": scenario_batches,
+            "build_workers": config.build_workers,
+            "steps": config.sbm.steps if run_qubo else 0,
+            "runs": config.sbm.runs if run_qubo else 0,
+            "run_batch_size": effective_run_batch_size,
+            "solver_run_batches_per_scenario_batch": (
+                math.ceil(config.sbm.runs / effective_run_batch_size)
+                if run_qubo
+                else 0
+            ),
             "pca_seconds": pca_seconds,
+            "scenario_build_seconds": scenario_build_seconds,
             "qubo_build_seconds": build_seconds,
             "solve_seconds": solve_seconds,
-            "day_seconds": time.perf_counter() - day_started,
-            "device": solver.device,
-            "steps": config.sbm.steps,
-            "runs": config.sbm.runs,
-            "seed": config.seed,
+            "baseline_seconds": baseline_seconds,
+            "day_seconds": actual_day_seconds,
+            **resource_values,
         }
-        _append_result(config.output, row)
-        output_rows.append(row)
-        print(
-            f"[{day_position + 1}/{len(market.evaluation_dates)}] {date_text}: "
-            f"margin={margin:.8g} realized={realized_pnl:.8g} "
-            f"error={signed_error:.8g} scenario={selected_scenario} "
-            f"time={row['day_seconds']:.2f}s",
-            flush=True,
-        )
+        _append_csv(_diagnostics_path(config.output), resource_row, RESOURCE_COLUMNS)
     if config.output.exists() and config.output.stat().st_size:
         summary_path = write_error_summary(config.output)
         print(f"Summary: {summary_path}", flush=True)
@@ -783,11 +1137,15 @@ def run_backtest_multi_device(
         raise ValueError("multi-device execution requires distinct device names")
 
     market = load_market_data(config)
-    completed = _existing_dates(config.output) if config.resume else set()
+    requested_methods = _requested_methods(config.method)
+    completed = _existing_method_dates(config.output) if config.resume else set()
     pending = [
         pd.Timestamp(date).date().isoformat()
         for date in market.evaluation_dates
-        if pd.Timestamp(date).date().isoformat() not in completed
+        if not all(
+            (pd.Timestamp(date).date().isoformat(), method) in completed
+            for method in requested_methods
+        )
     ]
     if not pending:
         if config.output.exists():
@@ -800,7 +1158,11 @@ def run_backtest_multi_device(
         if not dates:
             continue
         part = config.output.with_suffix(f".device{index}.part.csv")
-        for generated in (part, part.with_suffix(".summary.json")):
+        for generated in (
+            part,
+            part.with_suffix(".summary.json"),
+            _diagnostics_path(part),
+        ):
             if generated.exists():
                 generated.unlink()
         worker_configs.append(
@@ -828,19 +1190,44 @@ def run_backtest_multi_device(
 
     frames: list[pd.DataFrame] = []
     if config.resume and config.output.exists():
-        frames.append(pd.read_csv(config.output))
+        existing = pd.read_csv(config.output)
+        if "method" not in existing:
+            existing.insert(1, "method", "qubo")
+        frames.append(existing)
     frames.extend(pd.read_csv(path) for path in part_paths)
     combined = pd.concat(frames, ignore_index=True)
-    combined = combined.drop_duplicates(subset=["date"], keep="last")
-    combined = combined.sort_values("date", kind="stable")
+    combined = combined.drop_duplicates(subset=["date", "method"], keep="last")
+    combined = combined.sort_values(["date", "method"], kind="stable")
     config.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = config.output.with_suffix(config.output.suffix + ".tmp")
     combined.to_csv(temporary, index=False, columns=RESULT_COLUMNS)
     temporary.replace(config.output)
     write_error_summary(config.output)
+    diagnostic_frames: list[pd.DataFrame] = []
+    final_diagnostics = _diagnostics_path(config.output)
+    if config.resume and final_diagnostics.exists():
+        diagnostic_frames.append(pd.read_csv(final_diagnostics))
+    diagnostic_frames.extend(
+        pd.read_csv(_diagnostics_path(Path(path)))
+        for path in part_paths
+        if _diagnostics_path(Path(path)).exists()
+    )
+    if diagnostic_frames:
+        combined_diagnostics = pd.concat(diagnostic_frames, ignore_index=True)
+        combined_diagnostics = combined_diagnostics.drop_duplicates(
+            subset=["date"], keep="last"
+        ).sort_values("date", kind="stable")
+        diagnostic_temporary = final_diagnostics.with_suffix(
+            final_diagnostics.suffix + ".tmp"
+        )
+        combined_diagnostics.to_csv(
+            diagnostic_temporary, index=False, columns=RESOURCE_COLUMNS
+        )
+        diagnostic_temporary.replace(final_diagnostics)
     for part_path in map(Path, part_paths):
         part_path.unlink(missing_ok=True)
         part_path.with_suffix(".summary.json").unlink(missing_ok=True)
+        _diagnostics_path(part_path).unlink(missing_ok=True)
     return combined.loc[combined["date"].isin(pending), list(RESULT_COLUMNS)]
 
 
@@ -856,7 +1243,7 @@ def _grid_points(value: str) -> tuple[int, int]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run rolling scenario-QUBO margin backtesting with batched SBM."
+        description="Run rolling QUBO and/or greedy-baseline margin backtesting."
     )
     parser.add_argument("subfolder", help="Market universe, e.g. assets_00100")
     parser.add_argument("--output", type=Path)
@@ -866,6 +1253,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--ew-lambda", type=float, default=0.93)
     parser.add_argument("--grid-points", type=_grid_points, default=DEFAULT_GRID_POINTS[:2])
     parser.add_argument("--scenario-index", type=int, action="append")
+    parser.add_argument(
+        "--method",
+        choices=("qubo", "baseline", "both"),
+        default="qubo",
+        help="Margin method to evaluate (default: qubo).",
+    )
     parser.add_argument("--z-bins", type=int, default=21)
     parser.add_argument("--nearest", type=int, default=100)
     parser.add_argument("--residual-sigma-range", type=float, default=5.0)
@@ -880,7 +1273,7 @@ def _parser() -> argparse.ArgumentParser:
         "--devices",
         help="Comma-separated distinct devices for date sharding, e.g. cuda:0,cuda:1",
     )
-    parser.add_argument("--pca-dtype", choices=("float32", "float64"), default="float64")
+    parser.add_argument("--pca-dtype", choices=("float32", "float64"), default="float32")
     parser.add_argument("--correlation-device", default="auto")
     parser.add_argument("--correlation-block-mib", type=int, default=256)
     parser.add_argument("--scenario-batch-size", type=int, default=1)
@@ -918,6 +1311,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         scenario_indices=(
             tuple(args.scenario_index) if args.scenario_index is not None else None
         ),
+        method=args.method,
         z_bins=args.z_bins,
         nearest=args.nearest,
         residual_sigma_range=args.residual_sigma_range,
@@ -957,7 +1351,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     resolved_devices = tuple(resolve_torch_device(device) for device in devices)
     print(
         f"Backtesting {folder.name} on {', '.join(resolved_devices)}; "
-        f"output={config.output}",
+        f"method={config.method}; output={config.output}",
         flush=True,
     )
     if len(resolved_devices) == 1:

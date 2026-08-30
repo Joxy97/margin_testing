@@ -1,0 +1,229 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=18mm]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array,xcolor}
+\usepackage[T1]{fontenc}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+\newcommand{\GiB}{\,\mathrm{GiB}}
+\newcommand{\MiB}{\,\mathrm{MiB}}
+
+\title{Compact Resource Model for the Sparse Scenario QUBO}
+\author{}
+\date{29 August 2026}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\section*{Definitions and assumptions}
+
+\begin{tabular}{@{}>{$}l<{$} p{12.5cm}@{}}
+$A$ & number of assets; \\
+$z$ & binary states (z-bins) per asset; \\
+$k$ & directed top-$k$ neighbor nominations per asset; \\
+$m$ & reciprocal unordered nominations per asset; \\
+$u=k-m$ & unique undirected union pairs per asset, with $k/2\le u\le k$; \\
+$p$ & fraction of compatibility coefficients that are nonzero (approximately one); \\
+$r$ & simultaneous simulated-bifurcation runs; \\
+$b$ & scenarios packed into one block-diagonal solver batch; \\
+$\eta$ & usable-capacity safety factor (recommended: $\eta=0.75$).
+\end{tabular}
+
+The formulas assume the current undirected union graph, FP32 solver values,
+32-bit CSR indices, FP64 compact CPU QUBO coefficients, and fixed $k$ as $A$
+grows.  One pair is retained when either endpoint nominates the other; mutual
+nominations are stored once.
+
+\section*{Variables, interactions, and density}
+
+The binary-variable count is
+\begin{equation}
+  N = Az.
+\end{equation}
+
+Upper-triangle QUBO interactions per asset are approximately
+\begin{equation}
+  e(z,k,u,p)
+  = \underbrace{\frac{z(z-1)}{2}}_{\text{one-hot}}
+  + \underbrace{puz^2}_{\text{compatibility}}.
+  \label{eq:edges}
+\end{equation}
+Thus the upper interaction count is $E\simeq Ae$.  The symmetric solver CSR
+matrix contains approximately $2Ae$ nonzeros.  QUBO density is
+\begin{equation}
+  \rho
+  = \frac{E}{\binom{Az}{2}}
+  \simeq \frac{2e}{Az^2}
+  = O(A^{-1}).
+\end{equation}
+The graph therefore grows linearly in assets even though its variable-space
+density decreases.
+
+\section*{GPU VRAM model}
+
+For FP32 values and 32-bit CSR columns, every upper interaction becomes two
+symmetric entries, each containing a 4-byte value and 4-byte column index:
+\begin{equation}
+  M_{\mathrm{CSR}}/A \simeq 2e(4+4)=16e
+  \quad\text{bytes per asset}.
+\end{equation}
+
+The measured FP32 solver model, including row pointers, fields, state tensors,
+mask, force output, and sparse workspace, is
+\begin{equation}
+  g(z,e,r) \equiv M_{\mathrm{GPU}}/A
+  \simeq 16e + 12z + 25zr
+  \quad\text{bytes per asset}.
+  \label{eq:gpu-per-asset}
+\end{equation}
+For a scenario batch of size $b$,
+\begin{equation}
+  M_{\mathrm{GPU}}
+  \simeq M_{\mathrm{GPU,fixed}} + M_{\mathrm{corr}} + bA\,g(z,e,r),
+\end{equation}
+where $M_{\mathrm{corr}}$ is bounded approximately by
+\texttt{--correlation-block-mib}.  The safe asset capacity is
+\begin{equation}
+  A_{\max,\mathrm{GPU}}
+  \simeq
+  \frac{\eta\,[V-M_{\mathrm{GPU,fixed}}-M_{\mathrm{corr}}]}
+       {b\,g(z,e,r)}.
+  \label{eq:gpu-capacity}
+\end{equation}
+Here $V$ is physical VRAM in bytes.  The number of solver steps does not enter
+the memory formula because state arrays are reused at every step.
+
+\section*{System RAM model}
+
+The retained compact QUBO requires approximately
+\begin{equation}
+  M_{\mathrm{compact}}/A \simeq 16e+8z
+  \quad\text{bytes per asset},
+\end{equation}
+from two 32-bit endpoints and one FP64 coefficient per upper interaction, plus
+the FP64 linear vector.  Peak packing RAM is much larger because Ising,
+symmetric COO, concatenation, and CSR arrays coexist transiently.  The measured
+empirical model is
+\begin{align}
+  h(e) &\equiv M_{\mathrm{RAM,incremental}}/A
+        \simeq \beta e, \\
+  \beta &\simeq 130\text{--}135
+        \quad\text{bytes per upper interaction}, \\
+  M_{\mathrm{RAM}} &\simeq M_{\mathrm{RAM,fixed}}+bA\,h(e).
+  \label{eq:ram-model}
+\end{align}
+The corresponding safe capacity is
+\begin{equation}
+  A_{\max,\mathrm{RAM}}
+  \simeq
+  \frac{\eta\,[H-M_{\mathrm{RAM,fixed}}]}
+       {b\,\beta e},
+  \label{eq:ram-capacity}
+\end{equation}
+where $H$ is RAM made available to the process.  This coefficient is empirical
+and should be recalibrated after changes to CSR packing.
+
+\section*{Calibration at current defaults}
+
+For $A=10{,}000$, $z=21$, $k=5$, $u\simeq4.16$, $p\simeq1$,
+$r=16$, and $b=1$:
+\begin{align}
+  N &= 210{,}000, \\
+  E &= 20{,}433{,}166, \\
+  e &= 2{,}043.3166, \\
+  \rho &\simeq 9.27\times10^{-4}\;(0.0927\%), \\
+  M_{\mathrm{compact}} &= 313.4\MiB, \\
+  M_{\mathrm{GPU,peak}} &= 402.8\MiB, \\
+  M_{\mathrm{GPU,reserved}} &= 420\MiB, \\
+  M_{\mathrm{process,peak}} &= 3.22\GiB.
+\end{align}
+
+The measured GPU allocation is about $42.2$ kB per asset.  Incremental peak
+process RAM above imported-library baseline is about $265$ KiB per asset.
+Therefore:
+\begin{align}
+  \text{raw VRAM capacity} &\simeq 25{,}400
+       &&\text{assets per available GiB}, \\
+  \text{safe VRAM capacity} &\simeq 19{,}000
+       &&\text{assets per available GiB}, \\
+  \text{raw RAM capacity} &\simeq 4{,}000
+       &&\text{assets per available GiB}, \\
+  \text{safe RAM capacity} &\simeq 3{,}000
+       &&\text{assets per available GiB}.
+\end{align}
+
+\begin{center}
+\begin{tabular}{@{}r rr@{}}
+\toprule
+Usable resource & VRAM-limited assets & RAM-limited assets \\
+\midrule
+$1\GiB$   & 19,000  & 3,000 \\
+$8\GiB$   & 152,000 & 24,000 \\
+$16\GiB$  & 304,000 & 48,000 \\
+$32\GiB$  & 608,000 & 96,000 \\
+$64\GiB$  & ---     & 192,000 \\
+$128\GiB$ & ---     & 384,000 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{Measured effect of simultaneous runs}
+
+\begin{center}
+\begin{tabular}{@{}r rr@{}}
+\toprule
+Runs $r$ & Peak allocated & Peak reserved \\
+\midrule
+1  & $327.5\MiB$ & $342\MiB$ \\
+4  & $353.6\MiB$ & $358\MiB$ \\
+16 & $402.8\MiB$ & $420\MiB$ \\
+32 & $485.6\MiB$ & $512\MiB$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Total runs may exceed the simultaneous width without increasing peak state
+memory by setting \texttt{--run-batch-size}.  For example, 32 total runs with a
+run batch of 16 retain approximately the 16-run state-memory requirement but
+require two solver passes.
+
+\section*{Scaling rules}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Parameter change & Leading memory effect \\
+\midrule
+$A$ assets & linear \\
+$k$ neighbors & approximately linear through $u$ \\
+$z$ bins & approximately quadratic through $uz^2$ \\
+$r$ simultaneous runs & linear state-memory term $25zr$ \\
+$b$ packed scenarios & approximately linear in graph and state memory \\
+solver steps & no material peak-memory change \\
+FP64 solver & larger value/state terms; indices unchanged \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+In particular, changing $z$ from 21 to 41 changes the dominant compatibility
+term by approximately
+\begin{equation}
+  \left(\frac{41}{21}\right)^2 \simeq 3.81.
+\end{equation}
+
+\section*{Implementation ceiling and caveats}
+
+The current union graph produces approximately $2e\simeq4{,}087$ symmetric CSR
+nonzeros per asset.  Signed 32-bit CSR indexing therefore implies an approximate
+ceiling
+\begin{equation}
+  A_{\max,\mathrm{index}}
+  \simeq \frac{2^{31}-1}{2e}
+  \simeq 525{,}000\ \text{assets}.
+\end{equation}
+This may bind before VRAM on large-memory accelerators.  Actual deployments
+must also reserve memory for CUDA context, display/other processes, correlation
+blocks, the operating system, and allocator fragmentation.  Runtime and CPU
+RAM may become impractical well before a VRAM-only limit is reached.
+
+\end{document}
