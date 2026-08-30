@@ -1,0 +1,43 @@
+# Covered-call example. Relative paths resolve from this file.
+marginDate: 2025-01-10
+
+portfolio:
+  positions:
+    - instrumentType: equity
+      symbol: AAPL
+      quantity: 100
+    - instrumentType: equity_option
+      symbol: AAPL
+      expirationDate: 2025-06-20
+      strike: 100
+      optionType: C
+      exerciseStyle: E
+      dividendYield: 0.01
+      quantity: -1
+      multiplier: 100
+
+engine:
+  downloadManager:
+    providers:
+      quotes: derivative_csv
+    requestParameters:
+      location: options.example.csv
+
+  dataManager:
+    type: derivative_quotes
+
+  riskStateGenerator:
+    type: option_scenarios
+    historyDays: 365
+    riskFreeRate: 0.04
+    marginPeriodDays: 5
+    projectionHorizonDays: 0
+    confidenceLevel: 0.99
+    priceScenarioSteps: 9
+    minimumPriceShock: 0.03
+    maximumPriceShock: 0.15
+    volatilityShifts: [-0.03, 0.0, 0.03]
+
+  marginCalculator:
+    type: state_aware_greedy
+    pnlAnchor: market

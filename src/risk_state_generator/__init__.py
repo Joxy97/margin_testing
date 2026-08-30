@@ -8,6 +8,7 @@ from .correlated_returns_vola_grid_risk_state_generator import (
 from .config import (
     CorrelatedReturnsVolaGridRiskStateGeneratorConfig,
     ReturnsVolaGridRiskStateGeneratorConfig,
+    OptionScenarioRiskStateGeneratorConfig,
     RiskStateGeneratorConfig,
 )
 from .pca_grid import PCAGrid, ReturnsPCAGrid
@@ -15,18 +16,16 @@ from .pca_grid_factory import PCAGridFactory
 from .pca_grid_provider import PCAGridProvider
 from .pca_key import PCAKey, ReturnsPCAKey
 from .pca_scenario import PCAScenario, ReturnsVolaGridPCAScenario
-from .portfolio_risk_state_bqm_manager import (
-    PortfolioRiskStateBQMManager,
+from .portfolio_risk_state_bqm_visitor import (
+    PortfolioRiskStateBQMVisitor,
     StructuralQUBOTemplateCache,
 )
 from .risk_state import (
     CorrelationFactors,
     CorrelatedReturnsVolaGridRiskState,
     DenseReturnsVolaGrid,
-    PortfolioCorrelatedReturnsVolaGridRiskState,
-    PortfolioReturnsVolaGridRiskState,
-    PortfolioRiskState,
     RiskState,
+    OptionScenarioRiskState,
     ReturnsVolaGridRiskState,
 )
 from .risk_state_generator import RiskStateGenerator
@@ -34,6 +33,7 @@ from .risk_state_generation_context import RiskStateGenerationContext
 from .returns_vola_grid_risk_state_generator import (
     ReturnsVolaGridRiskStateGenerator,
 )
+from .option_scenario_risk_state_generator import OptionScenarioRiskStateGenerator
 
 __all__ = [
     "Cache",
@@ -49,12 +49,12 @@ __all__ = [
     "PCAGridProvider",
     "PCAKey",
     "PCAScenario",
-    "PortfolioCorrelatedReturnsVolaGridRiskState",
-    "PortfolioReturnsVolaGridRiskState",
-    "PortfolioRiskState",
-    "PortfolioRiskStateBQMManager",
+    "PortfolioRiskStateBQMVisitor",
     "StructuralQUBOTemplateCache",
     "RiskState",
+    "OptionScenarioRiskState",
+    "OptionScenarioRiskStateGenerator",
+    "OptionScenarioRiskStateGeneratorConfig",
     "ReturnsPCAGrid",
     "ReturnsPCAKey",
     "ReturnsVolaGridRiskState",

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from data_manager import DataManagerConfig
+from data_manager import DataManagerConfig, DerivativeQuoteDataManagerConfig
 from download_manager import DownloadManagerConfig
 from margin_calculator import BQMMarginCalculatorConfig, MarginCalculatorConfig
 from risk_state_generator import (
@@ -18,7 +18,9 @@ class MarginEngineConfig:
     downloadManager: DownloadManagerConfig = field(
         default_factory=DownloadManagerConfig
     )
-    dataManager: DataManagerConfig = field(default_factory=DataManagerConfig)
+    dataManager: DataManagerConfig | DerivativeQuoteDataManagerConfig = field(
+        default_factory=DataManagerConfig
+    )
     riskStateGenerator: RiskStateGeneratorConfig = field(
         default_factory=ReturnsVolaGridRiskStateGeneratorConfig
     )

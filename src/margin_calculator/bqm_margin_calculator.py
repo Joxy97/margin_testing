@@ -5,8 +5,7 @@ from typing import Any
 
 from portfolio import Portfolio
 from risk_state_generator import (
-    PortfolioRiskState,
-    PortfolioRiskStateBQMManager,
+    PortfolioRiskStateBQMVisitor,
     RiskState,
 )
 
@@ -28,13 +27,13 @@ class BQMMarginCalculator(OptimizationMarginCalculator):
         bqmSolver: BQMSolver,
         modelParameters: Mapping[str, Any] | None = None,
         solverParameters: Mapping[str, Any] | None = None,
-        bqmManager: PortfolioRiskStateBQMManager | None = None,
-        executionPolicy: BQMExecutionPolicy[PortfolioRiskState] | None = None,
+        bqmVisitor: PortfolioRiskStateBQMVisitor | None = None,
+        executionPolicy: BQMExecutionPolicy[RiskState] | None = None,
     ) -> None:
         super().__init__(solverParameters)
         self.modelParameters: dict[str, Any] = dict(modelParameters or {})
         self.bqmSolver = bqmSolver
-        self.bqmManager = bqmManager or PortfolioRiskStateBQMManager()
+        self.bqmVisitor = bqmVisitor or PortfolioRiskStateBQMVisitor()
         self.executionPolicy = executionPolicy or SequentialBQMExecutionPolicy()
 
     def calculateMargin(
@@ -48,7 +47,7 @@ class BQMMarginCalculator(OptimizationMarginCalculator):
             self._encodeRiskState(risk_state, portfolio)
             for risk_state in riskStates
         )
-        for portfolio_risk_state, result in self.executionPolicy.execute(
+        for risk_state, result in self.executionPolicy.execute(
             self.bqmSolver,
             encoded_states,
             self.solverParameters,
@@ -57,7 +56,7 @@ class BQMMarginCalculator(OptimizationMarginCalculator):
                 raise TypeError("BQMSolver must return a BQMOptimizationResult")
             maximum_margin = max(
                 maximum_margin,
-                portfolio_risk_state.acceptDecode(self.bqmManager, result),
+                self.bqmVisitor.decodeMargin(risk_state, portfolio, result),
             )
         return maximum_margin
 
@@ -65,15 +64,12 @@ class BQMMarginCalculator(OptimizationMarginCalculator):
         self,
         riskState: RiskState,
         portfolio: Portfolio,
-    ) -> tuple[PortfolioRiskState, QUBOProblem]:
-        portfolio_risk_state = PortfolioRiskState.fromRiskState(
-            riskState,
-            portfolio,
-        )
+    ) -> tuple[RiskState, QUBOProblem]:
         return (
-            portfolio_risk_state,
-            portfolio_risk_state.acceptBQM(
-                self.bqmManager,
+            riskState,
+            self.bqmVisitor.createBQM(
+                riskState,
+                portfolio,
                 self.modelParameters,
             ),
         )

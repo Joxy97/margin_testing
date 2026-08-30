@@ -9,6 +9,7 @@ from .pca_grid_provider import PCAGridProvider
 from .returns_vola_grid_risk_state_generator import (
     ReturnsVolaGridRiskStateGenerator,
 )
+from .option_scenario_risk_state_generator import OptionScenarioRiskStateGenerator
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,38 @@ class CorrelatedReturnsVolaGridRiskStateGeneratorConfig(
         )
 
 
+@dataclass(frozen=True)
+class OptionScenarioRiskStateGeneratorConfig:
+    """Configuration for futures/equity option stress scenarios."""
+
+    historyDays: int = 365
+    riskFreeRate: float = 0.04
+    dayCountBasis: float = 365.0
+    tradingDaysPerYear: int = 252
+    marginPeriodDays: int = 5
+    projectionHorizonDays: int = 0
+    confidenceLevel: float = 0.99
+    stressMultiplier: float = 1.0
+    priceScenarioSteps: int = 9
+    minimumPriceShock: float = 0.03
+    maximumPriceShock: float = 0.15
+    volatilityShifts: tuple[float, ...] = (-0.03, 0.0, 0.03)
+    minimumVolatility: float = 0.01
+    maximumVolatility: float = 3.0
+    maximumVolatilityShift: float = 0.10
+    ewmaLambda: float = 0.94
+    fallbackRho: float = -0.75
+    fallbackVolOfVolatility: float = 0.90
+    volShockMinimumObservations: int = 5
+    maximumSmileExtrapolation: float = 0.15
+    americanOptionSteps: int = 200
+
+    def createRiskStateGenerator(self) -> OptionScenarioRiskStateGenerator:
+        return OptionScenarioRiskStateGenerator(**vars(self))
+
+
 RiskStateGeneratorConfig = (
     ReturnsVolaGridRiskStateGeneratorConfig
     | CorrelatedReturnsVolaGridRiskStateGeneratorConfig
+    | OptionScenarioRiskStateGeneratorConfig
 )

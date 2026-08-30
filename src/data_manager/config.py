@@ -6,6 +6,7 @@ from cache import Cache
 from download_unit import Period
 
 from .data_manager import DataManager, MarketDataPartition
+from .derivative_data_manager import DerivativeQuoteDataManager
 from .backing_store import DataBackingStore
 
 
@@ -29,3 +30,11 @@ class DataManagerConfig:
             maxMemoryBytes=self.maxMemoryBytes,
             backingStore=self.backingStore,
         )
+
+
+@dataclass(frozen=True)
+class DerivativeQuoteDataManagerConfig:
+    """Configuration for long-form derivative quote storage."""
+
+    def createDataManager(self) -> DerivativeQuoteDataManager:
+        return DerivativeQuoteDataManager()
