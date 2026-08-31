@@ -12,3 +12,8 @@ class Portfolio:
 
     weights: dict[Instrument, Decimal] = field(default_factory=dict)
     cash: Decimal = Decimal("0")
+
+    @property
+    def instruments(self) -> tuple[Instrument, ...]:
+        """Return a canonical, insertion-order-independent instrument order."""
+        return tuple(sorted(self.weights, key=str))

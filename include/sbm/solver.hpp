@@ -42,7 +42,8 @@ struct SolverResult {
 [[nodiscard]] std::vector<std::vector<SolverResult>> solve_cpu_ising_candidates_batch(
     const std::vector<IsingModel>& models,
     const SolverParameters& parameters = {},
-    const std::vector<std::vector<std::uint8_t>>& initial_samples = {});
+    const std::vector<std::vector<std::uint8_t>>& initial_samples = {},
+    const std::vector<std::uint64_t>& problem_seeds = {});
 
 #ifdef SBM_HAS_CUDA
 [[nodiscard]] SolverResult solve_gpu(

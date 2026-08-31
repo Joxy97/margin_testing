@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import singledispatchmethod
@@ -35,7 +36,6 @@ class _StructuralQUBOTemplate:
     tails: numpy.ndarray
     biases: numpy.ndarray
     offset: float
-    oneHotGroups: tuple[tuple[int, ...], ...]
 
 
 class StructuralQUBOTemplateCache:
@@ -242,10 +242,6 @@ class PortfolioRiskStateBQMVisitor:
                     dtype=float,
                 ),
                 offset=lambda_one_hot * len(state_counts),
-                oneHotGroups=tuple(
-                    tuple(range(int(offsets[asset]), int(offsets[asset + 1])))
-                    for asset in range(len(state_counts))
-                ),
             )
             self.structuralCache.insert(template_key, template)
 
@@ -314,5 +310,43 @@ class PortfolioRiskStateBQMVisitor:
             quadraticTails=tails,
             quadraticBiases=biases,
             offset=template.offset,
-            oneHotGroups=template.oneHotGroups,
+            groupOffsets=template.offsets,
+            seedOffset=self._stableSeedOffset(
+                instruments,
+                linear,
+                correlations,
+                lambda_one_hot,
+                lambda_compat,
+            ),
         )
+
+    @staticmethod
+    def _stableSeedOffset(
+        instruments: Sequence[Any],
+        linear: numpy.ndarray,
+        correlations: CorrelationFactors,
+        lambdaOneHot: float,
+        lambdaCompat: float,
+    ) -> int:
+        """Hash scenario-specific values without re-hashing cached topology."""
+        digest = hashlib.blake2b(digest_size=8, person=b"QUBOseed")
+        for instrument in instruments:
+            encoded = str(instrument).encode("utf-8")
+            digest.update(len(encoded).to_bytes(4, "little"))
+            digest.update(encoded)
+        digest.update(memoryview(numpy.ascontiguousarray(linear)).cast("B"))
+        for values in (
+            correlations.firstAssets,
+            correlations.firstStates,
+            correlations.secondAssets,
+            correlations.secondStates,
+            correlations.coefficients,
+        ):
+            digest.update(memoryview(numpy.ascontiguousarray(values)).cast("B"))
+        digest.update(
+            numpy.asarray(
+                [lambdaOneHot, lambdaCompat],
+                dtype=numpy.float64,
+            ).tobytes()
+        )
+        return int.from_bytes(digest.digest(), "little")

@@ -16,7 +16,6 @@ from ...optimization_problem.qubo_problem import QUBOProblem
 from .bqm_solver_factory import BQMSolverFactory
 from .torch_sbm_bqm_solver import (
     _MAX_TORCH_SEED,
-    _PROBLEM_SEED_STRIDE,
     _RUN_SEED_STRIDE,
     TorchSBMBQMSolver,
 )
@@ -102,6 +101,7 @@ class AdaptiveTorchSBMBQMSolver(TorchSBMBQMSolver):
         field: Any,
         c0Rows: Any,
         variableOffsets: numpy.ndarray,
+        problemSeedOffsets: numpy.ndarray,
         width: int,
         runStart: int,
         parameters: Mapping[str, Any],
@@ -118,7 +118,7 @@ class AdaptiveTorchSBMBQMSolver(TorchSBMBQMSolver):
                 run = runStart + local_run
                 seed = (
                     parameters["seed"]
-                    + _PROBLEM_SEED_STRIDE * problem_index
+                    + int(problemSeedOffsets[problem_index])
                     + _RUN_SEED_STRIDE * run
                 ) % _MAX_TORCH_SEED
                 generator = torch.Generator(device=device)
@@ -347,7 +347,7 @@ class AdaptiveTorchSBMBQMSolver(TorchSBMBQMSolver):
         ).tocsc()
         grouped = numpy.zeros(problem.variableCount, dtype=bool)
         original_valid = True
-        for group in problem.oneHotGroups:
+        for group in problem.iterOneHotGroups():
             variables = numpy.asarray(group, dtype=numpy.int64)
             grouped[variables] = True
             if int(sample[variables].sum()) != 1:
@@ -367,7 +367,7 @@ class AdaptiveTorchSBMBQMSolver(TorchSBMBQMSolver):
 
         for _ in range(sweeps):
             improved = False
-            for group in problem.oneHotGroups:
+            for group in problem.iterOneHotGroups():
                 variables = numpy.asarray(group, dtype=numpy.int64)
                 selected_values = variables[sample[variables] == 1]
                 if len(selected_values) != 1:

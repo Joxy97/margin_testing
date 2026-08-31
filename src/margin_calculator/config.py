@@ -29,6 +29,7 @@ class BQMMarginCalculatorConfig:
     executionPolicy: BQMExecutionPolicy = field(
         default_factory=SequentialBQMExecutionPolicy
     )
+    comparisonPnlAnchor: str | None = None
 
     def createMarginCalculator(self) -> BQMMarginCalculator:
         return BQMMarginCalculator(
@@ -37,6 +38,7 @@ class BQMMarginCalculatorConfig:
             solverParameters=self.solver.solverParameters,
             bqmVisitor=self.bqmVisitor,
             executionPolicy=self.executionPolicy,
+            comparisonPnlAnchor=self.comparisonPnlAnchor,
         )
 
 

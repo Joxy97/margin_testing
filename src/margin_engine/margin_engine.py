@@ -80,6 +80,11 @@ class MarginEngine:
                 ),
                 totalSeconds=total_seconds,
             ),
+            comparisonMargins=getattr(
+                self.marginCalculator,
+                "lastComparisonMargins",
+                {},
+            ),
         )
 
     def prepareBacktest(

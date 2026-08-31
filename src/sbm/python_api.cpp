@@ -284,7 +284,7 @@ extern "C" int sbm_solve_qubo_cpu_candidates(
     }
 }
 
-extern "C" int sbm_solve_qubo_cpu_candidates_batch(
+extern "C" int sbm_solve_qubo_cpu_candidates_seeded_batch(
     std::size_t problem_count,
     const std::size_t* variable_offsets,
     const float* linear,
@@ -301,6 +301,7 @@ extern "C" int sbm_solve_qubo_cpu_candidates_batch(
     float gamma,
     float initial_scale,
     std::uint64_t seed,
+    const std::uint64_t* problem_seeds,
     const std::uint8_t* initial_samples,
     const std::uint8_t* initial_sample_flags,
     std::size_t topology_cache_bytes,
@@ -362,8 +363,12 @@ extern "C" int sbm_solve_qubo_cpu_candidates_batch(
         parameters.initial_scale = initial_scale;
         parameters.seed = seed;
 
+        std::vector<std::uint64_t> seeds;
+        if (problem_seeds != nullptr) {
+            seeds.assign(problem_seeds, problem_seeds + problem_count);
+        }
         const auto batches = sbm::solve_cpu_ising_candidates_batch(
-            models, parameters, warm_starts);
+            models, parameters, warm_starts, seeds);
         std::size_t sample_cursor = 0;
         for (std::size_t problem = 0; problem < batches.size(); ++problem) {
             const auto variable_count =
@@ -388,4 +393,36 @@ extern "C" int sbm_solve_qubo_cpu_candidates_batch(
         copy_error("unknown C++ exception", error, error_size);
         return 2;
     }
+}
+
+extern "C" int sbm_solve_qubo_cpu_candidates_batch(
+    std::size_t problem_count,
+    const std::size_t* variable_offsets,
+    const float* linear,
+    const std::size_t* quadratic_offsets,
+    const std::uint32_t* quadratic_u,
+    const std::uint32_t* quadratic_v,
+    const float* quadratic_bias,
+    const float* offsets,
+    int steps,
+    int runs,
+    float dt,
+    float a0,
+    float c0,
+    float gamma,
+    float initial_scale,
+    std::uint64_t seed,
+    const std::uint8_t* initial_samples,
+    const std::uint8_t* initial_sample_flags,
+    std::size_t topology_cache_bytes,
+    std::uint8_t* samples,
+    double* energies,
+    char* error,
+    std::size_t error_size) {
+    return sbm_solve_qubo_cpu_candidates_seeded_batch(
+        problem_count, variable_offsets, linear, quadratic_offsets,
+        quadratic_u, quadratic_v, quadratic_bias, offsets, steps, runs, dt,
+        a0, c0, gamma, initial_scale, seed, nullptr, initial_samples,
+        initial_sample_flags, topology_cache_bytes, samples, energies, error,
+        error_size);
 }

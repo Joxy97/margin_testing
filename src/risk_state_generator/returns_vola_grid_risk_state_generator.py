@@ -60,7 +60,7 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
         nZBins: int = 21,
         nNearest: int | None = None,
         residualSigmaRange: float = 5.0,
-        allowEmptyBinFallback: bool = True,
+        allowEmptyBinFallback: bool = False,
         distanceInflationAlpha: float = 0.5,
         distanceInflationPower: float = 2.0,
         maxInflationFactor: float = 5.0,
@@ -139,7 +139,7 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
     ) -> DataRequest:
         """Build the close-price request required by this generator."""
         return DataRequest(
-            instruments=tuple(portfolio.weights),
+            instruments=portfolio.instruments,
             start_date=marginDate - timedelta(days=2 * self.ew_window),
             end_date=marginDate,
             data_type="closePrices",
@@ -532,4 +532,5 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
             instruments,
             dense_values,
             keep_masks,
+            numpy.isin(numpy.arange(asset_count), empty_assets),
         )

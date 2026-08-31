@@ -1,6 +1,8 @@
 """Margin calculation report."""
 
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
 
 
 @dataclass(frozen=True)
@@ -19,3 +21,16 @@ class MarginReport:
 
     margin: float
     timings: MarginEngineTimings = MarginEngineTimings()
+    comparisonMargins: Mapping[str, float] = MappingProxyType({})
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "comparisonMargins",
+            MappingProxyType(
+                {
+                    str(name): float(value)
+                    for name, value in self.comparisonMargins.items()
+                }
+            ),
+        )
