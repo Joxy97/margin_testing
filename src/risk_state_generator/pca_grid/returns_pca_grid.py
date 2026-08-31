@@ -50,9 +50,10 @@ class ReturnsPCAGrid(PCAGrid):
         )
         prices = grid._extract_price_window(data)
         log_returns = grid._compute_log_returns(prices)
-        standardized_returns = grid._standardize(log_returns)
-        weights = grid._getExponentialWeights(len(standardized_returns))
-        grid._fit_pca(standardized_returns, weights)
+        weights = grid._getExponentialWeights(len(log_returns))
+        weighted_returns = log_returns.to_numpy(dtype=float) * weights[:, None]
+        standardized_returns = grid._standardize(weighted_returns)
+        grid._fit_pca(standardized_returns)
         return grid
 
     def _extract_price_window(
@@ -101,10 +102,13 @@ class ReturnsPCAGrid(PCAGrid):
         log_returns = numpy.log(prices / prices.shift(1))
         return log_returns.dropna(axis=0, how="any")
 
-    def _standardize(self, log_returns: pandas.DataFrame) -> numpy.ndarray:
-        """Standardize log returns and store their fitted scale."""
+    def _standardize(
+        self,
+        weighted_returns: numpy.ndarray,
+    ) -> numpy.ndarray:
+        """Standardize returns after exponential weights have been applied."""
         standardizer = StandardScaler()
-        standardized_returns = standardizer.fit_transform(log_returns)
+        standardized_returns = standardizer.fit_transform(weighted_returns)
         self.logReturnMean = standardizer.mean_
         self.logReturnScale = standardizer.scale_
         return standardized_returns
@@ -127,9 +131,8 @@ class ReturnsPCAGrid(PCAGrid):
     def _fit_pca(
         self,
         standardizedReturns: numpy.ndarray,
-        weights: numpy.ndarray,
     ) -> None:
-        """Fit MarginLab's weighted covariance eigendecomposition."""
+        """Fit PCA to returns that were weighted before standardization."""
         if len(standardizedReturns) < 2:
             raise ValueError("PCA requires at least two return observations")
         maximum_components = min(standardizedReturns.shape)
@@ -139,16 +142,11 @@ class ReturnsPCAGrid(PCAGrid):
                 f"{maximum_components}, inclusive"
             )
 
-        self.pcaMean = numpy.sum(
-            weights[:, None] * standardizedReturns,
-            axis=0,
-        )
+        self.pcaMean = numpy.mean(standardizedReturns, axis=0)
         centered_returns = standardizedReturns - self.pcaMean
         observations, assets = centered_returns.shape
         if assets <= observations:
-            covariance = centered_returns.T @ (
-                weights[:, None] * centered_returns
-            )
+            covariance = centered_returns.T @ centered_returns / observations
             eigenvalues, eigenvectors = numpy.linalg.eigh(covariance)
             order = numpy.argsort(eigenvalues)[::-1]
             eigenvalues = numpy.maximum(eigenvalues[order], 0.0)
@@ -156,7 +154,6 @@ class ReturnsPCAGrid(PCAGrid):
         else:
             eigenvalues, loadings = self._fitObservationSpacePCA(
                 centered_returns,
-                weights,
             )
 
         total_variance = float(eigenvalues.sum())
@@ -177,11 +174,10 @@ class ReturnsPCAGrid(PCAGrid):
     def _fitObservationSpacePCA(
         self,
         centeredReturns: numpy.ndarray,
-        weights: numpy.ndarray,
     ) -> tuple[numpy.ndarray, numpy.ndarray]:
         """Fit wide data through the equivalent observation-space problem."""
-        weighted_centered = numpy.sqrt(weights[:, None]) * centeredReturns
-        gram = weighted_centered @ weighted_centered.T
+        scaled_centered = centeredReturns / numpy.sqrt(len(centeredReturns))
+        gram = scaled_centered @ scaled_centered.T
         eigenvalues, left_eigenvectors = numpy.linalg.eigh(gram)
         order = numpy.argsort(eigenvalues)[::-1]
         eigenvalues = numpy.maximum(eigenvalues[order], 0.0)
@@ -196,7 +192,7 @@ class ReturnsPCAGrid(PCAGrid):
             order[: self.components],
         ]
         right_eigenvectors = (
-            weighted_centered.T @ selected_left_eigenvectors
+            scaled_centered.T @ selected_left_eigenvectors
         )
         right_eigenvectors /= numpy.sqrt(selected_eigenvalues)[None, :]
         return eigenvalues, right_eigenvectors.T

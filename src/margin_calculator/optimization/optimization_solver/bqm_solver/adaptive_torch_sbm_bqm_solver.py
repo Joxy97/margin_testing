@@ -46,10 +46,33 @@ class AdaptiveTorchSBMBQMSolver(TorchSBMBQMSolver):
     }
     _defaults = TorchSBMBQMSolver._defaults | _adaptiveDefaults
 
-    def __init__(self, device: str = "auto") -> None:
-        super().__init__(device)
+    def __init__(
+        self,
+        device: str = "auto",
+        devices: Sequence[str] | None = None,
+    ) -> None:
+        super().__init__(device, devices)
         self.lastStepCount = 0
         self._stepCounts: list[int] = []
+
+    def _mergeWorkerState(
+        self,
+        workers: Sequence[TorchSBMBQMSolver],
+    ) -> None:
+        adaptive_workers = [
+            worker
+            for worker in workers
+            if isinstance(worker, AdaptiveTorchSBMBQMSolver)
+        ]
+        self._stepCounts = [
+            count
+            for worker in adaptive_workers
+            for count in worker._stepCounts
+        ]
+        self.lastStepCount = max(
+            (worker.lastStepCount for worker in adaptive_workers),
+            default=0,
+        )
 
     def _solveBatch(
         self,

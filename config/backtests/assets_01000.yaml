@@ -64,17 +64,25 @@ engine:
       maxBatchBytes: 536870912
       memoryMultiplier: 3.0
     solver:
-      type: torch_sbm
+      type: adaptive_torch_sbm
       constructorParameters:
-        device: auto
+        devices: [cuda:0, cuda:1, cuda:2, cuda:3, cuda:4, cuda:5, cuda:6, cuda:7]
       solverParameters:
         steps: 1000
         runs: 16
+        mode: discrete
         dt: 0.1
         a0: 1.0
         c0: 0.02
         gamma: 0.0
         initial_scale: 0.1
+        pressure_slope: 0.01
+        heated: false
+        early_stopping: true
+        sampling_period: 30
+        convergence_threshold: 5
+        track_best: true
+        local_search_sweeps: 1
         seed: 20260603
         dtype: float32
         run_batch_size: null

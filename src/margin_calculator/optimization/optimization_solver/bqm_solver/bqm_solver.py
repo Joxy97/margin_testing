@@ -15,6 +15,11 @@ from ...optimization_problem.qubo_problem import QUBOProblem
 class BQMSolver(OptimizationSolver):
     """Solve an application-level QUBO problem."""
 
+    @property
+    def batchParallelism(self) -> int:
+        """Return the number of independent workers available to a batch."""
+        return 1
+
     @abstractmethod
     def solve(
         self,

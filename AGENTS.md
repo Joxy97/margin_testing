@@ -21,6 +21,37 @@ python run_backtest.py config/backtests/assets_00010.yaml
 python plot_backtest.py backtest_results/<portfolio>/breaches.csv
 ```
 
+To run the selected eight-GPU Torch SBM benchmarks sequentially on the configured
+Vast.ai host and fetch each completed result into a timestamped local folder:
+
+```bash
+./run_vast_torch_sbm_batch.sh
+```
+
+The script runs assets 50, 1,000, and 10,000 followed by Vanguard. Connection,
+project, output-root, batch-ID, and heartbeat settings can be overridden through
+the `VAST_*`, `SSH_KEY`, `LOCAL_RESULTS_ROOT`, `BATCH_ID`, and
+`STATUS_INTERVAL_SECONDS` environment variables.
+
+For a single-date Vanguard Cartesian sweep over Torch SBM integration steps and
+trajectory counts, generating and archiving every YAML and result:
+
+```bash
+./run_vast_vanguard_torch_sbm_sweep.sh
+STEPS_VALUES='500 1000 2000' RUNS_VALUES='8 16 32' \
+  ./run_vast_vanguard_torch_sbm_sweep.sh
+```
+
+The defaults are steps `1000 1500 2000 3000 4000 5000 6000 7500 9000 10000`,
+runs `16 24 32 40 48 64 80 96 128`, and margin date `2025-01-01`. This is a
+90-point Cartesian sweep; generated YAMLs use `run_batch_size: 16` to bound GPU
+memory. Override the date with `MARGIN_DATE`; use `GENERATE_ONLY=1` to validate
+and inspect generated YAMLs without connecting to the server. The script detects
+when it is running under `/workspace` and executes directly in server mode,
+writing archives beneath `sweep_results/`; otherwise it orchestrates over SSH and
+fetches results locally. Set `EXECUTION_MODE=local` or `server` to override
+automatic detection.
+
 All paths in an application YAML file are resolved relative to that YAML file. Prefer copying `config/margin.example.yaml` and changing the copy. The parser is intentionally strict and rejects unknown keys.
 
 For native simulated bifurcation:
@@ -134,7 +165,7 @@ The root YAML contains `marginDate`, `portfolio`, `engine`, and optionally `back
 - Risk generator `option_scenarios` creates shared underlying-price/volatility stresses for one-symbol derivative portfolios.
 - Margin calculators are `greedy`, `state_aware_greedy`, and `bqm`.
 - BQM execution policies are `sequential` and `batch`.
-- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, and `adaptive_torch_sbm`.
+- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, and `adaptive_torch_sbm`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
 
 Constructor options belong under `solver.constructorParameters`; per-call solve options belong under `solver.solverParameters`. Do not blur those lifecycles. When adding or renaming YAML options, update the strict parser, typed config, `config/margin.example.yaml`, and parser tests together.
 
