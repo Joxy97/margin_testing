@@ -197,42 +197,51 @@ class CorrelatedReturnsVolaGridRiskStateGenerator(
         neighborIndices: numpy.ndarray,
         neighborCorrelations: numpy.ndarray,
     ) -> CorrelationFactors:
-        """Vectorize nonzero compatibility coefficients by asset pair."""
+        """Build symmetric Gaussian compatibility for the top-k union graph."""
         first_assets = []
         first_states = []
         second_assets = []
         second_states = []
         coefficients = []
+        nominated_pairs: dict[tuple[int, int], list[float]] = {}
         for asset_a, neighbors in enumerate(neighborIndices):
             for position, asset_b_value in enumerate(neighbors):
                 asset_b = int(asset_b_value)
-                if asset_b <= asset_a:
+                if asset_a == asset_b:
                     continue
                 rho = float(neighborCorrelations[asset_a, position])
                 if abs(rho) < 1e-6:
                     continue
+                pair = tuple(sorted((asset_a, asset_b)))
+                nominated_pairs.setdefault(pair, []).append(rho)
 
-                sigma_a = conditionalStd[asset_a]
-                sigma_b = conditionalStd[asset_b]
-                denominator = sigma_b**2 * max(1.0 - rho**2, 1e-12)
-                residual_a = standardizedGrids[asset_a] - scenarioCenter[asset_a]
-                residual_b = standardizedGrids[asset_b] - scenarioCenter[asset_b]
-                expected_b = rho * sigma_b / sigma_a * residual_a
-                pair_coefficients = (
-                    residual_b[None, :] - expected_b[:, None]
-                ) ** 2 / denominator
-                nonzero_a, nonzero_b = numpy.nonzero(pair_coefficients)
-                if len(nonzero_a) == 0:
-                    continue
-                first_assets.append(
-                    numpy.full(len(nonzero_a), asset_a, dtype=numpy.int32)
-                )
-                first_states.append(nonzero_a.astype(numpy.int32, copy=False))
-                second_assets.append(
-                    numpy.full(len(nonzero_b), asset_b, dtype=numpy.int32)
-                )
-                second_states.append(nonzero_b.astype(numpy.int32, copy=False))
-                coefficients.append(pair_coefficients[nonzero_a, nonzero_b])
+        for (asset_a, asset_b), nominations in sorted(nominated_pairs.items()):
+            rho = float(numpy.clip(numpy.mean(nominations), -0.999, 0.999))
+            residual_a = (
+                standardizedGrids[asset_a] - scenarioCenter[asset_a]
+            ) / conditionalStd[asset_a]
+            residual_b = (
+                standardizedGrids[asset_b] - scenarioCenter[asset_b]
+            ) / conditionalStd[asset_b]
+            denominator = max(1.0 - rho**2, 1e-12)
+            pair_coefficients = (
+                residual_a[:, None] ** 2
+                - 2.0 * rho * residual_a[:, None] * residual_b[None, :]
+                + residual_b[None, :] ** 2
+            ) / denominator
+            pair_coefficients = numpy.maximum(pair_coefficients, 0.0)
+            nonzero_a, nonzero_b = numpy.nonzero(pair_coefficients)
+            if len(nonzero_a) == 0:
+                continue
+            first_assets.append(
+                numpy.full(len(nonzero_a), asset_a, dtype=numpy.int32)
+            )
+            first_states.append(nonzero_a.astype(numpy.int32, copy=False))
+            second_assets.append(
+                numpy.full(len(nonzero_b), asset_b, dtype=numpy.int32)
+            )
+            second_states.append(nonzero_b.astype(numpy.int32, copy=False))
+            coefficients.append(pair_coefficients[nonzero_a, nonzero_b])
 
         if not coefficients:
             return CorrelationFactors.empty()

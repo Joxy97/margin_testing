@@ -56,6 +56,7 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
         )
         numpy.testing.assert_array_equal(grid.stateCounts, [2, 1])
         numpy.testing.assert_allclose(grid.validReturns, [0.01, 0.02, 0.03])
+        numpy.testing.assert_array_equal(grid.fallbackAssetMask, [False, False])
 
     def test_correlated_risk_state_stores_its_correlations(self) -> None:
         grids = {"AAPL": numpy.array([[0.01, 0.20]])}

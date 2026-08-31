@@ -98,16 +98,35 @@ class MarginApplicationConfig:
         """Construct the engine and run the configured margin calculation."""
         return self.createEngine().generateReport(self.portfolio, self.marginDate)
 
-    def generateBacktest(self) -> BacktestBatchResults:
+    def generateBacktest(
+        self,
+        checkpointStore: Any | None = None,
+        resume: bool = False,
+    ) -> BacktestBatchResults:
         """Run every named portfolio request from the YAML backtest block."""
         from backtesting import MarginBacktester
 
         if not self.backtestRequests:
             raise ValueError("YAML configuration does not contain a backtest block")
+        if resume and checkpointStore is None:
+            raise ValueError("resume requires a checkpointStore")
         return MarginBacktester().backtestMany(
             self.createEngine(),
             self.backtestRequests,
             self.backtestConfidenceLevel,
+            (
+                {
+                    name: checkpointStore.load(name)
+                    for name in self.backtestRequests
+                }
+                if resume and checkpointStore is not None
+                else None
+            ),
+            (
+                checkpointStore.save
+                if checkpointStore is not None
+                else None
+            ),
         )
 
 
@@ -456,6 +475,26 @@ class _YamlConfigParser:
         if calculator_type != "bqm":
             raise ValueError(f"Unknown margin calculator: {calculator_type!r}")
 
+        comparison = config.pop("comparison", None)
+        comparison_pnl_anchor = None
+        if comparison is not None:
+            comparison_config = self._mapping(
+                comparison,
+                f"{path}.comparison",
+            )
+            self._only(
+                comparison_config,
+                {"type", "pnlAnchor"},
+                f"{path}.comparison",
+            )
+            if str(comparison_config.get("type", "state_aware_greedy")) != (
+                "state_aware_greedy"
+            ):
+                raise ValueError("BQM comparison type must be state_aware_greedy")
+            comparison_pnl_anchor = str(
+                comparison_config.get("pnlAnchor", "market")
+            )
+
         solver = self._mapping(config.pop("solver", {}), f"{path}.solver")
         self._only(
             solver,
@@ -504,6 +543,7 @@ class _YamlConfigParser:
             ),
             bqmVisitor=visitor,
             executionPolicy=policy,
+            comparisonPnlAnchor=comparison_pnl_anchor,
         )
 
     def _executionPolicy(self, value: Any, path: str) -> Any:
@@ -689,7 +729,13 @@ class _YamlConfigParser:
         clientId: Any,
     ) -> Mapping[str, str]:
         selected_rows = self._selectPortfolioRows(csvPath, rows, clientId)
-        return {row["ticker"]: row["weight"] for row in selected_rows}
+        weights: dict[str, Decimal] = {}
+        for row in selected_rows:
+            ticker = str(row["ticker"])
+            weights[ticker] = weights.get(ticker, Decimal("0")) + Decimal(
+                str(row["weight"])
+            )
+        return {ticker: str(weight) for ticker, weight in weights.items()}
 
     def _widePortfolioWeights(
         self,

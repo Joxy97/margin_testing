@@ -22,7 +22,6 @@ from .bqm_solver_factory import BQMSolverFactory
 
 
 _RUN_SEED_STRIDE = 0x9E3779B97F4A7C15
-_PROBLEM_SEED_STRIDE = 0x0D1B54A32D192ED03
 _MAX_TORCH_SEED = (1 << 63) - 1
 
 
@@ -176,13 +175,9 @@ class TorchSBMBQMSolver(BQMSolver):
             start: int,
             stop: int,
         ) -> tuple[int, list[BQMOptimizationResult]]:
-            shard_parameters = dict(parameters)
-            shard_parameters["seed"] = (
-                parameters["seed"] + _PROBLEM_SEED_STRIDE * start
-            ) % _MAX_TORCH_SEED
             return start, worker.solveMany(
                 problems[start:stop],
-                shard_parameters,
+                parameters,
             )
 
         ordered: list[BQMOptimizationResult | None] = [None] * len(problems)
@@ -287,6 +282,10 @@ class TorchSBMBQMSolver(BQMSolver):
                     field,
                     c0_rows,
                     packed.variableOffsets,
+                    numpy.asarray(
+                        [problem.seedOffset for problem in problems],
+                        dtype=numpy.uint64,
+                    ),
                     width,
                     run_start,
                     parameters,
@@ -311,7 +310,7 @@ class TorchSBMBQMSolver(BQMSolver):
             BQMOptimizationResult(
                 *self._selectBestCandidates(
                     problem_candidates,
-                    problem.oneHotGroups,
+                    problem,
                 )
             )
             for problem, problem_candidates in zip(problems, candidates)
@@ -324,6 +323,7 @@ class TorchSBMBQMSolver(BQMSolver):
         field: Any,
         c0Rows: Any,
         variableOffsets: numpy.ndarray,
+        problemSeedOffsets: numpy.ndarray,
         width: int,
         runStart: int,
         parameters: Mapping[str, Any],
@@ -340,7 +340,7 @@ class TorchSBMBQMSolver(BQMSolver):
                 run = runStart + local_run
                 seed = (
                     parameters["seed"]
-                    + _PROBLEM_SEED_STRIDE * problem_index
+                    + int(problemSeedOffsets[problem_index])
                     + _RUN_SEED_STRIDE * run
                 ) % _MAX_TORCH_SEED
                 generator = torch.Generator(device=device)

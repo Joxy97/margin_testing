@@ -247,6 +247,35 @@ class MarginCalculatorTest(unittest.TestCase):
             )
         )
 
+    def test_bqm_and_greedy_comparison_share_the_risk_state_stream(self) -> None:
+        consumed = []
+
+        def risk_states():
+            for loss in (-0.05, -0.10):
+                consumed.append(loss)
+                yield ReturnsVolaGridRiskState(
+                    {"AAPL": numpy.array([[loss, 0.20], [0.01, 0.25]])}
+                )
+
+        calculator = BQMMarginCalculator(
+            StubBQMSolver(
+                [
+                    BQMOptimizationResult({"x_0_0": 1, "x_0_1": 0}),
+                    BQMOptimizationResult({"x_0_0": 1, "x_0_1": 0}),
+                ]
+            ),
+            comparisonPnlAnchor="market",
+        )
+
+        margin = calculator.calculateMargin(
+            risk_states(),
+            Portfolio(weights={"AAPL": Decimal("10")}),
+        )
+
+        self.assertEqual(consumed, [-0.05, -0.10])
+        self.assertAlmostEqual(margin, 1.0)
+        self.assertEqual(calculator.lastComparisonMargins, {"greedy": 1.0})
+
     def test_margin_is_never_negative(self) -> None:
         risk_state = ReturnsVolaGridRiskState(
             {"AAPL": numpy.array([[0.05, 0.20]])}

@@ -6,7 +6,6 @@ from datetime import date
 
 import numpy
 import pandas
-from sklearn.preprocessing import StandardScaler
 
 from download_unit import Instrument
 
@@ -33,6 +32,8 @@ class ReturnsPCAGrid(PCAGrid):
     maxAbsoluteZ: numpy.ndarray | None = field(init=False, default=None)
     logReturnMean: numpy.ndarray | None = field(init=False, default=None)
     logReturnScale: numpy.ndarray | None = field(init=False, default=None)
+    calibrationStartDate: date | None = field(init=False, default=None)
+    calibrationEndDate: date | None = field(init=False, default=None)
 
     @classmethod
     def construct(
@@ -50,8 +51,8 @@ class ReturnsPCAGrid(PCAGrid):
         )
         prices = grid._extract_price_window(data)
         log_returns = grid._compute_log_returns(prices)
-        standardized_returns = grid._standardize(log_returns)
-        weights = grid._getExponentialWeights(len(standardized_returns))
+        weights = grid._getExponentialWeights(len(log_returns))
+        standardized_returns = grid._standardize(log_returns, weights)
         grid._fit_pca(standardized_returns, weights)
         return grid
 
@@ -76,6 +77,8 @@ class ReturnsPCAGrid(PCAGrid):
             prices = prices.set_index("date")
         else:
             prices.index = pandas.to_datetime(prices.index, errors="raise")
+        if not prices.index.is_unique:
+            raise ValueError("market-data dates must be unique")
         prices = (
             prices.sort_index()
             .loc[:, list(self.instruments)]
@@ -88,7 +91,10 @@ class ReturnsPCAGrid(PCAGrid):
             raise ValueError(
                 "data does not contain ew_window + 1 rows before current_date"
             )
-        return prices.iloc[-required_prices:]
+        selected = prices.iloc[-required_prices:]
+        self.calibrationStartDate = selected.index[1].date()
+        self.calibrationEndDate = selected.index[-1].date()
+        return selected
 
     @staticmethod
     def _compute_log_returns(prices: pandas.DataFrame) -> pandas.DataFrame:
@@ -101,13 +107,22 @@ class ReturnsPCAGrid(PCAGrid):
         log_returns = numpy.log(prices / prices.shift(1))
         return log_returns.dropna(axis=0, how="any")
 
-    def _standardize(self, log_returns: pandas.DataFrame) -> numpy.ndarray:
-        """Standardize log returns and store their fitted scale."""
-        standardizer = StandardScaler()
-        standardized_returns = standardizer.fit_transform(log_returns)
-        self.logReturnMean = standardizer.mean_
-        self.logReturnScale = standardizer.scale_
-        return standardized_returns
+    def _standardize(
+        self,
+        log_returns: pandas.DataFrame,
+        weights: numpy.ndarray,
+    ) -> numpy.ndarray:
+        """Standardize returns with the same EW measure used by the PCA."""
+        values = log_returns.to_numpy(dtype=numpy.float64)
+        if weights.shape != (len(values),):
+            raise ValueError("weights must contain one value per observation")
+        self.logReturnMean = numpy.sum(weights[:, None] * values, axis=0)
+        centered = values - self.logReturnMean
+        variance = numpy.sum(weights[:, None] * centered**2, axis=0)
+        if not numpy.isfinite(variance).all() or numpy.any(variance <= 0.0):
+            raise ValueError("PCA requires positive finite return variance")
+        self.logReturnScale = numpy.sqrt(variance)
+        return centered / self.logReturnScale
 
     def _getExponentialWeights(
         self,
@@ -164,15 +179,31 @@ class ReturnsPCAGrid(PCAGrid):
             raise ValueError("PCA requires positive return variance")
         self.lambdas = eigenvalues[: self.components]
         self.explained = self.lambdas / total_variance
-        self.loadings = loadings
+        self.loadings = self._canonicalizeLoadingSigns(loadings)
         self.factors = centered_returns @ self.loadings.T
         reconstructed_returns = self.pcaMean + self.factors @ self.loadings
         self.residuals = standardizedReturns - reconstructed_returns
-        self.residualScale = numpy.nanstd(self.residuals, axis=0, ddof=1)
+        residual_mean = numpy.sum(weights[:, None] * self.residuals, axis=0)
+        self.residualScale = numpy.sqrt(
+            numpy.sum(
+                weights[:, None] * (self.residuals - residual_mean) ** 2,
+                axis=0,
+            )
+        )
         self.maxAbsoluteZ = numpy.nanmax(
             numpy.abs(standardizedReturns),
             axis=0,
         )
+
+    @staticmethod
+    def _canonicalizeLoadingSigns(loadings: numpy.ndarray) -> numpy.ndarray:
+        """Choose deterministic eigenvector signs without changing the PCA."""
+        canonical = numpy.asarray(loadings, dtype=numpy.float64).copy()
+        pivots = numpy.argmax(numpy.abs(canonical), axis=1)
+        signs = numpy.sign(canonical[numpy.arange(len(canonical)), pivots])
+        signs[signs == 0.0] = 1.0
+        canonical *= signs[:, None]
+        return canonical
 
     def _fitObservationSpacePCA(
         self,

@@ -43,6 +43,9 @@ class _NativeBatchBuffers:
     offsets: numpy.ndarray = field(
         default_factory=lambda: numpy.empty(0, dtype=numpy.float32)
     )
+    problemSeeds: numpy.ndarray = field(
+        default_factory=lambda: numpy.empty(0, dtype=numpy.uint64)
+    )
     samples: numpy.ndarray = field(
         default_factory=lambda: numpy.empty(0, dtype=numpy.uint8)
     )
@@ -163,7 +166,7 @@ class SBMBQMSolver(BQMSolver):
         self.lastRunCounts = (parameters["runs"],) * len(problems)
         return [
             BQMOptimizationResult(
-                *self._selectBestCandidates(problem_candidates, problem.oneHotGroups)
+                *self._selectBestCandidates(problem_candidates, problem)
             )
             for problem, problem_candidates in zip(problems, candidates)
         ]
@@ -190,10 +193,11 @@ class SBMBQMSolver(BQMSolver):
                         candidate
                         if candidate is not None
                         and self._isValidOneHotSample(
-                            candidate[0], problem.oneHotGroups
+                            candidate[0], problem.iterOneHotGroups()
                         )
                         else None
                     ),
+                    "allCandidates": [] if candidate is None else [candidate],
                     "warm": warm,
                 }
             )
@@ -224,6 +228,7 @@ class SBMBQMSolver(BQMSolver):
                 prior_valid = state["bestValid"]
                 for sample, energy in candidates:
                     candidate = (tuple(int(value) for value in sample), float(energy))
+                    state["allCandidates"].append(candidate)
                     if (
                         state["bestOverall"] is None
                         or candidate[1] < state["bestOverall"][1]
@@ -231,7 +236,7 @@ class SBMBQMSolver(BQMSolver):
                         state["bestOverall"] = candidate
                     if self._isValidOneHotSample(
                         candidate[0],
-                        problems[index].oneHotGroups,
+                        problems[index].iterOneHotGroups(),
                     ) and (
                         state["bestValid"] is None
                         or candidate[1] < state["bestValid"][1]
@@ -260,8 +265,10 @@ class SBMBQMSolver(BQMSolver):
             round_index += 1
         self.lastRunCounts = tuple(int(state["runs"]) for state in states)
         return [
-            BQMOptimizationResult(*(state["bestValid"] or state["bestOverall"]))
-            for state in states
+            BQMOptimizationResult(
+                *self._selectBestCandidates(state["allCandidates"], problem)
+            )
+            for state, problem in zip(states, problems)
         ]
 
     def _nativeCandidates(
@@ -309,6 +316,9 @@ class SBMBQMSolver(BQMSolver):
             buffers.quadraticTails[quadratic_slice] = problem.quadraticTails
             buffers.quadraticBiases[quadratic_slice] = problem.quadraticBiases
             buffers.offsets[index] = problem.offset
+            buffers.problemSeeds[index] = (
+                int(seed) + problem.seedOffset
+            ) & ((1 << 64) - 1)
             warm_sample = initialSamples[index]
             buffers.warmFlags[index] = warm_sample is not None
             if warm_sample is not None:
@@ -325,7 +335,7 @@ class SBMBQMSolver(BQMSolver):
         error = ctypes.create_string_buffer(1024)
         library = self._loadLibrary()
 
-        status = library.sbm_solve_qubo_cpu_candidates_batch(
+        status = library.sbm_solve_qubo_cpu_candidates_seeded_batch(
             problem_count,
             self._pointer(variable_offsets, ctypes.c_size_t),
             self._pointer(linear, ctypes.c_float),
@@ -342,6 +352,10 @@ class SBMBQMSolver(BQMSolver):
             parameters["gamma"],
             parameters["initial_scale"],
             seed,
+            self._pointer(
+                buffers.problemSeeds[:problem_count],
+                ctypes.c_uint64,
+            ),
             self._pointer(buffers.warmSamples[:total_variables], ctypes.c_uint8),
             self._pointer(buffers.warmFlags[:problem_count], ctypes.c_uint8),
             parameters["topology_cache_bytes"],
@@ -371,6 +385,7 @@ class SBMBQMSolver(BQMSolver):
             ("quadraticTails", interactionCount, numpy.uint32),
             ("quadraticBiases", interactionCount, numpy.float32),
             ("offsets", offsetCount - 1, numpy.float32),
+            ("problemSeeds", offsetCount - 1, numpy.uint64),
             ("samples", sampleCount, numpy.uint8),
             ("energies", energyCount, numpy.float64),
             ("warmSamples", variableCount, numpy.uint8),
@@ -447,7 +462,7 @@ class SBMBQMSolver(BQMSolver):
         """Build a deterministic valid one-hot seed from linear biases."""
         sample = numpy.zeros(problem.variableCount, dtype=numpy.uint8)
         grouped = numpy.zeros(problem.variableCount, dtype=bool)
-        for group in problem.oneHotGroups:
+        for group in problem.iterOneHotGroups():
             variables = numpy.asarray(group, dtype=numpy.int64)
             selected = int(variables[numpy.argmin(problem.linear[variables])])
             sample[selected] = 1
@@ -536,7 +551,13 @@ class SBMBQMSolver(BQMSolver):
                 "build the sbm_python CMake target first"
             )
         library = ctypes.CDLL(str(self.libraryPath))
-        library.sbm_solve_qubo_cpu_candidates_batch.argtypes = [
+        try:
+            solve_batch = library.sbm_solve_qubo_cpu_candidates_seeded_batch
+        except AttributeError as error:
+            raise RuntimeError(
+                "SBM native library uses an older ABI; rebuild sbm_python"
+            ) from error
+        solve_batch.argtypes = [
             ctypes.c_size_t,
             ctypes.POINTER(ctypes.c_size_t),
             ctypes.POINTER(ctypes.c_float),
@@ -553,6 +574,7 @@ class SBMBQMSolver(BQMSolver):
             ctypes.c_float,
             ctypes.c_float,
             ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_uint64),
             ctypes.POINTER(ctypes.c_uint8),
             ctypes.POINTER(ctypes.c_uint8),
             ctypes.c_size_t,
@@ -561,7 +583,7 @@ class SBMBQMSolver(BQMSolver):
             ctypes.POINTER(ctypes.c_char),
             ctypes.c_size_t,
         ]
-        library.sbm_solve_qubo_cpu_candidates_batch.restype = ctypes.c_int
+        solve_batch.restype = ctypes.c_int
         return library
 
     @staticmethod
