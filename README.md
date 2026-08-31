@@ -15,6 +15,8 @@ rolling margin backtest with simulated bifurcation.
 - `tools/export_dwave_qubo.py` converts Ocean BQM/CQM files to the native format.
 - `synthetic_market/` contains the pre-generated market universes.
 - `tests/` contains focused backtesting and solver tests.
+- `docs/` contains the beginner manual, technical notes, and resource model.
+- `dashboards/` contains the interactive backtest and resource-planning dashboards.
 
 ## Python setup and backtesting
 
@@ -24,7 +26,12 @@ python -m unittest discover -s tests -v
 python src/backtest_orchestrator.py assets_00100
 ```
 
-See [BACKTESTING.md](BACKTESTING.md) for rolling backtest and GPU controls.
+See [BACKTESTING.md](docs/BACKTESTING.md) for rolling backtest and GPU controls.
+The longer [beginner manual](docs/manual.md) covers every command-line option.
+Analyze completed runs with the
+[backtest results dashboard](dashboards/BACKTEST_RESULTS_DASHBOARD.html), or plan
+hardware capacity with the
+[resource scaling dashboard](dashboards/RESOURCE_SCALING_DASHBOARD.html).
 
 ## Native simulated bifurcation
 
@@ -35,5 +42,5 @@ python tools/export_dwave_qubo.py model.bqm model.qubo
 build\sbm_solve.exe model.qubo
 ```
 
-See [SIMULATED_BIFURCATION.md](SIMULATED_BIFURCATION.md) for the QUBO format and
+See [SIMULATED_BIFURCATION.md](docs/SIMULATED_BIFURCATION.md) for the QUBO format and
 solver parameters.

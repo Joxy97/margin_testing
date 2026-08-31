@@ -127,6 +127,36 @@ the CPU.
 > deleted when the run starts. Use a new `--output` name or add `--resume` when
 > you want to preserve completed results.
 
+### Reading console progress
+
+Each date is shown as one block. The current implementation reads one client
+portfolio from `portfolio.csv`, so the header reports `Portfolios: 1`.
+
+```text
+========================================================================================
+DAY 1/258 | 2025-01-01 | cuda:0
+----------------------------------------------------------------------------------------
+Assets: 10,000 | Portfolios: 1 | Scenarios: 105 | Batches: 105 | Steps: 1000 | Runs: 16
+Method: qubo | Solver: cuda:0 | PCA: cuda:0 | Correlation: cuda:0
+----------------------------------------------------------------------------------------
+[cuda:0 2025-01-01] PCA completed in 2.31s | Factor scenarios enumerated: 105/105
+----------------------------------------------------------------------------------------
+[cuda:0 2025-01-01] Scenario 17/105 | data=0.08s | QUBO=1.12s | solve=2.44s |
+decode=0.03s |
+progress=17/105 (16.2%) | ETA=319.5s
+[cuda:0 2025-01-01] RESULT QUBO | margin=... | realized P&L=... | realized loss=... | SME=... |
+selected scenario=...
+----------------------------------------------------------------------------------------
+[cuda:0 2025-01-01] DAY COMPLETE | PCA=2.31s | scenario data=8.42s | QUBO build=118.69s |
+solve=258.13s | baseline=0.0000s | total=481.85s
+========================================================================================
+```
+
+Progress is reported after completed scenario batches and is throttled by
+`--progress-interval`. Consequently, batch size 1 gives the finest progress;
+a large packed batch cannot report its internal scenarios while its single
+solver call is still running.
+
 ## 5. Output files
 
 Unless `--output` is supplied, results go to:
@@ -280,6 +310,7 @@ conditional correlations, build QUBOs, or invoke simulated bifurcation.
 | `--backtest-end DATE` | last backtest row | Last evaluation date, inclusive. |
 | `--day-limit N` | all dates | Evaluate only the first `N` dates remaining after the date filters. Must be positive. Useful for testing. |
 | `--resume` | off | Keep existing output and skip dates already in its CSV. Without this flag, existing output and summary files are replaced. |
+| `--progress-interval SECONDS` | `10` | Print scenario progress, elapsed time, and an estimated time remaining at approximately this interval. Set it to `0` to disable progress lines. In multi-GPU runs every line includes its device and date. |
 
 ### Margin method
 
@@ -342,10 +373,10 @@ one setting at a time and keep the seed fixed.
 
 ### Interactive resource planner
 
-Open [RESOURCE_SCALING_DASHBOARD.html](RESOURCE_SCALING_DASHBOARD.html) in a
+Open [RESOURCE_SCALING_DASHBOARD.html](../dashboards/RESOURCE_SCALING_DASHBOARD.html) in a
 browser to explore how assets, z-bins, top-k neighbors, reciprocal nominations,
 scenario/run batching, dtype, GPU count, VRAM, and system RAM change the
-estimated problem capacity. Its memory model follows RESOURCE_ESTIMATION.tex.
+estimated problem capacity. Its memory model follows `RESOURCE_ESTIMATION.tex`.
 Solve time is deliberately calibration-driven: replace the bundled small
 diagnostic reference with a representative one-scenario measurement from the
 target GPU before relying on a large-universe projection.

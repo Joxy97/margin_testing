@@ -175,6 +175,7 @@ class BacktestConfig:
     seed: int = 1
     day_limit: int | None = None
     resume: bool = False
+    progress_interval: float = 10.0
     evaluation_dates: tuple[str, ...] | None = None
     sbm: SBMConfig = SBMConfig()
 
@@ -213,6 +214,8 @@ class BacktestConfig:
             raise ValueError("pca_dtype must be float32 or float64")
         if self.day_limit is not None and self.day_limit < 1:
             raise ValueError("day_limit must be positive")
+        if not math.isfinite(self.progress_interval) or self.progress_interval < 0:
+            raise ValueError("progress_interval must be finite and non-negative")
         if self.scenario_indices is not None and not self.scenario_indices:
             raise ValueError("scenario_indices cannot be empty")
         if self.method not in {"qubo", "baseline", "both"}:
@@ -872,6 +875,9 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
         raise ValueError(
             f"scenario indices must be in [0, {all_scenario_count - 1}]: {invalid}"
         )
+    scenario_batch_count = math.ceil(
+        len(scenario_indices) / config.scenario_batch_size
+    )
 
     for day_position, date in enumerate(market.evaluation_dates):
         date_text = pd.Timestamp(date).date().isoformat()
@@ -879,6 +885,27 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             print(f"[{day_position + 1}/{len(market.evaluation_dates)}] {date_text}: resumed")
             continue
         day_started = time.perf_counter()
+        progress_context = f"[{resolved_device} {date_text}]"
+        if config.progress_interval > 0:
+            print(
+                "\n".join(
+                    (
+                        "=" * 88,
+                        f"DAY {day_position + 1}/{len(market.evaluation_dates)} | "
+                        f"{date_text} | {resolved_device}",
+                        "-" * 88,
+                        f"Assets: {len(market.tickers):,} | Portfolios: 1 | "
+                        f"Scenarios: {len(scenario_indices)} | "
+                        f"Batches: {scenario_batch_count} | "
+                        f"Steps: {config.sbm.steps if run_qubo else 0} | "
+                        f"Runs: {config.sbm.runs if run_qubo else 0}",
+                        f"Method: {config.method} | Solver: {resolved_device} | "
+                        f"PCA: {pca_device} | Correlation: {correlation_device}",
+                        "-" * 88,
+                    )
+                ),
+                flush=True,
+            )
         resources = ResourceMonitor(resolved_device)
         resources.start()
         prior = market.log_returns.loc[market.log_returns.index < date].tail(config.window)
@@ -893,6 +920,13 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
         _, scenario_grid, _ = build_scenario_grid(pca, config.grid_points, 1.0)
         shock_context = prepare_shock_grid_context(prepared, pca, config.window)
         pca_seconds = time.perf_counter() - pca_started
+        if config.progress_interval > 0:
+            print(
+                f"{progress_context} PCA completed in {pca_seconds:.2f}s | "
+                f"Factor scenarios enumerated: {len(scenario_indices)}/{len(scenario_indices)}",
+                flush=True,
+            )
+            print("-" * 88, flush=True)
 
         best_qubo: tuple[float, int, float, int] | None = None
         best_baseline: tuple[float, int] | None = None
@@ -901,8 +935,11 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
         solve_seconds = 0.0
         decode_seconds = 0.0
         baseline_seconds = 0.0
-        for scenario_batch in _scenario_batches(
-            scenario_indices, config.scenario_batch_size
+        scenario_progress_started = time.perf_counter()
+        last_progress_report = scenario_progress_started
+        completed_scenarios = 0
+        for batch_position, scenario_batch in enumerate(
+            _scenario_batches(scenario_indices, config.scenario_batch_size), start=1
         ):
             scenario_started = time.perf_counter()
             if config.build_workers == 1:
@@ -934,17 +971,47 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                             scenario_batch,
                         )
                     )
-            scenario_build_seconds += time.perf_counter() - scenario_started
+            batch_scenario_seconds = time.perf_counter() - scenario_started
+            scenario_build_seconds += batch_scenario_seconds
 
+            batch_baseline_seconds = 0.0
             if run_baseline:
                 baseline_started = time.perf_counter()
                 for data in scenario_data:
                     candidate = (greedy_baseline_pnl(data), data.scenario_index)
                     if best_baseline is None or candidate[0] < best_baseline[0]:
                         best_baseline = candidate
-                baseline_seconds += time.perf_counter() - baseline_started
+                batch_baseline_seconds = time.perf_counter() - baseline_started
+                baseline_seconds += batch_baseline_seconds
 
             if not run_qubo:
+                completed_scenarios += len(scenario_batch)
+                progress_now = time.perf_counter()
+                if config.progress_interval > 0 and (
+                    completed_scenarios == len(scenario_indices)
+                    or progress_now - last_progress_report >= config.progress_interval
+                ):
+                    progress_elapsed = progress_now - scenario_progress_started
+                    progress_rate = completed_scenarios / max(progress_elapsed, 1e-12)
+                    progress_eta = (
+                        len(scenario_indices) - completed_scenarios
+                    ) / progress_rate
+                    scenario_label = (
+                        f"Scenario {scenario_batch[0] + 1}/{all_scenario_count}"
+                        if len(scenario_batch) == 1
+                        else f"Batch {batch_position}/{scenario_batch_count} "
+                        f"({len(scenario_batch)} scenarios)"
+                    )
+                    print(
+                        f"{progress_context} {scenario_label} | "
+                        f"data={batch_scenario_seconds:.2f}s | "
+                        f"baseline={batch_baseline_seconds:.4f}s | "
+                        f"progress={completed_scenarios}/{len(scenario_indices)} "
+                        f"({100.0 * completed_scenarios / len(scenario_indices):.1f}%) | "
+                        f"elapsed={progress_elapsed:.1f}s | ETA={progress_eta:.1f}s",
+                        flush=True,
+                    )
+                    last_progress_report = progress_now
                 del scenario_data
                 continue
 
@@ -972,7 +1039,8 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                             scenario_data,
                         )
                     )
-            build_seconds += time.perf_counter() - batch_build_started
+            batch_build_seconds = time.perf_counter() - batch_build_started
+            build_seconds += batch_build_seconds
             seeds = [
                 (
                     config.seed
@@ -987,7 +1055,8 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             solved: list[SBMSolveResult] = solver.solve_batch(
                 [problem.bqm for problem in problems], config.sbm, seeds
             )
-            solve_seconds += sum(result.solve_seconds for result in solved)
+            batch_solve_seconds = sum(result.solve_seconds for result in solved)
+            solve_seconds += batch_solve_seconds
             decode_started = time.perf_counter()
             for problem, result in zip(problems, solved):
                 decoded, violations, decoded_energy = repair_one_hot(
@@ -1005,8 +1074,37 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                 )
                 if best_qubo is None or candidate[0] < best_qubo[0]:
                     best_qubo = candidate
-            decode_seconds += time.perf_counter() - decode_started
+            batch_decode_seconds = time.perf_counter() - decode_started
+            decode_seconds += batch_decode_seconds
             del scenario_data, problems, solved
+            completed_scenarios += len(scenario_batch)
+            progress_now = time.perf_counter()
+            if config.progress_interval > 0 and (
+                completed_scenarios == len(scenario_indices)
+                or progress_now - last_progress_report >= config.progress_interval
+            ):
+                progress_elapsed = progress_now - scenario_progress_started
+                progress_rate = completed_scenarios / max(progress_elapsed, 1e-12)
+                progress_eta = (
+                    len(scenario_indices) - completed_scenarios
+                ) / progress_rate
+                scenario_label = (
+                    f"Scenario {scenario_batch[0] + 1}/{all_scenario_count}"
+                    if len(scenario_batch) == 1
+                    else f"Batch {batch_position}/{scenario_batch_count} "
+                    f"({len(scenario_batch)} scenarios)"
+                )
+                print(
+                    f"{progress_context} {scenario_label} | "
+                    f"data={batch_scenario_seconds:.2f}s | "
+                    f"QUBO={batch_build_seconds:.2f}s | solve={batch_solve_seconds:.2f}s | "
+                    f"decode={batch_decode_seconds:.2f}s | "
+                    f"progress={completed_scenarios}/{len(scenario_indices)} "
+                    f"({100.0 * completed_scenarios / len(scenario_indices):.1f}%) | "
+                    f"ETA={progress_eta:.1f}s",
+                    flush=True,
+                )
+                last_progress_report = progress_now
 
         if run_qubo and best_qubo is None:  # pragma: no cover
             raise RuntimeError("no QUBO scenario was solved")
@@ -1072,14 +1170,24 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             _append_result(config.output, row)
             output_rows.append(row)
             print(
-                f"[{day_position + 1}/{len(market.evaluation_dates)}] {date_text} "
-                f"{method}: margin={margin:.8g} realized={realized_pnl:.8g} "
-                f"error={signed_error:.8g} scenario={selected_scenario} "
-                f"time={method_day_seconds:.2f}s",
+                f"{progress_context} RESULT {method.upper()} | margin={margin:.8g} | "
+                f"realized P&L={realized_pnl:.8g} | "
+                f"realized loss={-realized_pnl:.8g} | SME={signed_error:.8g} | "
+                f"selected scenario={selected_scenario} | time={method_day_seconds:.2f}s",
                 flush=True,
             )
 
-        scenario_batches = math.ceil(len(scenario_indices) / config.scenario_batch_size)
+        if config.progress_interval > 0:
+            print("-" * 88, flush=True)
+            print(
+                f"{progress_context} DAY COMPLETE | PCA={pca_seconds:.2f}s | "
+                f"scenario data={scenario_build_seconds:.2f}s | "
+                f"QUBO build={build_seconds:.2f}s | solve={solve_seconds:.2f}s | "
+                f"baseline={baseline_seconds:.4f}s | total={actual_day_seconds:.2f}s",
+                flush=True,
+            )
+            print("=" * 88, flush=True)
+
         effective_run_batch_size = (
             min(config.sbm.run_batch_size or config.sbm.runs, config.sbm.runs)
             if run_qubo
@@ -1095,7 +1203,7 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             "assets": len(market.tickers),
             "scenarios": len(scenario_indices),
             "scenario_batch_size": config.scenario_batch_size,
-            "scenario_batches": scenario_batches,
+            "scenario_batches": scenario_batch_count,
             "build_workers": config.build_workers,
             "steps": config.sbm.steps if run_qubo else 0,
             "runs": config.sbm.runs if run_qubo else 0,
@@ -1291,6 +1399,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--day-limit", type=int)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        help="Minimum seconds between scenario progress lines; 0 disables them.",
+    )
     return parser
 
 
@@ -1331,6 +1446,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         seed=args.seed,
         day_limit=args.day_limit,
         resume=args.resume,
+        progress_interval=args.progress_interval,
         sbm=SBMConfig(
             steps=args.steps,
             runs=args.runs,
