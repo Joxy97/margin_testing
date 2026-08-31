@@ -18,6 +18,7 @@ python -m pip install -r requirements.txt
 PYTHONPATH=src python -m margin_engine config/margin.example.yaml
 PYTHONPATH=src python -m margin_engine config/options.example.yaml
 python run_backtest.py config/backtests/assets_00010.yaml
+python run_backtest.py config/backtests/assets_00010.yaml --resume
 python plot_backtest.py backtest_results/<portfolio>/breaches.csv
 ```
 
@@ -81,16 +82,17 @@ MarginEngine
        |-> StateAwareGreedyMarginCalculator
        |    -> StateAwareGreedyRiskStateVisitor dispatches by risk-state type
        `-> BQMMarginCalculator
+            |-> optional paired greedy comparison on the same state iterator
             -> PortfolioRiskStateBQMVisitor encodes QUBO
             -> BQMExecutionPolicy schedules one or many QUBOs
             -> BQMSolver solves them
             -> manager decodes the greatest loss
-  -> MarginReport (margin plus stage timings)
+  -> MarginReport (margin, paired comparison margins, and stage timings)
 ```
 
 `MarginApplicationConfig` in `src/margin_engine/yaml_application.py` is the public YAML composition boundary. It converts primitive, safely loaded YAML into typed configs and runtime collaborators. `MarginEngineConfig` then constructs an independent pipeline; avoid hidden global runtime state.
 
-Backtesting calls only the public `MarginEngine` methods. It prefetches the union of required dates, calculates a daily margin, obtains realized prices, computes close-to-close realized P&L for each configured date, classifies breaches, and reports Basel traffic-light statistics. `run_backtest.py` writes CSV reports; `plot_backtest.py` renders a non-interactive PNG.
+Backtesting calls only the public `MarginEngine` methods. It prefetches the union of required dates, calculates a daily margin, obtains realized prices, computes close-to-close realized P&L for each configured date, classifies breaches, and reports exact binomial coverage statistics. `run_backtest.py` snapshots the YAML, writes an experiment manifest, and stores atomic per-day checkpoints beneath `.checkpoints`; pass `--resume` to reuse checkpoints whose canonical request and configured-local-input fingerprint matches. Preparation time is reported separately from per-day acquisition time. `plot_backtest.py` renders a non-interactive PNG.
 
 ## Repository Map
 
@@ -103,7 +105,7 @@ Backtesting calls only the public `MarginEngine` methods. It prefetches the unio
 - `src/cache/`: small generic cache abstractions used by market data, PCA grids, and QUBO topology caches.
 - `src/risk_state_generator/`: exponentially weighted PCA, shock-grid construction, optional cross-asset compatibility/correlation factors, and portfolio risk-state visitors.
 - `src/margin_calculator/`: greedy and BQM margin strategies, compact QUBO representation, execution policies, and solver adapters.
-- `src/backtesting/`: rolling evaluation, breach/Basel results, timing data, and CSV output.
+- `src/backtesting/`: rolling evaluation, breach/Basel results, exact coverage p-values, timing data, checkpoints, and CSV output.
 - `src/sbm/`, `include/sbm/`: native C++17 simulated-bifurcation model, solvers, CLI, and Python C ABI bridge.
 - `cuda/`: optional CUDA solver backend.
 - `fpga/`: Vitis HLS kernel and declarations; the default C++ build includes a software simulation.
@@ -122,16 +124,20 @@ Core services communicate with application types rather than third-party types. 
 
 ### Lazy and memory-aware processing
 
-Risk states and encoded problems are iterators so large scenario spaces need not be fully materialized. Preserve streaming behavior. Use `BatchBQMExecutionPolicy` and its `batchSize`, `maxBatchBytes`, and `memoryMultiplier` controls for bounded batching. Compact QUBOs use contiguous numeric arrays, and reusable one-hot topology is cached by state shape and penalty.
+Risk states and encoded problems are iterators so large scenario spaces need not be fully materialized. Preserve streaming behavior. Use `BatchBQMExecutionPolicy` and its `batchSize`, `maxBatchBytes`, and `memoryMultiplier` controls for bounded batching. Compact QUBOs use contiguous numeric arrays and one-hot `groupOffsets`; the tuple-based `oneHotGroups` view is a compatibility boundary. Reusable one-hot topology is cached by state shape and penalty.
 
 ### Explicit constraints and deterministic decoding
 
-Each asset contributes one one-hot group to a QUBO. Solvers should prefer valid samples. Decoding defensively handles invalid heuristic output by choosing a deterministic worst candidate for missing or multiply selected states. Do not silently change this behavior: constraint selection directly affects calculated margin.
+Each asset contributes one one-hot group to a QUBO. Candidate selection first chooses the lowest-energy feasible sample. If no feasible sample exists, every returned candidate is projected and improved by deterministic categorical descent using the full QUBO, then rescored in float64. Decoding retains a deterministic defensive fallback for results supplied outside the solver path. Stable QUBO identity seeds make results independent of execution-policy batch boundaries and Torch device shards.
 
 ### Numerical and temporal correctness
 
 - Margin and reported loss are non-negative; portfolio return/P&L can be signed.
 - Market-data ranges are inclusive, dates must be unique where consumed, and instrument ordering must remain stable across requests, arrays, QUBO variables, samples, and decoding.
+- Portfolio instruments use canonical lexical order, and repeated long-form CSV positions are summed before risk generation.
+- Returns are standardized by exponentially weighted mean and variance under the same normalized weights used for PCA covariance. Eigenvector signs are canonicalized.
+- Correlation compatibility uses the undirected union of directed top-k nominations and a symmetric bivariate-Gaussian/Mahalanobis penalty.
+- Empty return-bin fallback is opt-in; generated dense grids expose `fallbackAssetMask` so fallback use is auditable.
 - Validate shapes, finite values, binary samples, one-hot group indices, date bounds, and nonzero price denominators at public boundaries.
 - Preserve exact QUBO energy semantics: `offset + linear @ x + sum(bias * x[head] * x[tail])`.
 - Backtests must not bypass `MarginEngine` storage/acquisition APIs or introduce look-ahead data into risk-state generation.
@@ -164,6 +170,7 @@ The root YAML contains `marginDate`, `portfolio`, `engine`, and optionally `back
 - Risk generators are `returns_vola_grid` and `correlated_returns_vola_grid`.
 - Risk generator `option_scenarios` creates shared underlying-price/volatility stresses for one-symbol derivative portfolios.
 - Margin calculators are `greedy`, `state_aware_greedy`, and `bqm`.
+- A `bqm` calculator may define `comparison: {type: state_aware_greedy, pnlAnchor: market}` to compute a paired greedy margin from the exact same lazy risk-state stream.
 - BQM execution policies are `sequential` and `batch`.
 - Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, and `adaptive_torch_sbm`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
 
@@ -204,7 +211,7 @@ Keep contract identity in `portfolio.derivatives`, valuation formulas and market
 
 ### Add a BQM solver
 
-Subclass `BQMSolver`, return `BQMOptimizationResult`, and override `solveMany` only when real batching is supported. Respect variable ordering, original QUBO energy, binary output, `oneHotGroups`, series lifecycle hooks, and the constructor/solve parameter split. Register a stable snake-case name with `BQMSolverFactory`, export the module so registration occurs, add factory and deterministic energy tests, and add YAML coverage. A solver must not mutate `QUBOProblem` arrays.
+Subclass `BQMSolver`, return `BQMOptimizationResult`, and override `solveMany` only when real batching is supported. Respect variable ordering, original QUBO energy, binary output, `iterOneHotGroups()`, stable `seedOffset`, series lifecycle hooks, and the constructor/solve parameter split. Register a stable snake-case name with `BQMSolverFactory`, export the module so registration occurs, add factory and deterministic energy tests, and add YAML coverage. A solver must not mutate `QUBOProblem` arrays.
 
 ### Change native SBM code
 

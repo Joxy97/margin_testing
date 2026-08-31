@@ -23,12 +23,19 @@ class DenseReturnsVolaGrid(Mapping[Instrument, numpy.ndarray]):
         instruments: tuple[Instrument, ...],
         values: numpy.ndarray,
         validStateMask: numpy.ndarray,
+        fallbackAssetMask: numpy.ndarray | None = None,
     ) -> None:
         instrument_order = tuple(instruments)
         if len(set(instrument_order)) != len(instrument_order):
             raise ValueError("grid instruments must be unique")
         dense_values = numpy.ascontiguousarray(values, dtype=float)
         valid_mask = numpy.ascontiguousarray(validStateMask, dtype=bool)
+        fallback_mask = numpy.ascontiguousarray(
+            numpy.zeros(len(instrument_order), dtype=bool)
+            if fallbackAssetMask is None
+            else fallbackAssetMask,
+            dtype=bool,
+        )
         if dense_values.ndim != 3 or dense_values.shape[2] != 2:
             raise ValueError(
                 "dense return-volatility values must have shape "
@@ -38,6 +45,8 @@ class DenseReturnsVolaGrid(Mapping[Instrument, numpy.ndarray]):
             raise ValueError("validStateMask must match the asset/state shape")
         if dense_values.shape[0] != len(instrument_order):
             raise ValueError("dense values must contain one row per instrument")
+        if fallback_mask.shape != (len(instrument_order),):
+            raise ValueError("fallbackAssetMask must contain one value per asset")
         if not numpy.isfinite(dense_values[valid_mask]).all():
             raise ValueError("valid return-volatility states must be finite")
 
@@ -62,11 +71,13 @@ class DenseReturnsVolaGrid(Mapping[Instrument, numpy.ndarray]):
         valid_mask.setflags(write=False)
         state_counts.setflags(write=False)
         return_bounds.setflags(write=False)
+        fallback_mask.setflags(write=False)
         self.instruments = instrument_order
         self.gridValues = dense_values
         self.validStateMask = valid_mask
         self.stateCounts = state_counts
         self.returnBounds = return_bounds
+        self.fallbackAssetMask = fallback_mask
         self._instrumentIndices: dict[Instrument, int] | None = None
 
     @classmethod

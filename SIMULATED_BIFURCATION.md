@@ -99,8 +99,10 @@ solver:
 
 The solver divides each ordered batch into contiguous, approximately equal
 problem-count shards and executes one shard per GPU concurrently. Results are
-restored to input order, and per-problem random seeds within a submitted batch
-do not change when that batch is split across devices. A batch with fewer
+restored to input order. Every `QUBOProblem` carries a stable identity-derived
+seed offset, so its trajectories do not change when execution-policy batch
+boundaries or device shards change. The native C ABI likewise accepts one seed
+per problem while retaining batched execution. A batch with fewer
 problems than devices uses only as many GPUs as it has problems. Devices must
 be unique and explicitly indexed; `device` and `devices` cannot be configured
 together. For a multi-device solver, `maxBatchBytes` is applied per concurrent
@@ -128,13 +130,15 @@ PyTorch implementation and the bSB/dSB literature:
 - a pressure-slope schedule and optional heated dynamics;
 - periodic per-agent Ising-energy monitoring, best-state retention, and early
   stopping after energies remain stable;
-- exact float64 QUBO scoring followed by coordinate descent that repairs and
-  preserves every declared one-hot group.
+- exact float64 QUBO scoring followed by coordinate descent that preserves
+  every declared one-hot group.
 
-The last step is application-specific: SB remains an unconstrained heuristic,
-so a low-energy terminal state is not guaranteed to satisfy one-hot groups.
-The repair/polish step makes that constraint explicit without adding it to the
-general SBM dynamics.
+SB remains an unconstrained heuristic, so a low-energy terminal state is not
+guaranteed to satisfy one-hot groups. Candidate selection shared by all BQM
+solvers chooses the best feasible trajectory when one exists. Otherwise it
+repairs every trajectory by categorical descent against the full QUBO and
+rescoring; the adaptive solver can additionally polish an already feasible
+answer.
 
 ```yaml
 solver:
