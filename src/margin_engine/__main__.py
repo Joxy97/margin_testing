@@ -25,8 +25,10 @@ def main() -> None:
             name: {
                 "violations": result.violations,
                 "baselProbability": result.baselProbability,
+                "coveragePValue": result.coveragePValue,
                 "baselColor": result.baselColor.value,
                 "confidenceLevel": result.confidenceLevel,
+                "preparationSeconds": result.preparationSeconds,
                 "dailyResults": [
                     {
                         "date": daily.date.isoformat(),
@@ -34,6 +36,9 @@ def main() -> None:
                         "realizedPnL": daily.realizedPnL,
                         "grossExposure": daily.grossExposure,
                         "marginPercent": daily.marginPercent,
+                        "marginError": daily.marginError,
+                        "shortfall": daily.shortfall,
+                        "comparisonMargins": dict(daily.comparisonMargins),
                         "breach": daily.breach,
                     }
                     for daily in result.dailyResults
@@ -48,6 +53,7 @@ def main() -> None:
         yaml.safe_dump(
             {
                 "margin": report.margin,
+                "comparisonMargins": dict(report.comparisonMargins),
             },
             sort_keys=False,
         ),

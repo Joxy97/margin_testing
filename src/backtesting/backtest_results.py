@@ -42,6 +42,14 @@ class DailyBacktestResult:
     marginPercent: float
     breach: bool
     timings: DailyBacktestTimings = DailyBacktestTimings()
+    comparisonMargins: Mapping[str, float] = MappingProxyType({})
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "comparisonMargins",
+            MappingProxyType(dict(self.comparisonMargins)),
+        )
 
     @property
     def realizedLoss(self) -> float:
@@ -50,6 +58,15 @@ class DailyBacktestResult:
     @property
     def covered(self) -> bool:
         return not self.breach
+
+    @property
+    def marginError(self) -> float:
+        """Return positive coverage cushion or negative breach shortfall."""
+        return self.margin - self.realizedLoss
+
+    @property
+    def shortfall(self) -> float:
+        return max(0.0, -self.marginError)
 
 
 @dataclass(frozen=True)
@@ -60,8 +77,10 @@ class BacktestResults:
     dailyResults: tuple[DailyBacktestResult, ...]
     violations: int
     baselProbability: float
+    coveragePValue: float
     baselColor: BaselColor
     confidenceLevel: float
+    preparationSeconds: float = 0.0
 
     @property
     def days(self) -> int:

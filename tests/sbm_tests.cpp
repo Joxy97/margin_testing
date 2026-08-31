@@ -85,6 +85,34 @@ void test_cpu_candidate_batch_solver() {
     }
 }
 
+void test_cpu_candidate_batch_uses_explicit_problem_seeds() {
+    const std::vector<sbm::IsingModel> models{
+        sbm::to_ising(example()), sbm::to_ising(example())};
+    const std::vector<std::uint64_t> seeds{101, 202};
+    sbm::SolverParameters parameters;
+    parameters.steps = 40;
+    parameters.runs = 3;
+
+    const auto batches = sbm::solve_cpu_ising_candidates_batch(
+        models, parameters, {}, seeds);
+
+    for (std::size_t problem = 0; problem < models.size(); ++problem) {
+        auto local = parameters;
+        local.seed = seeds[problem];
+        const auto single = sbm::solve_cpu_ising_candidates(
+            models[problem], local);
+        require(batches[problem].size() == single.size(),
+                "explicit problem seeds changed candidate count");
+        for (std::size_t run = 0; run < single.size(); ++run) {
+            require(batches[problem][run].sample == single[run].sample,
+                    "batch position changed an explicit problem seed");
+            require(std::abs(batches[problem][run].energy - single[run].energy)
+                        < 1e-12,
+                    "explicit problem seed changed candidate energy");
+        }
+    }
+}
+
 void test_maxcut_qubo_equivalence() {
     const sbm::maxcut::Graph graph{
         3, {{0, 1, 2.0}, {1, 2, 3.0}, {0, 2, 1.0}}};
@@ -119,6 +147,7 @@ int main() {
         test_cpu_solver();
         test_cpu_batch_solver();
         test_cpu_candidate_batch_solver();
+        test_cpu_candidate_batch_uses_explicit_problem_seeds();
 #ifdef SBM_HAS_FPGA_SIM
         test_fpga_sim_solver();
 #endif

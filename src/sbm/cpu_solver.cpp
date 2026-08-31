@@ -263,10 +263,14 @@ std::vector<std::vector<SolverResult>> solve_cpu_candidates_batch(
 
 std::vector<std::vector<SolverResult>> solve_cpu_ising_candidates_batch(
     const std::vector<IsingModel>& models, const SolverParameters& parameters,
-    const std::vector<std::vector<std::uint8_t>>& initial_samples) {
+    const std::vector<std::vector<std::uint8_t>>& initial_samples,
+    const std::vector<std::uint64_t>& problem_seeds) {
     if (models.empty()) return {};
     if (!initial_samples.empty() && initial_samples.size() != models.size()) {
         throw std::invalid_argument("warm-start batch size does not match models");
+    }
+    if (!problem_seeds.empty() && problem_seeds.size() != models.size()) {
+        throw std::invalid_argument("problem-seed batch size does not match models");
     }
     std::vector<std::vector<SolverResult>> results(models.size());
     static const std::vector<std::uint8_t> empty_initial;
@@ -281,8 +285,11 @@ std::vector<std::vector<SolverResult>> solve_cpu_ising_candidates_batch(
 #endif
         for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(models.size()); ++i) {
             auto local_parameters = parameters;
-            local_parameters.seed +=
-                0xd1b54a32d192ed03ULL * static_cast<std::uint64_t>(i);
+            local_parameters.seed = problem_seeds.empty()
+                                        ? parameters.seed
+                                              + 0xd1b54a32d192ed03ULL
+                                                    * static_cast<std::uint64_t>(i)
+                                        : problem_seeds[i];
             const auto& initial = initial_samples.empty()
                                       ? empty_initial
                                       : initial_samples[i];
@@ -292,7 +299,10 @@ std::vector<std::vector<SolverResult>> solve_cpu_ising_candidates_batch(
     } else {
         for (std::size_t i = 0; i < models.size(); ++i) {
             auto local_parameters = parameters;
-            local_parameters.seed += 0xd1b54a32d192ed03ULL * i;
+            local_parameters.seed = problem_seeds.empty()
+                                        ? parameters.seed
+                                              + 0xd1b54a32d192ed03ULL * i
+                                        : problem_seeds[i];
             const auto& initial = initial_samples.empty()
                                       ? empty_initial
                                       : initial_samples[i];

@@ -53,6 +53,10 @@ engine:
 
   marginCalculator:
     type: bqm
+    # Evaluate the greedy baseline while consuming this exact risk-state stream.
+    comparison:
+      type: state_aware_greedy
+      pnlAnchor: market
     modelParameters:
       lambdaOneHot: 2.0
       lambdaCompat: 0.1

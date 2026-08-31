@@ -1,16 +1,16 @@
-# MarginLab-equivalent synthetic-market rolling backtest.
+# Full CPU backtest for the ten-asset synthetic market.
 marginDate: 2025-01-01
 
 portfolio:
-  csv: ../../synthetic_market/assets_05000/portfolio.csv
+  csv: ../../synthetic_market/assets_00010/portfolio.csv
   clientId: synthetic_0000
   cash: "0"
 
 backtest:
   confidenceLevel: 0.998
-  outputDirectory: ../../backtest_results/torch_sbm/assets_05000
+  outputDirectory: ../../backtest_results/full/assets_00010
   datesFromCsv:
-    path: ../../synthetic_market/assets_05000/backtest_close.csv
+    path: ../../synthetic_market/assets_00010/backtest_close.csv
     startDate: 2025-01-01
     endDate: 2025-12-26
 
@@ -24,8 +24,8 @@ engine:
     downloadParameters: {}
     requestParameters:
       locations:
-        - ../../synthetic_market/assets_05000/historical_close.csv
-        - ../../synthetic_market/assets_05000/backtest_close.csv
+        - ../../synthetic_market/assets_00010/historical_close.csv
+        - ../../synthetic_market/assets_00010/backtest_close.csv
 
   dataManager:
     cacheType: lru
@@ -67,17 +67,25 @@ engine:
       maxBatchBytes: 536870912
       memoryMultiplier: 3.0
     solver:
-      type: torch_sbm
+      type: adaptive_torch_sbm
       constructorParameters:
-        devices: [cuda:0, cuda:1, cuda:2, cuda:3, cuda:4, cuda:5, cuda:6, cuda:7]
+        device: cpu
       solverParameters:
         steps: 1000
         runs: 16
+        mode: discrete
         dt: 0.1
         a0: 1.0
         c0: 0.02
         gamma: 0.0
         initial_scale: 0.1
+        pressure_slope: 0.01
+        heated: false
+        early_stopping: true
+        sampling_period: 30
+        convergence_threshold: 5
+        track_best: true
+        local_search_sweeps: 1
         seed: 20260603
         dtype: float32
         run_batch_size: null

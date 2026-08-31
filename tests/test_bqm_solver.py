@@ -294,10 +294,7 @@ class BQMSolverTest(unittest.TestCase):
         self.assertEqual(calls[0][:2], ("cuda:0", [0, 1, 2]))
         self.assertEqual(calls[1][:2], ("cuda:1", [3, 4]))
         self.assertEqual(calls[0][2], 17)
-        self.assertEqual(
-            calls[1][2],
-            (17 + 3 * 0x0D1B54A32D192ED03) % ((1 << 63) - 1),
-        )
+        self.assertEqual(calls[1][2], 17)
 
     def test_adaptive_torch_sbm_creates_adaptive_device_workers(self) -> None:
         solver = AdaptiveTorchSBMBQMSolver(devices=["cuda:0", "cuda:1"])
@@ -514,6 +511,41 @@ class BQMSolverTest(unittest.TestCase):
         self.assertEqual(tuple(together.sample), tuple(split.sample))
         self.assertAlmostEqual(together.energy, split.energy, places=12)
 
+    @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
+    def test_torch_sbm_problem_batching_preserves_identity_seed(self) -> None:
+        problems = [
+            QUBOProblem(
+                numpy.array([-0.7, 0.2, -0.1]),
+                numpy.array([0, 1], dtype=numpy.uint32),
+                numpy.array([1, 2], dtype=numpy.uint32),
+                numpy.array([0.5 + shift, -0.4]),
+            )
+            for shift in (0.0, 0.2)
+        ]
+        parameters = {
+            "steps": 25,
+            "runs": 3,
+            "dt": 0.1,
+            "dtype": "float64",
+            "seed": 13,
+        }
+
+        together = TorchSBMBQMSolver("cpu").solveMany(problems, parameters)
+        separate = [
+            TorchSBMBQMSolver("cpu").solve(problem, parameters)
+            for problem in problems
+        ]
+
+        self.assertEqual(
+            [tuple(result.sample) for result in together],
+            [tuple(result.sample) for result in separate],
+        )
+        numpy.testing.assert_allclose(
+            [result.energy for result in together],
+            [result.energy for result in separate],
+            atol=1e-12,
+        )
+
     def test_numeric_qubo_arrays_are_immutable(self) -> None:
         problem = QUBOProblem(
             numpy.array([-1.0]),
@@ -524,6 +556,62 @@ class BQMSolverTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             problem.linear[0] = 2.0
+
+    def test_qubo_compact_offsets_preserve_legacy_group_view(self) -> None:
+        problem = QUBOProblem(
+            numpy.zeros(5),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([]),
+            groupOffsets=numpy.array([0, 2, 5]),
+        )
+
+        self.assertEqual(problem.oneHotGroups, ((0, 1), (2, 3, 4)))
+        numpy.testing.assert_array_equal(problem.groupOffsets, [0, 2, 5])
+        with self.assertRaises(ValueError):
+            problem.groupOffsets[1] = 3
+
+    def test_infeasible_candidates_are_repaired_with_full_qubo_energy(self) -> None:
+        problem = QUBOProblem(
+            numpy.zeros(4),
+            numpy.array([0, 0, 1, 1], dtype=numpy.uint32),
+            numpy.array([2, 3, 2, 3], dtype=numpy.uint32),
+            numpy.array([100.0, 0.0, 0.0, 5.0]),
+            groupOffsets=numpy.array([0, 2, 4]),
+        )
+
+        sample, energy = StubBQMSolver._selectBestCandidates(
+            [((1, 1, 1, 1), -1_000.0), ((0, 0, 0, 0), -2_000.0)],
+            problem,
+        )
+
+        self.assertEqual(sum(sample[:2]), 1)
+        self.assertEqual(sum(sample[2:]), 1)
+        self.assertAlmostEqual(energy, problem.energy(sample))
+        self.assertEqual(energy, 0.0)
+
+    def test_problem_seed_is_stable_for_identity_not_batch_position(self) -> None:
+        first = QUBOProblem(
+            numpy.array([-1.0]),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([]),
+        )
+        same = QUBOProblem(
+            numpy.array([-1.0]),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([]),
+        )
+        different = QUBOProblem(
+            numpy.array([-2.0]),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([], dtype=numpy.uint32),
+            numpy.array([]),
+        )
+
+        self.assertEqual(first.seedOffset, same.seedOffset)
+        self.assertNotEqual(first.seedOffset, different.seedOffset)
 
     def test_base_solver_is_abstract(self) -> None:
         with self.assertRaises(TypeError):

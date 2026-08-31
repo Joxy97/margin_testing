@@ -25,7 +25,7 @@ class ReturnsVolaGridRiskStateGeneratorConfig:
     nZBins: int = 21
     nNearest: int | None = None
     residualSigmaRange: float = 5.0
-    allowEmptyBinFallback: bool = True
+    allowEmptyBinFallback: bool = False
     distanceInflationAlpha: float = 0.5
     distanceInflationPower: float = 2.0
     maxInflationFactor: float = 5.0
