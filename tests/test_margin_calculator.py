@@ -46,8 +46,13 @@ class StubBQMSolver(BQMSolver):
 
 
 class BatchTrackingSolver(BQMSolver):
-    def __init__(self) -> None:
+    def __init__(self, batchParallelism: int = 1) -> None:
         self.batchSizes: list[int] = []
+        self._batchParallelism = batchParallelism
+
+    @property
+    def batchParallelism(self) -> int:
+        return self._batchParallelism
 
     def solve(
         self,
@@ -179,6 +184,27 @@ class MarginCalculatorTest(unittest.TestCase):
         list(policy.execute(solver, enumerate(problems)))
 
         self.assertEqual(solver.batchSizes, [2, 1])
+
+    def test_batch_policy_fills_parallel_workers_before_applying_budget(self) -> None:
+        solver = BatchTrackingSolver(batchParallelism=3)
+        policy = BatchBQMExecutionPolicy(
+            batchSize=10,
+            maxBatchBytes=16,
+            memoryMultiplier=1.0,
+        )
+        problems = [
+            QUBOProblem(
+                numpy.zeros(4),
+                numpy.array([], dtype=numpy.uint32),
+                numpy.array([], dtype=numpy.uint32),
+                numpy.array([]),
+            )
+            for _ in range(4)
+        ]
+
+        list(policy.execute(solver, enumerate(problems)))
+
+        self.assertEqual(solver.batchSizes, [3, 1])
 
     def test_bqm_calculator_returns_the_largest_scenario_loss(self) -> None:
         risk_states = [

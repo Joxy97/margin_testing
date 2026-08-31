@@ -6,7 +6,6 @@ from unittest.mock import Mock, call
 
 import numpy
 import pandas
-from sklearn.preprocessing import StandardScaler
 
 from download_unit import DataRequest
 from portfolio import Portfolio
@@ -573,7 +572,7 @@ class PCAGridTest(unittest.TestCase):
         self.assertIs(provider.getPCAGrid(first_key), first_grid)
         self.assertIsNotNone(provider.getPCAGrid(third_key))
 
-    def test_returns_pca_grid_constructs_weighted_centered_pca(self) -> None:
+    def test_returns_pca_grid_weights_before_standardization(self) -> None:
         data = pandas.DataFrame(
             {
                 "date": pandas.date_range("2024-01-01", periods=6),
@@ -593,12 +592,23 @@ class PCAGridTest(unittest.TestCase):
 
         prices = data.loc[0:3, ["AAPL", "MSFT"]]
         log_returns = numpy.log(prices / prices.shift(1)).iloc[1:]
-        standardized = StandardScaler().fit_transform(log_returns)
         weights = numpy.array([0.25, 0.5, 1.0])
         weights /= weights.sum()
-        expected_mean = numpy.sum(weights[:, None] * standardized, axis=0)
+        log_return_values = log_returns.to_numpy(dtype=float)
+        weighted_returns = weights[:, None] * log_return_values
+        expected_log_return_mean = numpy.mean(weighted_returns, axis=0)
+        expected_log_return_scale = numpy.sqrt(
+            numpy.mean(
+                (weighted_returns - expected_log_return_mean) ** 2,
+                axis=0,
+            )
+        )
+        standardized = (
+            weighted_returns - expected_log_return_mean
+        ) / expected_log_return_scale
+        expected_mean = numpy.mean(standardized, axis=0)
         centered = standardized - expected_mean
-        covariance = centered.T @ (weights[:, None] * centered)
+        covariance = centered.T @ centered / len(centered)
         expected_eigenvalues, eigenvectors = numpy.linalg.eigh(covariance)
         order = numpy.argsort(expected_eigenvalues)[::-1]
         expected_eigenvalues = expected_eigenvalues[order]
@@ -624,11 +634,21 @@ class PCAGridTest(unittest.TestCase):
         )
         numpy.testing.assert_allclose(
             grid.logReturnMean,
-            StandardScaler().fit(log_returns).mean_,
+            expected_log_return_mean,
         )
         numpy.testing.assert_allclose(
             grid.logReturnScale,
-            StandardScaler().fit(log_returns).scale_,
+            expected_log_return_scale,
+        )
+        numpy.testing.assert_allclose(
+            expected_mean,
+            numpy.zeros(2),
+            atol=1e-12,
+        )
+        numpy.testing.assert_allclose(
+            numpy.mean(standardized**2, axis=0),
+            numpy.ones(2),
+            atol=1e-12,
         )
 
     def test_returns_pca_grid_aligns_missing_prices_like_marginlab(self) -> None:
@@ -686,12 +706,20 @@ class PCAGridTest(unittest.TestCase):
         )
 
         grid = ReturnsPCAGrid.construct(key, data)
-        standardized = StandardScaler().fit_transform(returns)
         weights = key.ew_lambda ** numpy.arange(5, -1, -1, dtype=float)
         weights /= weights.sum()
-        mean = numpy.sum(weights[:, None] * standardized, axis=0)
+        weighted_returns = weights[:, None] * returns
+        weighted_mean = numpy.mean(weighted_returns, axis=0)
+        weighted_scale = numpy.sqrt(
+            numpy.mean(
+                (weighted_returns - weighted_mean) ** 2,
+                axis=0,
+            )
+        )
+        standardized = (weighted_returns - weighted_mean) / weighted_scale
+        mean = numpy.mean(standardized, axis=0)
         centered = standardized - mean
-        covariance = centered.T @ (weights[:, None] * centered)
+        covariance = centered.T @ centered / len(centered)
         expected = numpy.linalg.eigvalsh(covariance)[::-1][:3]
 
         numpy.testing.assert_allclose(grid.lambdas, expected, atol=1e-12)

@@ -52,7 +52,7 @@ class SequentialBQMExecutionPolicy(BQMExecutionPolicy[Context]):
 
 @dataclass(frozen=True)
 class BatchBQMExecutionPolicy(BQMExecutionPolicy[Context]):
-    """Submit bounded batches through a solver's native batch interface."""
+    """Submit per-worker bounded batches through a native batch interface."""
 
     batchSize: int = 4
     maxBatchBytes: int | None = None
@@ -78,6 +78,14 @@ class BatchBQMExecutionPolicy(BQMExecutionPolicy[Context]):
     ) -> Iterator[tuple[Context, BQMOptimizationResult]]:
         iterator = iter(items)
         pending: tuple[Context, QUBOProblem] | None = None
+        parallelism = min(solver.batchParallelism, self.batchSize)
+        if parallelism <= 0:
+            raise ValueError("BQM solver batchParallelism must be positive")
+        effective_max_batch_bytes = (
+            None
+            if self.maxBatchBytes is None
+            else self.maxBatchBytes * parallelism
+        )
         solver.beginSeries()
         try:
             while True:
@@ -93,9 +101,10 @@ class BatchBQMExecutionPolicy(BQMExecutionPolicy[Context]):
                         item[1].numericMemoryBytes * self.memoryMultiplier
                     )
                     if (
-                        batch
-                        and self.maxBatchBytes is not None
-                        and estimated_bytes + item_bytes > self.maxBatchBytes
+                        len(batch) >= parallelism
+                        and effective_max_batch_bytes is not None
+                        and estimated_bytes + item_bytes
+                        > effective_max_batch_bytes
                     ):
                         pending = item
                         break

@@ -237,6 +237,79 @@ class BQMSolverTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "dtype"):
             TorchSBMBQMSolver._getParameters({"dtype": "float16"})
 
+    def test_torch_sbm_multi_device_configuration_is_validated(self) -> None:
+        with self.assertRaisesRegex(TypeError, "sequence"):
+            TorchSBMBQMSolver(devices="cuda:0")
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            TorchSBMBQMSolver(devices=[])
+        with self.assertRaisesRegex(ValueError, "both device and devices"):
+            TorchSBMBQMSolver(device="cuda:0", devices=["cuda:1"])
+
+        solver = TorchSBMBQMSolver(devices=["cuda:0", "cuda:0"])
+        with patch.object(
+            TorchSBMBQMSolver,
+            "_resolveDevice",
+            side_effect=lambda requested: requested,
+        ):
+            with self.assertRaisesRegex(ValueError, "unique"):
+                _ = solver.devices
+
+    def test_torch_sbm_distributes_ordered_batch_across_devices(self) -> None:
+        problems = [
+            QUBOProblem(
+                numpy.array([float(index)]),
+                numpy.array([], dtype=numpy.uint32),
+                numpy.array([], dtype=numpy.uint32),
+                numpy.array([]),
+            )
+            for index in range(5)
+        ]
+        calls: list[tuple[str, list[int], int]] = []
+
+        def solve_batch(
+            worker: TorchSBMBQMSolver,
+            batch: list[QUBOProblem],
+            parameters: Mapping[str, Any],
+        ) -> list[BQMOptimizationResult]:
+            identifiers = [int(problem.linear[0]) for problem in batch]
+            calls.append((worker.device, identifiers, parameters["seed"]))
+            return [
+                BQMOptimizationResult((0,), float(identifier))
+                for identifier in identifiers
+            ]
+
+        solver = TorchSBMBQMSolver(devices=["cuda:0", "cuda:1"])
+        with (
+            patch.object(
+                TorchSBMBQMSolver,
+                "_resolveDevice",
+                side_effect=lambda requested: requested,
+            ),
+            patch.object(TorchSBMBQMSolver, "_solveBatch", solve_batch),
+        ):
+            results = solver.solveMany(problems, {"seed": 17})
+
+        self.assertEqual([result.energy for result in results], list(range(5)))
+        calls.sort(key=lambda call: call[1][0])
+        self.assertEqual(calls[0][:2], ("cuda:0", [0, 1, 2]))
+        self.assertEqual(calls[1][:2], ("cuda:1", [3, 4]))
+        self.assertEqual(calls[0][2], 17)
+        self.assertEqual(
+            calls[1][2],
+            (17 + 3 * 0x0D1B54A32D192ED03) % ((1 << 63) - 1),
+        )
+
+    def test_adaptive_torch_sbm_creates_adaptive_device_workers(self) -> None:
+        solver = AdaptiveTorchSBMBQMSolver(devices=["cuda:0", "cuda:1"])
+        solver._resolvedDevices = ("cuda:0", "cuda:1")
+
+        workers = solver._getWorkerSolvers()
+
+        self.assertEqual(len(workers), 2)
+        self.assertTrue(
+            all(isinstance(worker, AdaptiveTorchSBMBQMSolver) for worker in workers)
+        )
+
     @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
     def test_torch_sbm_accepts_rocm_device_aliases(self) -> None:
         torch = TorchSBMBQMSolver._torch()
