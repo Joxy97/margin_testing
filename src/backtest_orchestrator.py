@@ -24,25 +24,28 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-import dimod
 import numpy as np
 import pandas as pd
-from scipy import sparse
 
 from market_to_qubo import (
     DEFAULT_GRID_POINTS,
     PCAResult,
+    PlausibilityModel,
     PreparedData,
     build_qubos,
     build_scenario_grid,
-    conditional_neighbors,
+    conditional_neighbors_device,
     convert_z_to_returns,
     create_z_shock_grids,
+    fit_ew_pca,
+    fit_plausibility_model,
+    plausibility_score,
+    plausibility_state_values,
     prepare_shock_grid_context,
     read_close_prices,
     read_portfolio,
 )
-from qubo_model import CompactQubo
+from qubo_model import CompactQubo, repair_one_hot
 from sbm_torch import SBMConfig, SBMSolveResult, TorchBatchSBMSolver, resolve_torch_device
 
 
@@ -58,7 +61,14 @@ RESULT_COLUMNS = (
     "scenarios",
     "selected_scenario",
     "selected_energy",
+    "raw_energy",
+    "repaired_energy",
     "raw_one_hot_violations",
+    "raw_feasible_candidates",
+    "solver_candidates",
+    "plausibility_score",
+    "plausibility_threshold",
+    "hard_plausibility_feasible",
     "margin",
     "worst_scenario_pnl",
     "realized_pnl",
@@ -112,12 +122,6 @@ RESOURCE_COLUMNS = (
 
 
 @dataclass(frozen=True)
-class RollingScaler:
-    mean_: np.ndarray
-    scale_: np.ndarray
-
-
-@dataclass(frozen=True)
 class MarketData:
     prices: pd.DataFrame
     simple_returns: pd.DataFrame
@@ -134,6 +138,9 @@ class ScenarioProblem:
     bqm: CompactQubo
     group_offsets: np.ndarray
     portfolio_linear: np.ndarray
+    gross_exposure: float
+    plausibility: PlausibilityModel
+    plausibility_states: tuple[np.ndarray, ...]
 
 
 @dataclass
@@ -165,13 +172,14 @@ class BacktestConfig:
     lambda_one_hot: float = 1.0
     lambda_compat: float = 0.1
     top_k_neighbors: int = 5
+    plausibility_confidence: float = 0.998
     device: str = "auto"
     pca_dtype: str = "float32"
     correlation_device: str = "auto"
     correlation_block_mib: int = 256
     scenario_batch_size: int = 1
     build_workers: int = 1
-    decode_sweeps: int = 1
+    decode_sweeps: int = 100
     seed: int = 1
     day_limit: int | None = None
     resume: bool = False
@@ -204,6 +212,8 @@ class BacktestConfig:
             raise ValueError("lambda_compat must be finite and non-negative")
         if self.top_k_neighbors < 0:
             raise ValueError("top_k_neighbors cannot be negative")
+        if not 0.0 < self.plausibility_confidence <= 1.0:
+            raise ValueError("plausibility_confidence must be in (0, 1]")
         if self.scenario_batch_size < 1 or self.build_workers < 1:
             raise ValueError("batch size and build workers must be positive")
         if self.decode_sweeps < 0:
@@ -406,76 +416,21 @@ def rolling_ew_pca(
     device_name: str,
     dtype_name: str,
 ) -> tuple[PreparedData, PCAResult]:
-    """Fit a two-component EW PCA using only the supplied rolling window."""
-
-    import torch
+    """Fit a two-component EW PCA using the shared exporter/backtester path."""
 
     values = log_returns.to_numpy(dtype=np.float64, copy=False)
     observations, assets = values.shape
     if observations < 2 or assets < 2:
         raise ValueError("rolling PCA requires at least two returns and two assets")
-    device = torch.device(device_name)
-    dtype = torch.float32 if dtype_name == "float32" else torch.float64
-    tensor = torch.as_tensor(values, dtype=dtype, device=device)
-    weights = decay ** torch.arange(
-        observations - 1, -1, -1, dtype=dtype, device=device
+    empty = np.empty((0, assets), dtype=np.float64)
+    scaler, z_values, _, pca = fit_ew_pca(
+        values,
+        empty,
+        2,
+        decay,
+        device_name=device_name,
+        dtype_name=dtype_name,
     )
-    weights /= weights.sum()
-    mean = torch.sum(weights[:, None] * tensor, dim=0)
-    centered_returns = tensor - mean
-    variance = torch.sum(weights[:, None] * centered_returns.square(), dim=0)
-    scale = torch.sqrt(torch.clamp(variance, min=torch.finfo(dtype).eps))
-    z = centered_returns / scale
-    z_mean = torch.sum(weights[:, None] * z, dim=0)
-    centered_z = z - z_mean
-    weighted_z = torch.sqrt(weights[:, None]) * centered_z
-
-    if assets <= observations:
-        covariance = weighted_z.T @ weighted_z
-        all_eigenvalues, all_vectors = torch.linalg.eigh(covariance)
-        selected = torch.arange(
-            len(all_eigenvalues) - 1,
-            len(all_eigenvalues) - 3,
-            -1,
-            device=device,
-        )
-        eigenvalues = torch.clamp(all_eigenvalues[selected], min=0.0)
-        loadings = all_vectors[:, selected].T
-        solver_name = f"{device.type} asset-space symmetric eigendecomposition"
-    else:
-        gram = weighted_z @ weighted_z.T
-        all_eigenvalues, all_vectors = torch.linalg.eigh(gram)
-        selected = torch.arange(
-            len(all_eigenvalues) - 1,
-            len(all_eigenvalues) - 3,
-            -1,
-            device=device,
-        )
-        eigenvalues = torch.clamp(all_eigenvalues[selected], min=0.0)
-        if bool(torch.any(eigenvalues <= torch.finfo(dtype).eps)):
-            raise ValueError("rolling PCA contains a zero-variance selected component")
-        left = all_vectors[:, selected]
-        loadings = (weighted_z.T @ left / torch.sqrt(eigenvalues)[None, :]).T
-        solver_name = f"{device.type} observation-space dual eigendecomposition"
-
-    # Fix the arbitrary eigenvector sign for reproducible scenario numbering.
-    for component in range(loadings.shape[0]):
-        pivot = int(torch.argmax(torch.abs(loadings[component])).item())
-        if float(loadings[component, pivot]) < 0.0:
-            loadings[component].neg_()
-    factors = centered_z @ loadings.T
-    total_variance = torch.clamp(all_eigenvalues, min=0.0).sum()
-    if float(total_variance) <= 0.0:
-        raise ValueError("rolling PCA has no positive variance")
-
-    mean_np = mean.cpu().numpy().astype(np.float64, copy=False)
-    scale_np = scale.cpu().numpy().astype(np.float64, copy=False)
-    z_np = z.cpu().numpy().astype(np.float64, copy=False)
-    factors_np = factors.cpu().numpy().astype(np.float64, copy=False)
-    loadings_np = loadings.cpu().numpy().astype(np.float64, copy=False)
-    eigenvalues_np = eigenvalues.cpu().numpy().astype(np.float64, copy=False)
-    weights_np = weights.cpu().numpy().astype(np.float64, copy=False)
-    scaler = RollingScaler(mean_np, scale_np)
     empty = np.empty((0, assets), dtype=np.float64)
     prepared = PreparedData(
         tickers=list(log_returns.columns),
@@ -485,71 +440,11 @@ def rolling_ew_pca(
         historical_log_returns=log_returns,
         backtest_returns=pd.DataFrame(columns=log_returns.columns),
         backtest_log_returns=pd.DataFrame(columns=log_returns.columns),
-        historical_z=z_np,
+        historical_z=z_values,
         backtest_z=empty,
-        standardizer=scaler,  # type: ignore[arg-type]
-    )
-    pca = PCAResult(
-        factors=factors_np,
-        backtest_factors=np.empty((0, 2), dtype=np.float64),
-        loadings=loadings_np,
-        eigenvalues=eigenvalues_np,
-        explained=eigenvalues_np / float(total_variance.cpu()),
-        weighted_mean=z_mean.cpu().numpy().astype(np.float64, copy=False),
-        weights=weights_np,
-        solver=solver_name,
+        standardizer=scaler,
     )
     return prepared, pca
-
-
-def conditional_neighbors_torch(
-    residual_samples: np.ndarray,
-    top_k: int,
-    device_name: str,
-    block_mib: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Find exact top correlations in bounded GPU/CPU row blocks."""
-
-    if device_name == "cpu":
-        return conditional_neighbors(residual_samples, top_k)
-    import torch
-
-    observations, assets = residual_samples.shape
-    if observations < 2:
-        raise ValueError("at least two residual samples are required")
-    neighbor_count = min(top_k, max(assets - 1, 0))
-    if neighbor_count == 0:
-        return (
-            np.std(residual_samples, axis=0, ddof=1),
-            np.empty((assets, 0), dtype=np.int64),
-            np.empty((assets, 0), dtype=float),
-        )
-    device = torch.device(device_name)
-    tensor = torch.as_tensor(residual_samples, dtype=torch.float32, device=device)
-    centered = tensor - tensor.mean(dim=0)
-    variance = centered.square().sum(dim=0) / (observations - 1)
-    standard_deviation = torch.sqrt(torch.clamp(variance, min=1e-12))
-    normalized = centered / standard_deviation
-    target_bytes = block_mib * 1024 * 1024
-    rows_per_block = max(1, min(assets, target_bytes // max(4 * assets, 1)))
-    indices = np.empty((assets, neighbor_count), dtype=np.int64)
-    correlations_out = np.empty((assets, neighbor_count), dtype=np.float64)
-    for start in range(0, assets, rows_per_block):
-        stop = min(start + rows_per_block, assets)
-        correlations = normalized[:, start:stop].T @ normalized
-        correlations /= observations - 1
-        correlations.nan_to_num_(0.0, posinf=0.0, neginf=0.0)
-        correlations.clamp_(-0.999, 0.999)
-        absolute = correlations.abs()
-        local = torch.arange(stop - start, device=device)
-        absolute[local, torch.arange(start, stop, device=device)] = -torch.inf
-        _, chosen = torch.topk(
-            absolute, k=neighbor_count, dim=1, largest=True, sorted=True
-        )
-        chosen_correlations = torch.gather(correlations, 1, chosen)
-        indices[start:stop] = chosen.cpu().numpy()
-        correlations_out[start:stop] = chosen_correlations.cpu().numpy()
-    return standard_deviation.cpu().numpy(), indices, correlations_out
 
 
 def _scenario_data(
@@ -606,13 +501,38 @@ def _scenario_problem(
     correlation_device: str,
 ) -> ScenarioProblem:
     conditional_std, neighbor_indices, neighbor_correlations = (
-        conditional_neighbors_torch(
+        conditional_neighbors_device(
             data.shocks.inflated_residuals,
             config.top_k_neighbors,
             correlation_device,
             config.correlation_block_mib,
         )
     )
+    plausibility = fit_plausibility_model(
+        data.shocks.inflated_residuals,
+        config.top_k_neighbors,
+        config.plausibility_confidence,
+        conditional_standard_deviation=conditional_std,
+        neighbor_indices=neighbor_indices,
+        neighbor_correlations=neighbor_correlations,
+    )
+    state_values = plausibility_state_values(
+        data.asset_grids, data.shocks.z_hat, plausibility
+    )
+    center = np.fromiter(
+        (int(np.argmin(np.abs(values))) for values in state_values),
+        dtype=np.int64,
+        count=len(state_values),
+    )
+    center_score = plausibility_score(state_values, center, plausibility)
+    if center_score > plausibility.threshold:
+        # A finite grid can miss the continuous residual mean.  Widen only by
+        # the minimum center discretization error so the hard set is non-empty.
+        plausibility = replace(
+            plausibility,
+            threshold=center_score
+            + 64.0 * np.finfo(float).eps * max(1.0, center_score),
+        )
     bqm, _, _ = build_qubos(
         data.asset_grids,
         market.weights,
@@ -622,6 +542,8 @@ def _scenario_problem(
         neighbor_correlations,
         config.lambda_one_hot,
         config.lambda_compat,
+        plausibility_model=plausibility,
+        gross_exposure=market.gross_exposure,
         numeric_labels=True,
         compact=True,
     )
@@ -632,6 +554,9 @@ def _scenario_problem(
         bqm=bqm,
         group_offsets=data.group_offsets,
         portfolio_linear=data.portfolio_linear,
+        gross_exposure=market.gross_exposure,
+        plausibility=plausibility,
+        plausibility_states=state_values,
     )
 
 
@@ -642,81 +567,140 @@ def greedy_baseline_pnl(data: ScenarioData) -> float:
     return float(minima.sum())
 
 
-def repair_one_hot(
-    bqm: dimod.BinaryQuadraticModel | CompactQubo,
-    raw_sample: np.ndarray,
-    group_offsets: np.ndarray,
-    sweeps: int,
-) -> tuple[np.ndarray, int, float]:
-    """Project to exactly one state per asset and run categorical descent."""
+def decode_hard_plausible(
+    problem: ScenarioProblem,
+    one_hot_sample: np.ndarray,
+) -> tuple[np.ndarray, float, float]:
+    """Minimize portfolio P&L by categorical descent inside the hard cutoff."""
 
-    if isinstance(bqm, CompactQubo):
-        labels = None
-        linear = bqm.linear
-        row = bqm.heads
-        col = bqm.tails
-        bias = bqm.quadratic
-    else:
-        labels = tuple(bqm.variables)
-        vectors = bqm.to_numpy_vectors(
-            variable_order=labels,
-            sort_indices=True,
-            sort_labels=False,
-        )
-        linear = np.asarray(vectors.linear_biases, dtype=np.float64)
-        row = np.asarray(vectors.quadratic.row_indices, dtype=np.int64)
-        col = np.asarray(vectors.quadratic.col_indices, dtype=np.int64)
-        bias = np.asarray(vectors.quadratic.biases, dtype=np.float64)
-    n = len(linear)
-    adjacency = sparse.csr_matrix(
-        (
-            np.concatenate((bias, bias)),
-            (np.concatenate((row, col)), np.concatenate((col, row))),
-        ),
-        shape=(n, n),
+    offsets = problem.group_offsets
+    assets = len(offsets) - 1
+    tolerance = 128.0 * np.finfo(float).eps * max(
+        1.0, problem.plausibility.threshold
     )
-    sample = np.asarray(raw_sample, dtype=np.uint8).copy()
-    counts = np.add.reduceat(sample, group_offsets[:-1])
-    violations = int(np.count_nonzero(counts != 1))
-    local_fields = linear + adjacency @ sample.astype(float)
+    normalized_portfolio = problem.portfolio_linear / problem.gross_exposure
+    pnl_states = tuple(
+        normalized_portfolio[int(offsets[a]) : int(offsets[a + 1])]
+        for a in range(assets)
+    )
 
-    def flip(variable: int) -> None:
-        change = -1.0 if sample[variable] else 1.0
-        sample[variable] ^= np.uint8(1)
-        start = adjacency.indptr[variable]
-        stop = adjacency.indptr[variable + 1]
-        local_fields[adjacency.indices[start:stop]] += (
-            adjacency.data[start:stop] * change
+    neighbors: list[list[tuple[int, float]]] = [[] for _ in range(assets)]
+    for head, tail, weight in zip(
+        problem.plausibility.edge_heads,
+        problem.plausibility.edge_tails,
+        problem.plausibility.edge_weights,
+    ):
+        lower, upper, edge_weight = int(head), int(tail), float(weight)
+        neighbors[lower].append((upper, edge_weight))
+        neighbors[upper].append((lower, edge_weight))
+
+    def sample_to_selection(sample: np.ndarray) -> np.ndarray:
+        return np.fromiter(
+            (
+                int(np.flatnonzero(sample[int(offsets[a]) : int(offsets[a + 1])])[0])
+                for a in range(assets)
+            ),
+            dtype=np.int64,
+            count=assets,
         )
 
-    for group in range(len(group_offsets) - 1):
-        begin = int(group_offsets[group])
-        end = int(group_offsets[group + 1])
-        active = np.flatnonzero(sample[begin:end]) + begin
-        if len(active) == 1:
-            continue
-        for variable in active:
-            flip(int(variable))
-        flip(begin + int(np.argmin(local_fields[begin:end])))
+    def selection_to_sample(selection: np.ndarray) -> np.ndarray:
+        sample = np.zeros(int(offsets[-1]), dtype=np.uint8)
+        for asset, state in enumerate(selection):
+            sample[int(offsets[asset]) + int(state)] = 1
+        return sample
 
-    for _ in range(sweeps):
-        changed = False
-        for group in range(len(group_offsets) - 1):
-            begin = int(group_offsets[group])
-            end = int(group_offsets[group + 1])
-            current = begin + int(np.flatnonzero(sample[begin:end])[0])
-            flip(current)
-            best = begin + int(np.argmin(local_fields[begin:end]))
-            flip(best)
-            changed |= best != current
-        if not changed:
-            break
+    def descend(seed: np.ndarray) -> tuple[np.ndarray, float, float]:
+        selection = np.asarray(seed, dtype=np.int64).copy()
+        values = np.fromiter(
+            (
+                problem.plausibility_states[asset][int(state)]
+                for asset, state in enumerate(selection)
+            ),
+            dtype=float,
+            count=assets,
+        )
+        contexts = np.zeros(assets, dtype=float)
+        for asset, adjacent in enumerate(neighbors):
+            contexts[asset] = sum(weight * values[other] for other, weight in adjacent)
+        score = plausibility_score(
+            problem.plausibility_states, selection, problem.plausibility
+        )
+        pnl = float(sum(pnl_states[a][selection[a]] for a in range(assets)))
 
-    if isinstance(bqm, CompactQubo):
-        energy = bqm.energy(sample)
-    else:
-        energy = float(bqm.energies((sample.reshape(1, -1), labels))[0])
-    return sample, violations, energy
+        while True:
+            changed = False
+            for asset in range(assets):
+                old_state = int(selection[asset])
+                old_value = float(values[asset])
+                candidates = problem.plausibility_states[asset]
+                score_changes = (
+                    candidates * candidates
+                    - old_value * old_value
+                    - 2.0 * (candidates - old_value) * contexts[asset]
+                )
+                feasible = score + score_changes <= problem.plausibility.threshold + tolerance
+                if not np.any(feasible):
+                    continue
+                candidate_pnl = pnl_states[asset]
+                feasible_indices = np.flatnonzero(feasible)
+                best_local = int(
+                    feasible_indices[
+                        np.lexsort(
+                            (
+                                score_changes[feasible_indices],
+                                candidate_pnl[feasible_indices],
+                            )
+                        )[0]
+                    ]
+                )
+                pnl_change = float(candidate_pnl[best_local] - candidate_pnl[old_state])
+                if pnl_change >= -tolerance:
+                    continue
+                new_value = float(candidates[best_local])
+                delta_value = new_value - old_value
+                score = max(0.0, score + float(score_changes[best_local]))
+                pnl += pnl_change
+                selection[asset] = best_local
+                values[asset] = new_value
+                for other, edge_weight in neighbors[asset]:
+                    contexts[other] += edge_weight * delta_value
+                changed = True
+            if not changed:
+                break
+        return selection, pnl, score
+
+    repaired_selection = sample_to_selection(one_hot_sample)
+    center_selection = np.fromiter(
+        (int(np.argmin(np.abs(values))) for values in problem.plausibility_states),
+        dtype=np.int64,
+        count=assets,
+    )
+    greedy_selection = np.fromiter(
+        (int(np.argmin(values)) for values in pnl_states),
+        dtype=np.int64,
+        count=assets,
+    )
+    seeds = (repaired_selection, center_selection, greedy_selection)
+    candidates: list[tuple[float, float, np.ndarray]] = []
+    for seed in seeds:
+        seed_score = plausibility_score(
+            problem.plausibility_states, seed, problem.plausibility
+        )
+        if seed_score <= problem.plausibility.threshold + tolerance:
+            selection, pnl, score = descend(seed)
+            candidates.append((pnl, score, selection))
+    if not candidates:
+        raise RuntimeError("discretized state space contains no plausible portfolio")
+    _, score, selection = min(candidates, key=lambda item: (item[0], item[1]))
+    sample = selection_to_sample(selection)
+    pnl = float(np.dot(problem.portfolio_linear, sample))
+    final_score = plausibility_score(
+        problem.plausibility_states, selection, problem.plausibility
+    )
+    if final_score > problem.plausibility.threshold + tolerance:  # pragma: no cover
+        raise RuntimeError("hard-plausibility decoder returned an infeasible sample")
+    return sample, float(pnl), float(final_score)
 
 
 def _scenario_batches(indices: Sequence[int], size: int) -> list[list[int]]:
@@ -928,7 +912,9 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             )
             print("-" * 88, flush=True)
 
-        best_qubo: tuple[float, int, float, int] | None = None
+        best_qubo: tuple[
+            float, int, float, float, float, int, int, int, float, float
+        ] | None = None
         best_baseline: tuple[float, int] | None = None
         scenario_build_seconds = 0.0
         build_seconds = 0.0
@@ -1053,24 +1039,31 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             if solver is None:  # pragma: no cover - protected by run_qubo
                 raise RuntimeError("QUBO method requires a solver")
             solved: list[SBMSolveResult] = solver.solve_batch(
-                [problem.bqm for problem in problems], config.sbm, seeds
+                [problem.bqm for problem in problems],
+                config.sbm,
+                seeds,
+                [problem.group_offsets for problem in problems],
+                config.decode_sweeps,
             )
             batch_solve_seconds = sum(result.solve_seconds for result in solved)
             solve_seconds += batch_solve_seconds
             decode_started = time.perf_counter()
             for problem, result in zip(problems, solved):
-                decoded, violations, decoded_energy = repair_one_hot(
-                    problem.bqm,
-                    result.sample,
-                    problem.group_offsets,
-                    config.decode_sweeps,
+                decoded, scenario_pnl, plausible_score = decode_hard_plausible(
+                    problem, result.sample
                 )
-                scenario_pnl = float(np.dot(problem.portfolio_linear, decoded))
+                decoded_energy = problem.bqm.energy(decoded)
                 candidate = (
                     scenario_pnl,
                     problem.scenario_index,
                     decoded_energy,
-                    violations,
+                    result.raw_energy,
+                    result.energy,
+                    result.raw_one_hot_violations,
+                    result.raw_feasible_candidates,
+                    result.candidate_count,
+                    plausible_score,
+                    problem.plausibility.threshold,
                 )
                 if best_qubo is None or candidate[0] < best_qubo[0]:
                     best_qubo = candidate
@@ -1115,17 +1108,53 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
         resource_values = resources.stop()
         actual_day_seconds = time.perf_counter() - day_started
 
-        method_results: list[tuple[str, float, int, float | None, int | None]] = []
+        method_results: list[tuple[
+            str,
+            float,
+            int,
+            float | None,
+            float | None,
+            float | None,
+            int | None,
+            int | None,
+            int | None,
+            float | None,
+            float | None,
+        ]] = []
         if best_qubo is not None:
             method_results.append(
-                ("qubo", best_qubo[0], best_qubo[1], best_qubo[2], best_qubo[3])
+                ("qubo", *best_qubo)
             )
         if best_baseline is not None:
             method_results.append(
-                ("baseline", best_baseline[0], best_baseline[1], None, None)
+                (
+                    "baseline",
+                    best_baseline[0],
+                    best_baseline[1],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
             )
 
-        for method, worst_pnl, selected_scenario, selected_energy, raw_violations in method_results:
+        for (
+            method,
+            worst_pnl,
+            selected_scenario,
+            selected_energy,
+            raw_energy,
+            repaired_energy,
+            raw_violations,
+            raw_feasible,
+            solver_candidates,
+            plausible_score,
+            plausible_threshold,
+        ) in method_results:
             if (date_text, method) in completed:
                 continue
             margin = max(0.0, -worst_pnl)
@@ -1149,7 +1178,18 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                 "scenarios": len(scenario_indices),
                 "selected_scenario": selected_scenario,
                 "selected_energy": selected_energy,
+                "raw_energy": raw_energy,
+                "repaired_energy": repaired_energy,
                 "raw_one_hot_violations": raw_violations,
+                "raw_feasible_candidates": raw_feasible,
+                "solver_candidates": solver_candidates,
+                "plausibility_score": plausible_score,
+                "plausibility_threshold": plausible_threshold,
+                "hard_plausibility_feasible": (
+                    plausible_score <= plausible_threshold
+                    if plausible_score is not None and plausible_threshold is not None
+                    else None
+                ),
                 "margin": margin,
                 "worst_scenario_pnl": worst_pnl,
                 "realized_pnl": realized_pnl,
@@ -1376,6 +1416,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--lambda-one-hot", type=float, default=1.0)
     parser.add_argument("--lambda-compat", type=float, default=0.1)
     parser.add_argument("--top-k-neighbors", type=int, default=5)
+    parser.add_argument("--plausibility-confidence", type=float, default=0.998)
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--devices",
@@ -1386,7 +1427,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--correlation-block-mib", type=int, default=256)
     parser.add_argument("--scenario-batch-size", type=int, default=1)
     parser.add_argument("--build-workers", type=int, default=1)
-    parser.add_argument("--decode-sweeps", type=int, default=1)
+    parser.add_argument("--decode-sweeps", type=int, default=100)
     parser.add_argument("--steps", type=int, default=10_000)
     parser.add_argument("--runs", type=int, default=16)
     parser.add_argument("--dt", type=float, default=1.0)
@@ -1436,6 +1477,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         lambda_one_hot=args.lambda_one_hot,
         lambda_compat=args.lambda_compat,
         top_k_neighbors=args.top_k_neighbors,
+        plausibility_confidence=args.plausibility_confidence,
         device=args.device,
         pca_dtype=args.pca_dtype,
         correlation_device=args.correlation_device,

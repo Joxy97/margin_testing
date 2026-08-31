@@ -21,8 +21,9 @@ used to construct that date's margin estimate.
 
 There are two margin methods:
 
-- `qubo` builds and solves the compatibility-aware QUBO, then repairs and
-  decodes its selected state;
+- `qubo` builds and solves a plausibility-steered QUBO, repairs every solver
+  candidate to categorical convergence, then enforces a hard empirically
+  calibrated residual-score cutoff during final decoding;
 - `baseline` skips correlations and QUBO solving. Within each scenario, it
   independently chooses the state with the lowest weighted P&L for every
   asset, sums those asset P&Ls, and then retains the worst scenario.
@@ -184,6 +185,12 @@ rows per date. Its most useful columns are:
 - `selected_scenario`: scenario that produced the worst P&L;
 - `raw_one_hot_violations`: QUBO solver constraint violations before repair;
   this is blank for the baseline;
+- `raw_energy` and `repaired_energy`: energy of the winning raw solver output
+  and of that candidate after converged categorical repair;
+- `raw_feasible_candidates` and `solver_candidates`: raw one-hot feasibility
+  diagnostics across randomized trajectories;
+- `plausibility_score`, `plausibility_threshold`, and
+  `hard_plausibility_feasible`: the exact final feasibility check;
 - `pca_seconds`, `scenario_build_seconds`, `qubo_build_seconds`,
   `solve_seconds`, `baseline_seconds`, and `day_seconds`: timing information;
   and
@@ -334,9 +341,10 @@ Beginners should normally leave this group at its defaults.
 | `--distance-inflation-alpha X` | `0.50` | Strength of uncertainty inflation as a scenario moves away from historical observations. Must be non-negative. |
 | `--distance-inflation-power X` | `2.0` | Exponent controlling how quickly distance inflation grows. Must be positive. |
 | `--max-inflation-factor X` | `5.0` | Upper bound on distance-based inflation. Must be at least 1. |
-| `--lambda-one-hot X` | `1.0` | Penalty encouraging exactly one shock state per asset. Must be non-negative. |
-| `--lambda-compat X` | `0.1` | Penalty strength for compatibility between correlated assets. Must be non-negative. |
-| `--top-k-neighbors N` | `5` | Number of strongest conditional-correlation neighbors nominated per asset. The QUBO uses the undirected union: a pair is retained when either asset nominates the other, and a mutual pair is stored only once. Zero disables these neighbor links; negative values are invalid. |
+| `--lambda-one-hot X` | `1.0` | Minimum one-hot penalty. The builder automatically raises it above a conservative safe bound derived from all non-constraint QUBO coefficients. |
+| `--lambda-compat X` | `0.1` | Dimensionless strength of SB steering toward low PSD residual scores. It does not define feasibility; the hard cutoff below does. |
+| `--top-k-neighbors N` | `5` | Number of strongest residual-correlation neighbors nominated per asset. The signed undirected union is degree-normalized into a positive-semidefinite score. Zero gives an independent standardized-residual score. |
+| `--plausibility-confidence X` | `0.998` | Empirical quantile used as the hard PSD residual-score cutoff. Must be greater than 0 and at most 1. |
 
 ### Devices, numeric precision, and memory
 
@@ -360,14 +368,14 @@ one setting at a time and keep the seed fixed.
 | Option | Default | Meaning |
 |---|---:|---|
 | `--steps N` | `10000` | Solver time steps per randomized run. Must be positive. More steps normally cost more time. |
-| `--runs N` | `16` | Number of randomized trajectories. The lowest-energy result is retained. Must be positive. More runs cost more time and memory unless batched. |
+| `--runs N` | `16` | Number of randomized trajectories. Every candidate is repaired to convergence and the lowest repaired energy is retained. Must be positive. More runs cost more time and memory unless batched. |
 | `--dt X` | `1.0` | Integration time step. Must be finite and positive. |
 | `--a0 X` | `1.0` | Positive simulated-bifurcation pump/schedule scale. Advanced setting. |
 | `--c0 X` | `0.0` | Coupling scale. `0` requests the solver's automatic scale; any explicit value must be non-negative. |
 | `--gamma X` | `0.0` | Non-negative damping coefficient. Advanced setting. |
 | `--initial-scale X` | `0.05` | Positive scale of the randomized initial state. |
 | `--seed N` | `1` | Base random seed. Reuse it for reproducible comparisons with the same devices, precision, and settings. |
-| `--decode-sweeps N` | `1` | Local improvement sweeps after enforcing one state per asset. Zero performs constraint repair without extra improvement; negative values are invalid. |
+| `--decode-sweeps N` | `100` | Safety cap for categorical repair. Repair must converge; reaching a positive cap raises instead of returning a partial result. Zero removes the cap. |
 
 ## 8. Performance guidance
 

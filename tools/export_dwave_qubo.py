@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a serialized D-Wave BQM/CQM (or LP CQM) to the C++ solver format."""
+"""Convert a serialized D-Wave BQM to the C++ solver format."""
 
 import argparse
 import json
@@ -13,21 +13,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input")
     parser.add_argument("output")
-    parser.add_argument("--penalty", type=float, default=None)
     args = parser.parse_args()
 
     source = Path(args.input)
-    if source.suffix.lower() == ".lp":
-        model = dimod.lp.load(str(source))
-    else:
-        with source.open("rb") as file:
-            model = load(file)
-
-    inverter = None
-    if isinstance(model, dimod.ConstrainedQuadraticModel):
-        model, inverter = dimod.cqm_to_bqm(model, lagrange_multiplier=args.penalty)
+    with source.open("rb") as file:
+        model = load(file)
     if not isinstance(model, dimod.BinaryQuadraticModel):
-        raise TypeError("input must contain a D-Wave BQM or CQM")
+        raise TypeError("input must contain a D-Wave BQM")
 
     bqm = model.binary
     labels = list(bqm.variables)
@@ -43,8 +35,6 @@ def main():
                 output.write(f"q {indices[u]} {indices[v]} {bias:.17g}\n")
 
     metadata = {"variables": labels}
-    if inverter is not None:
-        metadata["cqm_inverter"] = inverter.to_dict()
     with Path(args.output + ".metadata.json").open("w", encoding="utf-8") as output:
         json.dump(metadata, output, indent=2, default=repr)
 

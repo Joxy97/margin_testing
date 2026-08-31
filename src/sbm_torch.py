@@ -18,7 +18,7 @@ import dimod
 import numpy as np
 from scipy import sparse
 
-from qubo_model import CompactQubo
+from qubo_model import CompactQubo, repair_one_hot
 
 
 _RUN_SEED_STRIDE = 0x9E3779B97F4A7C15
@@ -60,6 +60,11 @@ class SBMConfig:
 class SBMSolveResult:
     sample: np.ndarray
     energy: float
+    raw_sample: np.ndarray
+    raw_energy: float
+    raw_one_hot_violations: int
+    raw_feasible_candidates: int
+    candidate_count: int
     seed: int
     raw_run: int
     solve_seconds: float
@@ -238,12 +243,16 @@ class TorchBatchSBMSolver:
         models: Sequence[QuboLike],
         config: SBMConfig,
         seeds: Sequence[int],
+        group_offsets: Sequence[np.ndarray] | None = None,
+        decode_sweeps: int = 100,
     ) -> list[SBMSolveResult]:
         config.validate()
         if not models:
             return []
         if len(models) != len(seeds):
             raise ValueError("one deterministic seed is required per BQM")
+        if group_offsets is not None and len(group_offsets) != len(models):
+            raise ValueError("one group-offset array is required per BQM")
         if any(seed < 0 or seed >= 2**63 for seed in seeds):
             raise ValueError("seeds must be in [0, 2**63)")
 
@@ -289,6 +298,10 @@ class TorchBatchSBMSolver:
 
         best_energies = np.full(len(models), np.inf, dtype=np.float64)
         best_samples: list[np.ndarray | None] = [None] * len(models)
+        best_raw_samples: list[np.ndarray | None] = [None] * len(models)
+        best_raw_energies = np.full(len(models), np.inf, dtype=np.float64)
+        best_raw_violations = np.zeros(len(models), dtype=np.int64)
+        raw_feasible_candidates = np.zeros(len(models), dtype=np.int64)
         best_runs = np.full(len(models), -1, dtype=np.int64)
         run_batch_size = min(config.run_batch_size or config.runs, config.runs)
         solve_started = time.perf_counter()
@@ -350,24 +363,51 @@ class TorchBatchSBMSolver:
                         energies = np.asarray(
                             model.energies((samples, problem.labels)), dtype=np.float64
                         )
-                    local = int(np.argmin(energies))
-                    if energies[local] < best_energies[problem_index]:
-                        best_energies[problem_index] = float(energies[local])
-                        best_samples[problem_index] = samples[local].copy()
-                        best_runs[problem_index] = run_start + local
+                    if group_offsets is None:
+                        local = int(np.argmin(energies))
+                        candidates = ((samples[local], 0, float(energies[local]), local),)
+                    else:
+                        repaired_candidates = []
+                        for local, raw_sample in enumerate(samples):
+                            repaired, violations, repaired_energy = repair_one_hot(
+                                model,
+                                raw_sample,
+                                group_offsets[problem_index],
+                                decode_sweeps,
+                            )
+                            raw_feasible_candidates[problem_index] += violations == 0
+                            repaired_candidates.append(
+                                (repaired, violations, repaired_energy, local)
+                            )
+                        candidates = repaired_candidates
+                    for repaired, violations, repaired_energy, local in candidates:
+                        if repaired_energy < best_energies[problem_index]:
+                            best_energies[problem_index] = float(repaired_energy)
+                            best_samples[problem_index] = repaired.copy()
+                            best_raw_samples[problem_index] = samples[local].copy()
+                            best_raw_energies[problem_index] = float(energies[local])
+                            best_raw_violations[problem_index] = int(violations)
+                            best_runs[problem_index] = run_start + local
 
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         solve_seconds = time.perf_counter() - solve_started
         per_model_seconds = (pack_seconds + solve_seconds) / len(models)
         results: list[SBMSolveResult] = []
-        for index, sample in enumerate(best_samples):
-            if sample is None:  # pragma: no cover - protected by validation
+        for index, (sample, raw_sample) in enumerate(
+            zip(best_samples, best_raw_samples)
+        ):
+            if sample is None or raw_sample is None:  # pragma: no cover
                 raise RuntimeError("SBM produced no sample")
             results.append(
                 SBMSolveResult(
                     sample=sample,
                     energy=float(best_energies[index]),
+                    raw_sample=raw_sample,
+                    raw_energy=float(best_raw_energies[index]),
+                    raw_one_hot_violations=int(best_raw_violations[index]),
+                    raw_feasible_candidates=int(raw_feasible_candidates[index]),
+                    candidate_count=config.runs,
                     seed=int(seeds[index]),
                     raw_run=int(best_runs[index]),
                     solve_seconds=per_model_seconds,

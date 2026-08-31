@@ -41,10 +41,9 @@ The conversion uses `q_i=(s_i+1)/2` and the paper's convention
 to an ancillary spin fixed at `+1`, as prescribed for dSB in the paper, without
 materializing that extra row in CPU/GPU memory.
 
-## D-Wave BQM and CQM input
+## D-Wave BQM input
 
-Install the Python bridge and export a model serialized by `BQM.to_file()` or
-`CQM.to_file()`:
+Install the Python bridge and export a model serialized by `BQM.to_file()`:
 
 ```bash
 python -m pip install -r requirements.txt
@@ -52,11 +51,7 @@ python tools/export_dwave_qubo.py model.bqm model.qubo
 ./build/sbm_solve model.qubo --steps 10000 --runs 32
 ```
 
-LP files containing a CQM are also accepted by the exporter. CQM input is
-converted with `dimod.cqm_to_bqm`; `--penalty` controls its Lagrange multiplier.
-The exporter writes variable labels and, for CQM input, the sample inverter to
-`model.qubo.metadata.json`. D-Wave's CQM-to-BQM conversion requires linear
-constraints and non-negative lower bounds for integer variables.
+The exporter writes variable labels to `model.qubo.metadata.json`.
 
 ## Algorithm parameters
 

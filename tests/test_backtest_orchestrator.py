@@ -20,11 +20,20 @@ if str(SRC) not in sys.path:
 from backtest_orchestrator import (  # noqa: E402
     BacktestConfig,
     ScenarioData,
+    ScenarioProblem,
+    decode_hard_plausible,
     greedy_baseline_pnl,
     repair_one_hot,
+    rolling_ew_pca,
     run_backtest,
 )
-from market_to_qubo import build_qubos  # noqa: E402
+from market_to_qubo import (  # noqa: E402
+    PlausibilityModel,
+    build_qubos,
+    fit_ew_pca,
+    fit_plausibility_model,
+    plausibility_score,
+)
 from qubo_model import CompactQubo  # noqa: E402
 from sbm_torch import SBMConfig, TorchBatchSBMSolver  # noqa: E402
 
@@ -51,6 +60,28 @@ class TorchBatchSolverTests(unittest.TestCase):
             np.testing.assert_array_equal(actual.sample, expected.sample)
             self.assertAlmostEqual(actual.energy, expected.energy, places=12)
             self.assertEqual(actual.raw_run, expected.raw_run)
+
+    def test_all_raw_candidates_are_repaired_before_selection(self) -> None:
+        model = CompactQubo(
+            linear=np.array([-2.0, -1.0, -2.0, -1.0]),
+            heads=np.array([0, 2], dtype=np.int32),
+            tails=np.array([1, 3], dtype=np.int32),
+            quadratic=np.array([0.1, 0.1]),
+        )
+        config = SBMConfig(steps=10, runs=5, dt=0.1, dtype="float64")
+        result = TorchBatchSBMSolver("cpu").solve_batch(
+            [model],
+            config,
+            [17],
+            [np.array([0, 2, 4], dtype=np.int64)],
+        )[0]
+        self.assertEqual(result.candidate_count, 5)
+        self.assertGreaterEqual(result.raw_feasible_candidates, 0)
+        self.assertLessEqual(result.raw_feasible_candidates, 5)
+        self.assertEqual(int(result.sample[:2].sum()), 1)
+        self.assertEqual(int(result.sample[2:].sum()), 1)
+        self.assertAlmostEqual(result.energy, model.energy(result.sample))
+        self.assertAlmostEqual(result.raw_energy, model.energy(result.raw_sample))
 
 
 class QuboTests(unittest.TestCase):
@@ -80,7 +111,7 @@ class QuboTests(unittest.TestCase):
         correlations = np.array([[0.4], [-0.3], [0.4]])
         compact, _, compatibility_edges = build_qubos(
             asset_grids,
-            np.zeros(3),
+            np.ones(3),
             np.zeros(3),
             np.ones(3),
             neighbors,
@@ -94,7 +125,7 @@ class QuboTests(unittest.TestCase):
         # Three one-hot edges plus two 2x2 compatibility blocks.
         self.assertEqual(compact.num_interactions, 3 + 2 * 4)
 
-    def test_portfolio_overlay_changes_only_linear_coefficients(self) -> None:
+    def test_qubo_is_homogeneous_in_portfolio_exposure(self) -> None:
         asset_grids = [
             {
                 "z": np.array([-1.0, 1.0]),
@@ -120,33 +151,27 @@ class QuboTests(unittest.TestCase):
             0.1,
         )
         total, _, _ = build_qubos(*arguments, numeric_labels=True)
-        structural, _, _ = build_qubos(
-            asset_grids,
-            np.zeros(2),
-            *arguments[2:],
-            numeric_labels=True,
-        )
+        scaled_arguments = (asset_grids, 37.0 * arguments[1], *arguments[2:])
+        scaled, _, _ = build_qubos(*scaled_arguments, numeric_labels=True)
         total_vectors = total.to_numpy_vectors(variable_order=range(4))
-        structural_vectors = structural.to_numpy_vectors(variable_order=range(4))
+        scaled_vectors = scaled.to_numpy_vectors(variable_order=range(4))
         np.testing.assert_array_equal(
             total_vectors.quadratic.row_indices,
-            structural_vectors.quadratic.row_indices,
+            scaled_vectors.quadratic.row_indices,
         )
         np.testing.assert_array_equal(
             total_vectors.quadratic.col_indices,
-            structural_vectors.quadratic.col_indices,
+            scaled_vectors.quadratic.col_indices,
         )
         np.testing.assert_allclose(
             total_vectors.quadratic.biases,
-            structural_vectors.quadratic.biases,
-        )
-        expected_overlay = np.concatenate(
-            [0.6 * asset_grids[0]["simple_return"], -0.4 * asset_grids[1]["simple_return"]]
+            scaled_vectors.quadratic.biases,
         )
         np.testing.assert_allclose(
-            total_vectors.linear_biases - structural_vectors.linear_biases,
-            expected_overlay,
+            total_vectors.linear_biases,
+            scaled_vectors.linear_biases,
         )
+        self.assertAlmostEqual(total_vectors.offset, scaled_vectors.offset)
 
         compact, _, _ = build_qubos(*arguments, compact=True)
         self.assertIsInstance(compact, CompactQubo)
@@ -167,6 +192,103 @@ class QuboTests(unittest.TestCase):
             atol=1e-12,
         )
 
+    def test_safe_penalty_excludes_infeasible_global_minima(self) -> None:
+        asset_grids = [
+            {
+                "z": np.array([-1.0, 1.0]),
+                "log_return": np.array([-0.5, 0.5]),
+                "simple_return": np.expm1(np.array([-0.5, 0.5])),
+            }
+            for _ in range(2)
+        ]
+        model, _, _ = build_qubos(
+            asset_grids,
+            np.array([0.5, -0.5]),
+            np.zeros(2),
+            np.ones(2),
+            np.array([[1], [0]], dtype=np.int64),
+            np.array([[0.8], [0.8]]),
+            0.0,
+            1.0,
+            compact=True,
+        )
+        samples = np.array(
+            [[(value >> bit) & 1 for bit in range(4)] for value in range(16)],
+            dtype=np.uint8,
+        )
+        energies = model.energies(samples)
+        minimizers = samples[np.isclose(energies, energies.min(), atol=1e-12)]
+        self.assertTrue(np.all(minimizers[:, :2].sum(axis=1) == 1))
+        self.assertTrue(np.all(minimizers[:, 2:].sum(axis=1) == 1))
+
+    def test_psd_plausibility_is_permutation_invariant(self) -> None:
+        rng = np.random.default_rng(72)
+        samples = rng.normal(size=(80, 5))
+        samples[:, 3] += 0.65 * samples[:, 1]
+        residual = rng.normal(size=5)
+        permutation = np.array([3, 0, 4, 1, 2])
+        first = fit_plausibility_model(samples, top_k=4, confidence=0.95)
+        second = fit_plausibility_model(
+            samples[:, permutation], top_k=4, confidence=0.95
+        )
+        self.assertAlmostEqual(first.score(residual), second.score(residual[permutation]))
+        self.assertAlmostEqual(first.threshold, second.threshold)
+
+    def test_hard_decoder_never_accepts_an_implausible_sample(self) -> None:
+        plausibility = PlausibilityModel(
+            residual_mean=np.zeros(2),
+            residual_scale=np.ones(2),
+            edge_heads=np.empty(0, dtype=np.int64),
+            edge_tails=np.empty(0, dtype=np.int64),
+            edge_weights=np.empty(0),
+            threshold=1.0,
+            confidence=0.95,
+        )
+        states = (np.array([-1.0, 0.0, 1.0]),) * 2
+        problem = ScenarioProblem(
+            scenario_index=0,
+            bqm=CompactQubo(
+                linear=np.zeros(6),
+                heads=np.empty(0, dtype=np.int32),
+                tails=np.empty(0, dtype=np.int32),
+                quadratic=np.empty(0),
+            ),
+            group_offsets=np.array([0, 3, 6], dtype=np.int64),
+            portfolio_linear=np.array([-2.0, 0.0, 1.0, -3.0, 0.0, 1.0]),
+            gross_exposure=1.0,
+            plausibility=plausibility,
+            plausibility_states=states,
+        )
+        raw = np.array([1, 0, 0, 1, 0, 0], dtype=np.uint8)
+        decoded, pnl, score = decode_hard_plausible(problem, raw)
+        self.assertLessEqual(score, plausibility.threshold)
+        self.assertAlmostEqual(score, plausibility_score(states, np.array([0, 1]), plausibility))
+        self.assertAlmostEqual(pnl, -2.0)
+        self.assertEqual(int(decoded[:3].sum()), 1)
+        self.assertEqual(int(decoded[3:].sum()), 1)
+
+    def test_exporter_and_backtester_share_identical_ew_pca(self) -> None:
+        rng = np.random.default_rng(91)
+        frame = pd.DataFrame(
+            rng.normal(0.0, 0.01, size=(30, 5)),
+            columns=[f"a{i}" for i in range(5)],
+        )
+        scaler, z_values, _, exported = fit_ew_pca(
+            frame.to_numpy(),
+            np.empty((0, 5)),
+            2,
+            0.93,
+            device_name="cpu",
+            dtype_name="float64",
+        )
+        prepared, rolling = rolling_ew_pca(frame, 0.93, "cpu", "float64")
+        np.testing.assert_allclose(prepared.standardizer.mean_, scaler.mean_)
+        np.testing.assert_allclose(prepared.standardizer.scale_, scaler.scale_)
+        np.testing.assert_allclose(prepared.historical_z, z_values)
+        np.testing.assert_allclose(rolling.loadings, exported.loadings)
+        np.testing.assert_allclose(rolling.eigenvalues, exported.eigenvalues)
+        np.testing.assert_allclose(rolling.factors, exported.factors)
+
     def test_repair_enforces_exactly_one_state_per_group(self) -> None:
         bqm = dimod.BinaryQuadraticModel(
             {0: -1.0, 1: -0.5, 2: 0.1, 3: -0.2},
@@ -178,7 +300,7 @@ class QuboTests(unittest.TestCase):
             bqm,
             np.array([1, 1, 0, 0], dtype=np.uint8),
             np.array([0, 2, 4], dtype=np.int64),
-            sweeps=1,
+            sweeps=100,
         )
         self.assertEqual(violations, 2)
         self.assertEqual(int(repaired[:2].sum()), 1)
@@ -219,7 +341,7 @@ class EndToEndTests(unittest.TestCase):
                 correlation_device="cpu",
                 scenario_batch_size=2,
                 day_limit=1,
-                decode_sweeps=1,
+                decode_sweeps=100,
                 sbm=SBMConfig(steps=8, runs=2, dt=0.1, dtype="float64"),
             )
             result = run_backtest(config)
@@ -228,6 +350,12 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(int(row["calibration_returns"]), 20)
             self.assertLess(pd.Timestamp(row["calibration_end"]), pd.Timestamp(row["date"]))
             self.assertEqual(int(row["scenarios"]), 2)
+            self.assertTrue(bool(row["hard_plausibility_feasible"]))
+            self.assertLessEqual(
+                float(row["plausibility_score"]),
+                float(row["plausibility_threshold"]) + 1e-12,
+            )
+            self.assertEqual(int(row["solver_candidates"]), config.sbm.runs)
             expected_error = (
                 float(row["margin"]) + float(row["realized_pnl"])
             ) / float(row["gross_exposure"])

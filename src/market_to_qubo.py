@@ -3,12 +3,11 @@
 
 The implementation follows the calculation cells in ``example_code.ipynb``.
 It reads one subfolder of ``synthetic_market`` and writes a report plus one BQM
-and CQM pair per requested scenario inside a stable project-root directory. For
-example, ``qubo-assets_10`` contains:
+per requested scenario inside a stable project-root directory. For example,
+``qubo-assets_10`` contains:
 
 * ``report.html`` - self-contained tables and plots
 * ``bqms/scenario_0.bqm``, ... - Ocean BQM files
-* ``cqms/scenario_0.cqm``, ... - matching Ocean CQM files
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ import argparse
 import base64
 import html
 import io
+import math
 import os
 import re
 import shutil
@@ -33,14 +33,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-
 from qubo_model import CompactQubo
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SYNTHETIC_MARKET_ROOT = PROJECT_ROOT / "synthetic_market"
 DEFAULT_GRID_POINTS = (21, 5, 5, 3)
+
+
+@dataclass(frozen=True)
+class EWStandardizer:
+    """Exponentially weighted location and scale used by PCA and decoding."""
+
+    mean_: np.ndarray
+    scale_: np.ndarray
 
 
 @dataclass
@@ -54,7 +60,7 @@ class PreparedData:
     backtest_log_returns: pd.DataFrame
     historical_z: np.ndarray
     backtest_z: np.ndarray
-    standardizer: StandardScaler
+    standardizer: EWStandardizer
 
 
 @dataclass
@@ -86,6 +92,41 @@ class ShockGridResult:
     kept_bin_edges: list[np.ndarray]
     max_vol_ranges: np.ndarray
     residual_ranges: np.ndarray
+
+
+@dataclass(frozen=True)
+class PlausibilityModel:
+    """Sparse positive-semidefinite residual score and empirical cutoff.
+
+    With standardized residuals ``u``, the score is
+
+    ``u.T @ (I - D^-1/2 A D^-1/2) @ u``.
+
+    ``A`` is the signed, undirected union of the top-correlation graph and
+    ``D_ii = sum_j |A_ij|``.  The resulting signed normalized Laplacian is
+    positive semidefinite.  This avoids the asymmetric conditional penalties
+    previously accumulated once per nominated pair.
+    """
+
+    residual_mean: np.ndarray
+    residual_scale: np.ndarray
+    edge_heads: np.ndarray
+    edge_tails: np.ndarray
+    edge_weights: np.ndarray
+    threshold: float
+    confidence: float
+
+    def score(self, residual: np.ndarray) -> float:
+        values = (np.asarray(residual, dtype=float) - self.residual_mean) / self.residual_scale
+        score = float(np.dot(values, values))
+        if len(self.edge_weights):
+            score -= 2.0 * float(
+                np.dot(
+                    self.edge_weights,
+                    values[self.edge_heads] * values[self.edge_tails],
+                )
+            )
+        return max(score, 0.0)
 
 
 @dataclass(frozen=True)
@@ -155,6 +196,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lambda-one-hot", type=float, default=1.0)
     parser.add_argument("--lambda-compat", type=float, default=0.1)
     parser.add_argument("--top-k-neighbors", type=int, default=5)
+    parser.add_argument(
+        "--plausibility-confidence",
+        type=float,
+        default=0.998,
+        help="Empirical confidence level for the hard residual-score cutoff.",
+    )
     parser.add_argument("--visual-asset-index", type=int, default=0)
     return parser.parse_args()
 
@@ -184,6 +231,8 @@ def validate_args(args: argparse.Namespace) -> tuple[int, ...]:
         raise ValueError("QUBO penalty strengths cannot be negative")
     if args.top_k_neighbors < 0:
         raise ValueError("--top-k-neighbors cannot be negative")
+    if not 0.0 < args.plausibility_confidence <= 1.0:
+        raise ValueError("--plausibility-confidence must be in (0, 1]")
 
     if args.grid_points is None:
         if args.components > len(DEFAULT_GRID_POINTS):
@@ -313,12 +362,15 @@ def prepare_data(folder: Path) -> tuple[PreparedData, dict[str, Path]]:
     backtest_returns = backtest_returns.iloc[-len(backtest_close) :]
     backtest_log_returns = backtest_log_returns.iloc[-len(backtest_close) :]
 
-    standardizer = StandardScaler()
-    historical_z = standardizer.fit_transform(historical_log_returns)
-    backtest_z = standardizer.transform(backtest_log_returns)
-
-    if not np.isfinite(historical_z).all() or not np.isfinite(backtest_z).all():
-        raise ValueError("Standardized returns contain non-finite values")
+    # PCA configuration is supplied by the caller, so these values are filled
+    # by ``fit_ew_pca`` immediately after input validation.  Keeping data I/O
+    # separate lets the rolling engine and exporter call the same fitter.
+    historical_z = np.empty((0, historical_log_returns.shape[1]), dtype=float)
+    backtest_z = np.empty((0, backtest_log_returns.shape[1]), dtype=float)
+    standardizer = EWStandardizer(
+        np.zeros(historical_log_returns.shape[1], dtype=float),
+        np.ones(historical_log_returns.shape[1], dtype=float),
+    )
 
     prepared = PreparedData(
         tickers=list(historical_close.columns),
@@ -339,66 +391,115 @@ def prepare_data(folder: Path) -> tuple[PreparedData, dict[str, Path]]:
     }
 
 
-def exponentially_weighted_pca(
-    historical_z: np.ndarray,
-    backtest_z: np.ndarray,
+def fit_ew_pca(
+    historical_log_returns: np.ndarray,
+    backtest_log_returns: np.ndarray,
     components: int,
     decay: float,
-    window: int,
-) -> PCAResult:
-    z_ew = historical_z[-window:]
-    observations, assets = z_ew.shape
+    *,
+    device_name: str = "cpu",
+    dtype_name: str = "float64",
+) -> tuple[EWStandardizer, np.ndarray, np.ndarray, PCAResult]:
+    """Fit the shared leakage-safe EW standardization and EW-PCA pipeline.
+
+    The input historical array is the exact calibration window.  Both the
+    exporter and rolling engine call this routine, eliminating the exporter's
+    former full-history, unweighted ``StandardScaler`` preprocessing.
+    """
+
+    import torch
+
+    values = np.asarray(historical_log_returns, dtype=np.float64)
+    future = np.asarray(backtest_log_returns, dtype=np.float64)
+    if components < 1:
+        raise ValueError("components must be positive")
+    if not 0.0 < decay <= 1.0:
+        raise ValueError("decay must be in (0, 1]")
+    if dtype_name not in {"float32", "float64"}:
+        raise ValueError("dtype_name must be float32 or float64")
+    if values.ndim != 2 or future.ndim != 2 or future.shape[1] != values.shape[1]:
+        raise ValueError("historical and backtest log returns must be aligned matrices")
+    observations, assets = values.shape
+    if observations < 2:
+        raise ValueError("EW PCA requires at least two historical returns")
     if components > min(observations, assets):
         raise ValueError(
             f"--components={components} exceeds min(EW observations, assets)="
             f"{min(observations, assets)}"
         )
 
-    weights = decay ** np.arange(observations - 1, -1, -1, dtype=float)
+    device = torch.device(device_name)
+    dtype = torch.float32 if dtype_name == "float32" else torch.float64
+    tensor = torch.as_tensor(values, dtype=dtype, device=device)
+    weights = decay ** torch.arange(
+        observations - 1, -1, -1, dtype=dtype, device=device
+    )
     weights /= weights.sum()
-    weighted_mean = np.sum(weights[:, None] * z_ew, axis=0)
-    centered = z_ew - weighted_mean
+    mean = torch.sum(weights[:, None] * tensor, dim=0)
+    centered_returns = tensor - mean
+    variance = torch.sum(weights[:, None] * centered_returns.square(), dim=0)
+    scale = torch.sqrt(torch.clamp(variance, min=torch.finfo(dtype).eps))
+    z = centered_returns / scale
+    z_mean = torch.sum(weights[:, None] * z, dim=0)
+    centered_z = z - z_mean
+    weighted_z = torch.sqrt(weights[:, None]) * centered_z
 
-    # This is the notebook's eigendecomposition. For wide markets, use its
-    # mathematically equivalent observation-space dual to avoid an N x N matrix.
-    if assets <= 512:
-        covariance = centered.T @ (weights[:, None] * centered)
-        all_eigenvalues, all_eigenvectors = np.linalg.eigh(covariance)
-        order = np.argsort(all_eigenvalues)[::-1]
-        eigenvalues = np.maximum(all_eigenvalues[order[:components]], 0.0)
-        loadings = all_eigenvectors[:, order[:components]].T
-        total_variance = float(np.maximum(all_eigenvalues, 0.0).sum())
-        solver = "asset-space symmetric eigendecomposition"
+    if assets <= observations:
+        covariance = weighted_z.T @ weighted_z
+        all_eigenvalues, all_vectors = torch.linalg.eigh(covariance)
+        selected = torch.arange(
+            len(all_eigenvalues) - 1,
+            len(all_eigenvalues) - components - 1,
+            -1,
+            device=device,
+        )
+        eigenvalues = torch.clamp(all_eigenvalues[selected], min=0.0)
+        loadings = all_vectors[:, selected].T
+        solver = f"{device.type} asset-space symmetric eigendecomposition"
     else:
-        weighted_centered = np.sqrt(weights[:, None]) * centered
-        gram = weighted_centered @ weighted_centered.T
-        all_eigenvalues, left_vectors = np.linalg.eigh(gram)
-        order = np.argsort(all_eigenvalues)[::-1]
-        eigenvalues = np.maximum(all_eigenvalues[order[:components]], 0.0)
-        if np.any(eigenvalues <= np.finfo(float).eps):
+        gram = weighted_z @ weighted_z.T
+        all_eigenvalues, all_vectors = torch.linalg.eigh(gram)
+        selected = torch.arange(
+            len(all_eigenvalues) - 1,
+            len(all_eigenvalues) - components - 1,
+            -1,
+            device=device,
+        )
+        eigenvalues = torch.clamp(all_eigenvalues[selected], min=0.0)
+        if bool(torch.any(eigenvalues <= torch.finfo(dtype).eps)):
             raise ValueError("Requested PCA components include a zero-variance mode")
-        chosen_left = left_vectors[:, order[:components]]
-        right_vectors = weighted_centered.T @ chosen_left
-        right_vectors /= np.sqrt(eigenvalues)[None, :]
-        loadings = right_vectors.T
-        total_variance = float(np.maximum(all_eigenvalues, 0.0).sum())
-        solver = "observation-space dual eigendecomposition"
+        left = all_vectors[:, selected]
+        loadings = (weighted_z.T @ left / torch.sqrt(eigenvalues)[None, :]).T
+        solver = f"{device.type} observation-space dual eigendecomposition"
 
-    if total_variance <= 0.0:
+    # Eigenvector signs are arbitrary. Fix them so asset permutations and
+    # exporter/backtester calls do not spuriously renumber scenarios.
+    for component in range(loadings.shape[0]):
+        pivot = int(torch.argmax(torch.abs(loadings[component])).item())
+        if float(loadings[component, pivot]) < 0.0:
+            loadings[component].neg_()
+
+    total_variance = torch.clamp(all_eigenvalues, min=0.0).sum()
+    if float(total_variance) <= 0.0:
         raise ValueError("EW PCA has no positive variance")
-    explained = eigenvalues / total_variance
-    factors = (historical_z - weighted_mean) @ loadings.T
-    backtest_factors = (backtest_z - weighted_mean) @ loadings.T
-    return PCAResult(
-        factors=factors,
-        backtest_factors=backtest_factors,
-        loadings=loadings,
-        eigenvalues=eigenvalues,
-        explained=explained,
-        weighted_mean=weighted_mean,
-        weights=weights,
+    backtest_tensor = torch.as_tensor(future, dtype=dtype, device=device)
+    backtest_z = (backtest_tensor - mean) / scale
+    factors = centered_z @ loadings.T
+    backtest_factors = (backtest_z - z_mean) @ loadings.T
+
+    to_numpy = lambda value: value.detach().cpu().numpy().astype(np.float64, copy=False)
+    scaler = EWStandardizer(to_numpy(mean), to_numpy(scale))
+    pca = PCAResult(
+        factors=to_numpy(factors),
+        backtest_factors=to_numpy(backtest_factors),
+        loadings=to_numpy(loadings),
+        eigenvalues=to_numpy(eigenvalues),
+        explained=to_numpy(eigenvalues / total_variance),
+        weighted_mean=to_numpy(z_mean),
+        weights=to_numpy(weights),
         solver=solver,
     )
+    return scaler, to_numpy(z), to_numpy(backtest_z), pca
 
 
 def build_scenario_grid(
@@ -551,7 +652,7 @@ def create_z_shock_grids(
 
 
 def convert_z_to_returns(
-    standardizer: StandardScaler, asset_z_grids: Sequence[np.ndarray]
+    standardizer: EWStandardizer, asset_z_grids: Sequence[np.ndarray]
 ) -> list[dict[str, np.ndarray]]:
     asset_grids: list[dict[str, np.ndarray]] = []
     for asset, z_grid in enumerate(asset_z_grids):
@@ -643,6 +744,183 @@ def conditional_neighbors(
     return standard_deviation, neighbor_indices, neighbor_correlations
 
 
+def conditional_neighbors_device(
+    residual_samples: np.ndarray,
+    top_k: int,
+    device_name: str = "cpu",
+    block_mib: int = 128,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Shared exact blockwise top-correlation implementation for CPU/CUDA."""
+
+    if device_name == "cpu":
+        return conditional_neighbors(residual_samples, top_k)
+    import torch
+
+    observations, assets = residual_samples.shape
+    if observations < 2:
+        raise ValueError("at least two residual samples are required")
+    neighbor_count = min(top_k, max(assets - 1, 0))
+    if neighbor_count == 0:
+        return (
+            np.std(residual_samples, axis=0, ddof=1),
+            np.empty((assets, 0), dtype=np.int64),
+            np.empty((assets, 0), dtype=float),
+        )
+    device = torch.device(device_name)
+    tensor = torch.as_tensor(residual_samples, dtype=torch.float32, device=device)
+    centered = tensor - tensor.mean(dim=0)
+    variance = centered.square().sum(dim=0) / (observations - 1)
+    standard_deviation = torch.sqrt(torch.clamp(variance, min=1e-12))
+    normalized = centered / standard_deviation
+    target_bytes = block_mib * 1024 * 1024
+    rows_per_block = max(1, min(assets, target_bytes // max(4 * assets, 1)))
+    indices = np.empty((assets, neighbor_count), dtype=np.int64)
+    correlations_out = np.empty((assets, neighbor_count), dtype=np.float64)
+    for start in range(0, assets, rows_per_block):
+        stop = min(start + rows_per_block, assets)
+        correlations = normalized[:, start:stop].T @ normalized
+        correlations /= observations - 1
+        correlations.nan_to_num_(0.0, posinf=0.0, neginf=0.0)
+        correlations.clamp_(-0.999, 0.999)
+        absolute = correlations.abs()
+        local = torch.arange(stop - start, device=device)
+        absolute[local, torch.arange(start, stop, device=device)] = -torch.inf
+        _, chosen = torch.topk(
+            absolute, k=neighbor_count, dim=1, largest=True, sorted=True
+        )
+        chosen_correlations = torch.gather(correlations, 1, chosen)
+        indices[start:stop] = chosen.cpu().numpy()
+        correlations_out[start:stop] = chosen_correlations.cpu().numpy()
+    return standard_deviation.cpu().numpy(), indices, correlations_out
+
+
+def _normalized_signed_edges(
+    assets: int,
+    neighbor_indices: np.ndarray,
+    neighbor_correlations: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return the degree-normalized undirected union of a top-k graph."""
+
+    nominations: dict[tuple[int, int], list[float]] = {}
+    for asset, neighbors in enumerate(neighbor_indices):
+        for position, other_value in enumerate(neighbors):
+            other = int(other_value)
+            rho = float(neighbor_correlations[asset, position])
+            if other == asset or abs(rho) < 1e-12:
+                continue
+            pair = (min(asset, other), max(asset, other))
+            nominations.setdefault(pair, []).append(rho)
+    if not nominations:
+        empty = np.empty(0, dtype=np.int64)
+        return empty, empty.copy(), np.empty(0, dtype=float)
+
+    pairs = sorted(nominations)
+    heads = np.fromiter((pair[0] for pair in pairs), dtype=np.int64)
+    tails = np.fromiter((pair[1] for pair in pairs), dtype=np.int64)
+    correlations = np.fromiter(
+        (float(np.mean(nominations[pair])) for pair in pairs), dtype=float
+    )
+    degree = np.zeros(assets, dtype=float)
+    np.add.at(degree, heads, np.abs(correlations))
+    np.add.at(degree, tails, np.abs(correlations))
+    denominator = np.sqrt(degree[heads] * degree[tails])
+    weights = correlations / np.maximum(denominator, 1e-12)
+    return heads, tails, weights
+
+
+def fit_plausibility_model(
+    residual_samples: np.ndarray,
+    top_k: int,
+    confidence: float,
+    *,
+    conditional_standard_deviation: np.ndarray | None = None,
+    neighbor_indices: np.ndarray | None = None,
+    neighbor_correlations: np.ndarray | None = None,
+) -> PlausibilityModel:
+    """Fit a PSD residual score and calibrate its hard empirical quantile."""
+
+    samples = np.asarray(residual_samples, dtype=float)
+    if samples.ndim != 2 or len(samples) < 2:
+        raise ValueError("at least two residual samples are required for plausibility")
+    if not 0.0 < confidence <= 1.0:
+        raise ValueError("plausibility confidence must be in (0, 1]")
+    if neighbor_indices is None or neighbor_correlations is None:
+        scale, neighbor_indices, neighbor_correlations = conditional_neighbors(
+            samples, top_k
+        )
+    elif conditional_standard_deviation is None:
+        scale = np.std(samples, axis=0, ddof=1)
+    else:
+        scale = np.asarray(conditional_standard_deviation, dtype=float)
+    scale = np.where(np.isfinite(scale) & (scale > 1e-12), scale, 1.0)
+    mean = np.mean(samples, axis=0)
+    heads, tails, edge_weights = _normalized_signed_edges(
+        samples.shape[1], neighbor_indices, neighbor_correlations
+    )
+    standardized = (samples - mean) / scale
+    scores = np.sum(standardized * standardized, axis=1)
+    if len(edge_weights):
+        scores -= 2.0 * np.sum(
+            edge_weights[None, :]
+            * standardized[:, heads]
+            * standardized[:, tails],
+            axis=1,
+        )
+    scores = np.maximum(scores, 0.0)
+    threshold = float(np.quantile(scores, confidence, method="higher"))
+    threshold += 64.0 * np.finfo(float).eps * max(1.0, threshold)
+    return PlausibilityModel(
+        residual_mean=np.asarray(mean, dtype=float),
+        residual_scale=np.asarray(scale, dtype=float),
+        edge_heads=heads,
+        edge_tails=tails,
+        edge_weights=edge_weights,
+        threshold=threshold,
+        confidence=float(confidence),
+    )
+
+
+def plausibility_state_values(
+    asset_grids: Sequence[dict[str, np.ndarray]],
+    z_hat: np.ndarray,
+    model: PlausibilityModel,
+) -> tuple[np.ndarray, ...]:
+    """Standardized residual value represented by every categorical state."""
+
+    return tuple(
+        (
+            np.asarray(grid["z"], dtype=float)
+            - float(z_hat[asset])
+            - float(model.residual_mean[asset])
+        )
+        / float(model.residual_scale[asset])
+        for asset, grid in enumerate(asset_grids)
+    )
+
+
+def plausibility_score(
+    state_values: Sequence[np.ndarray],
+    selection: np.ndarray,
+    model: PlausibilityModel,
+) -> float:
+    """Evaluate the PSD score for one categorical state per asset."""
+
+    values = np.fromiter(
+        (state_values[asset][int(state)] for asset, state in enumerate(selection)),
+        dtype=float,
+        count=len(state_values),
+    )
+    score = float(np.dot(values, values))
+    if len(model.edge_weights):
+        score -= 2.0 * float(
+            np.dot(
+                model.edge_weights,
+                values[model.edge_heads] * values[model.edge_tails],
+            )
+        )
+    return max(score, 0.0)
+
+
 def variable(asset: int, state: int) -> str:
     return f"x_{asset}_{state}"
 
@@ -657,6 +935,8 @@ def build_qubos(
     lambda_one_hot: float,
     lambda_compat: float,
     *,
+    plausibility_model: PlausibilityModel | None = None,
+    gross_exposure: float | None = None,
     numeric_labels: bool = False,
     compact: bool = False,
 ) -> tuple[
@@ -664,12 +944,12 @@ def build_qubos(
     tuple[ModelStats, ModelStats, ModelStats],
     int,
 ]:
-    """Build the same QUBO with vectorized coefficients and Ocean bulk loading.
+    """Build the scale-homogeneous SB steering QUBO.
 
-    Structural and portfolio linear arrays are constructed independently, then
-    added before the single BQM allocation. This is algebraically identical to
-    ``bqm_structural + bqm_portfolio`` but avoids retaining and copying three
-    graph-sized BQMs at once.
+    On the one-hot subspace its objective is normalized portfolio P&L plus a
+    dimensionless multiple of the PSD plausibility score.  The one-hot penalty
+    is raised, when necessary, above a conservative coefficient-range bound, so
+    no infeasible binary vector can be a global minimizer.
     """
     state_counts = np.fromiter(
         (len(grid["z"]) for grid in asset_grids),
@@ -691,86 +971,83 @@ def build_qubos(
             for asset, count in enumerate(state_counts)
             for state in range(int(count))
         ]
-    state_residuals = [
-        grid["z"] - z_hat[asset] for asset, grid in enumerate(asset_grids)
-    ]
+    if plausibility_model is None:
+        heads, tails, edge_weights = _normalized_signed_edges(
+            len(asset_grids), neighbor_indices, neighbor_correlations
+        )
+        plausibility_model = PlausibilityModel(
+            residual_mean=np.zeros(len(asset_grids), dtype=float),
+            residual_scale=np.maximum(
+                np.asarray(conditional_standard_deviation, dtype=float), 1e-12
+            ),
+            edge_heads=heads,
+            edge_tails=tails,
+            edge_weights=edge_weights,
+            threshold=float("inf"),
+            confidence=1.0,
+        )
+    state_values = plausibility_state_values(asset_grids, z_hat, plausibility_model)
     variable_indices = [
         np.arange(offsets[asset], offsets[asset + 1], dtype=np.int32)
         for asset in range(len(asset_grids))
     ]
-    structural_linear = np.full(variable_count, -lambda_one_hot, dtype=float)
-    portfolio_linear = np.concatenate(
+    raw_portfolio_linear = np.concatenate(
         [
             weights[asset] * grid["simple_return"]
             for asset, grid in enumerate(asset_grids)
         ]
     ).astype(float, copy=False)
+    exposure = (
+        float(np.sum(np.abs(weights)))
+        if gross_exposure is None
+        else float(gross_exposure)
+    )
+    if exposure <= 0.0:
+        exposure = 1.0
+    portfolio_linear = raw_portfolio_linear / exposure
+
+    # ``lambda_compat`` is now a dimensionless steering ratio rather than an
+    # exposure-dependent penalty.  Hard acceptance is handled separately.
+    pnl_scale = float(np.max(np.abs(portfolio_linear), initial=0.0))
+    threshold_scale = (
+        max(plausibility_model.threshold, 1.0)
+        if math.isfinite(plausibility_model.threshold)
+        else 1.0
+    )
+    steering = lambda_compat * pnl_scale / threshold_scale
+    plausibility_linear = steering * np.concatenate(
+        [values * values for values in state_values]
+    )
+    objective_linear = portfolio_linear + plausibility_linear
 
     one_hot_count = int(np.sum(state_counts * (state_counts - 1) // 2))
-    edge_specs: list[tuple[int, int, tuple[tuple[int, int, float], ...], int]] = []
-    compatibility_edges = 0
-
-    def compatibility_coefficients(asset: int, other: int, rho: float) -> np.ndarray:
-        sigma_asset = conditional_standard_deviation[asset]
-        sigma_other = conditional_standard_deviation[other]
-        denominator = sigma_other**2 * max(1.0 - rho**2, 1e-12)
-        asset_residuals = state_residuals[asset]
-        expected_other = rho * sigma_other / sigma_asset * asset_residuals
-        other_residuals = state_residuals[other]
-        return (
-            np.square(other_residuals[None, :] - expected_other[:, None])
-            / denominator
-        ) * lambda_compat
-
-    # Form the undirected union of the directed top-k neighbor nominations. A
-    # pair is retained when either endpoint selects the other. If both endpoints
-    # nominate one another, average their directional conditional penalties;
-    # this deduplicates the pair without introducing asset-index ordering bias.
-    pair_nominations: dict[tuple[int, int], list[tuple[int, int, float]]] = {}
-    for asset, neighbors in enumerate(neighbor_indices):
-        for position, other_value in enumerate(neighbors):
-            other = int(other_value)
-            if other == asset:
-                continue
-            rho = float(neighbor_correlations[asset, position])
-            if abs(rho) < 1e-6:
-                continue
-            pair = (min(asset, other), max(asset, other))
-            pair_nominations.setdefault(pair, []).append((asset, other, rho))
-
-    def union_compatibility_coefficients(
-        lower: int,
-        upper: int,
-        nominations: Sequence[tuple[int, int, float]],
-    ) -> np.ndarray:
-        combined: np.ndarray | None = None
-        for source, target, rho in nominations:
-            coefficients = compatibility_coefficients(source, target, rho)
-            if source != lower:
-                coefficients = coefficients.T
-            if combined is None:
-                combined = coefficients.copy()
-            else:
-                combined += coefficients
-        if combined is None:  # pragma: no cover - pairs always have a nomination
-            raise RuntimeError("neighbor union contains an empty asset pair")
-        combined /= len(nominations)
-        return combined
-
-    # First pass determines the exact allocation size. Recomputing each small
-    # state-pair block in the fill pass avoids a second graph-sized set of arrays.
+    edge_specs: list[tuple[int, int, np.ndarray, int]] = []
     compatibility_count = 0
-    for (lower, upper), nominations_list in pair_nominations.items():
-        nominations = tuple(nominations_list)
-        nonzero_count = int(
-            np.count_nonzero(
-                union_compatibility_coefficients(lower, upper, nominations)
-            )
+    for lower, upper, edge_weight in zip(
+        plausibility_model.edge_heads,
+        plausibility_model.edge_tails,
+        plausibility_model.edge_weights,
+    ):
+        coefficients = (
+            -2.0
+            * steering
+            * float(edge_weight)
+            * np.outer(state_values[int(lower)], state_values[int(upper)])
         )
+        nonzero_count = int(np.count_nonzero(coefficients))
         if nonzero_count:
-            compatibility_edges += 1
-            edge_specs.append((lower, upper, nominations, nonzero_count))
+            edge_specs.append((int(lower), int(upper), coefficients, nonzero_count))
             compatibility_count += nonzero_count
+    compatibility_edges = len(plausibility_model.edge_weights)
+
+    objective_bound = float(np.sum(np.abs(objective_linear)))
+    objective_bound += sum(
+        float(np.sum(np.abs(coefficients)))
+        for _, _, coefficients, _ in edge_specs
+    )
+    safe_one_hot = 2.0 * objective_bound + max(1e-12, objective_bound * 1e-12)
+    effective_one_hot = max(float(lambda_one_hot), safe_one_hot)
+    structural_linear = np.full(variable_count, -effective_one_hot, dtype=float)
 
     quadratic_count = one_hot_count + compatibility_count
     quadratic_heads = np.empty(quadratic_count, dtype=np.int32)
@@ -787,13 +1064,11 @@ def build_qubos(
         next_cursor = cursor + len(local_heads)
         quadratic_heads[cursor:next_cursor] = offsets[asset] + local_heads
         quadratic_tails[cursor:next_cursor] = offsets[asset] + local_tails
-        quadratic_biases[cursor:next_cursor] = 2.0 * lambda_one_hot
+        quadratic_biases[cursor:next_cursor] = 2.0 * effective_one_hot
         cursor = next_cursor
 
-    for asset, other, nominations, nonzero_count in edge_specs:
-        flat_biases = union_compatibility_coefficients(
-            asset, other, nominations
-        ).ravel()
+    for asset, other, coefficients, nonzero_count in edge_specs:
+        flat_biases = coefficients.ravel()
         nonzero = flat_biases != 0.0
         next_cursor = cursor + nonzero_count
         asset_variables = variable_indices[asset]
@@ -807,10 +1082,8 @@ def build_qubos(
         quadratic_biases[cursor:next_cursor] = flat_biases[nonzero]
         cursor = next_cursor
 
-    offset = 0.0
-    for _ in asset_grids:
-        offset += lambda_one_hot
-    total_linear = structural_linear + portfolio_linear
+    offset = effective_one_hot * len(asset_grids)
+    total_linear = structural_linear + objective_linear
     if compact:
         bqm_total: dimod.BinaryQuadraticModel | CompactQubo = CompactQubo(
             total_linear,
@@ -831,14 +1104,14 @@ def build_qubos(
         interaction_count = len(bqm_total.quadratic)
     stats = (
         ModelStats(
-            "portfolio-independent structural BQM",
+            "penalized plausibility-steering BQM",
             variable_count,
             interaction_count,
             offset,
         ),
         ModelStats("portfolio-dependent BQM", variable_count, 0, 0.0),
         ModelStats(
-            "total QUBO BQM / CQM objective",
+            "total QUBO BQM objective",
             variable_count,
             interaction_count,
             offset,
@@ -1095,9 +1368,10 @@ def build_report(
             ("Inflation alpha", args.distance_inflation_alpha),
             ("Inflation power", args.distance_inflation_power),
             ("Max inflation", args.max_inflation_factor),
-            ("One-hot penalty", args.lambda_one_hot),
-            ("Compatibility penalty", args.lambda_compat),
+            ("Minimum one-hot penalty", args.lambda_one_hot),
+            ("Plausibility steering ratio", args.lambda_compat),
             ("Top-k neighbors", args.top_k_neighbors),
+            ("Hard plausibility confidence", args.plausibility_confidence),
         ],
         columns=["parameter", "value"],
     )
@@ -1193,7 +1467,8 @@ def build_report(
         + table_html(input_summary)
         + table_html(return_summary)
         + '<p class="note">The first backtesting return is anchored on the last '
-        "historical close. The historical scaler is applied to backtesting data; "
+        "historical close. The EW calibration-window scaler is applied to "
+        "backtesting data; "
         "backtesting observations do not fit PCA or select the scenario.</p>",
         "<h2>3. Exponentially weighted PCA</h2>"
         + f"<p>Solver: {html.escape(pca.solver)}</p>"
@@ -1213,11 +1488,12 @@ def build_report(
         f"weight sum: {weights.sum():.12g}.</p>"
         + table_html(portfolio),
         "<h2>7. QUBO construction</h2>"
-        + f"<p>Sparse residual compatibility asset edges used: "
+        + f"<p>Sparse PSD plausibility asset edges used: "
         f"{compatibility_edges:,} for detailed scenario {scenario_index}. "
-        "Each CQM contains the same unconstrained "
-        "binary quadratic objective as the total BQM; one-hot behavior remains "
-        "encoded by the notebook's quadratic penalty. No solver was called.</p>"
+        "The BQM steers SB toward the empirically calibrated plausible region; "
+        "the rolling decoder enforces that cutoff exactly. One-hot behavior is "
+        "encoded by a coefficient-derived safe quadratic penalty. No solver "
+        "was called.</p>"
         + table_html(qubo_table)
         + "<h3>Per-scenario output files</h3>"
         + table_html(scenario_model_summary, max_rows=500),
@@ -1291,21 +1567,15 @@ def export_scenario_models(
     output_dir: Path,
     scenario_index: int,
     bqm: dimod.BinaryQuadraticModel,
-) -> tuple[Path, Path]:
-    """Serialize one scenario's BQM and equivalent CQM with bounded lifetime."""
+) -> Path:
+    """Serialize one scenario's BQM with bounded lifetime."""
     bqm_path = output_dir / "bqms" / f"scenario_{scenario_index}.bqm"
-    cqm_path = output_dir / "cqms" / f"scenario_{scenario_index}.cqm"
     bqm_file = bqm.to_file()
-    cqm = dimod.ConstrainedQuadraticModel.from_bqm(bqm)
-    cqm_file = cqm.to_file()
-    del cqm
     try:
         atomic_write_model(bqm_path, bqm_file)
-        atomic_write_model(cqm_path, cqm_file)
     finally:
         bqm_file.close()
-        cqm_file.close()
-    return bqm_path, cqm_path
+    return bqm_path
 
 
 def main() -> None:
@@ -1320,13 +1590,16 @@ def main() -> None:
         )
 
     print("[2/6] Fitting exponentially weighted PCA", flush=True)
-    pca = exponentially_weighted_pca(
-        prepared.historical_z,
-        prepared.backtest_z,
+    calibration_returns = prepared.historical_log_returns.tail(args.ew_window)
+    scaler, historical_z, backtest_z, pca = fit_ew_pca(
+        calibration_returns.to_numpy(dtype=float),
+        prepared.backtest_log_returns.to_numpy(dtype=float),
         args.components,
         args.ew_lambda,
-        args.ew_window,
     )
+    prepared.standardizer = scaler
+    prepared.historical_z = historical_z
+    prepared.backtest_z = backtest_z
 
     print("[3/6] Discretizing PC scenario space", flush=True)
     pc_grids, scenario_grid, historical_counts = build_scenario_grid(
@@ -1355,7 +1628,6 @@ def main() -> None:
     output_dir = output_directory(folder)
     output_dir.mkdir(parents=False, exist_ok=True)
     (output_dir / "bqms").mkdir(exist_ok=True)
-    (output_dir / "cqms").mkdir(exist_ok=True)
 
     print("[4/6] Loading portfolio", flush=True)
     portfolio, weights = read_portfolio(paths["portfolio"], prepared.tickers)
@@ -1394,7 +1666,17 @@ def main() -> None:
             prepared.standardizer, shocks.asset_z_grids
         )
         conditional_std, neighbor_indices, neighbor_correlations = (
-            conditional_neighbors(shocks.inflated_residuals, args.top_k_neighbors)
+            conditional_neighbors_device(
+                shocks.inflated_residuals, args.top_k_neighbors
+            )
+        )
+        plausibility = fit_plausibility_model(
+            shocks.inflated_residuals,
+            args.top_k_neighbors,
+            args.plausibility_confidence,
+            conditional_standard_deviation=conditional_std,
+            neighbor_indices=neighbor_indices,
+            neighbor_correlations=neighbor_correlations,
         )
         bqm_total, model_stats, compatibility_edges = build_qubos(
             asset_grids,
@@ -1405,10 +1687,10 @@ def main() -> None:
             neighbor_correlations,
             args.lambda_one_hot,
             args.lambda_compat,
+            plausibility_model=plausibility,
+            gross_exposure=float(np.sum(np.abs(weights))),
         )
-        bqm_path, cqm_path = export_scenario_models(
-            output_dir, scenario_index, bqm_total
-        )
+        bqm_path = export_scenario_models(output_dir, scenario_index, bqm_total)
         total_stats = model_stats[-1]
         scenario_rows.append(
             {
@@ -1418,7 +1700,6 @@ def main() -> None:
                 "interactions": total_stats.interactions,
                 "compatibility edges": compatibility_edges,
                 "BQM file": bqm_path.relative_to(output_dir).as_posix(),
-                "CQM file": cqm_path.relative_to(output_dir).as_posix(),
             }
         )
         if scenario_index == detail_scenario_index:

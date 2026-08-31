@@ -11,17 +11,21 @@ For every evaluation date it:
 2. Fits window-local exponentially weighted normalization and two-component PCA.
 3. Builds the 21 by 5 scenario grid.
 4. Creates each scenario's per-asset state grids and portfolio P&L vector once.
-5. On the QUBO path, calculates residual compatibility using the undirected
-   union of per-asset top-k neighbor nominations, builds compact QUBOs, packs a
-   configurable number into a block-diagonal CSR matrix, and solves them with
-   simulated bifurcation. It repairs every selected sample to exactly one state
-   per asset.
-6. On the baseline path, independently selects the minimum weighted-PnL state
+5. On the QUBO path, builds a sparse positive-semidefinite residual score from
+   the degree-normalized, undirected top-k correlation graph and calibrates a
+   hard empirical plausibility cutoff. Portfolio P&L is normalized by gross
+   exposure and the one-hot penalty is raised to a coefficient-derived safe
+   bound.
+6. Packs compact QUBOs into a block-diagonal CSR matrix and solves them with
+   simulated bifurcation. Every randomized candidate is repaired and improved
+   to categorical convergence before energy comparison. Final decoding then
+   minimizes P&L subject to the hard plausibility cutoff.
+7. On the baseline path, independently selects the minimum weighted-PnL state
    for each asset in each scenario. It applies no cross-asset compatibility or
    feasibility checks.
-7. For each requested method, selects the minimum portfolio PnL across
+8. For each requested method, selects the minimum portfolio PnL across
    scenarios and issues `margin = max(0, -worst_pnl)`.
-8. Reveals that day's realized PnL and writes one labelled method row with
+9. Reveals that day's realized PnL and writes one labelled method row with
    `signed_margin_error = (margin + realized_pnl) / gross_exposure`.
 
 ## Install

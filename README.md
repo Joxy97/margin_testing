@@ -12,7 +12,7 @@ rolling margin backtest with simulated bifurcation.
 - `src/sbm_torch.py` batches simulated-bifurcation trajectories on CPU or CUDA.
 - `src/qubo_model.py` stores large QUBOs in compact numeric arrays.
 - `include/sbm/` and `src/sbm/` provide the native C++ CPU solver.
-- `tools/export_dwave_qubo.py` converts Ocean BQM/CQM files to the native format.
+- `tools/export_dwave_qubo.py` converts Ocean BQM files to the native format.
 - `synthetic_market/` contains the pre-generated market universes.
 - `tests/` contains focused backtesting and solver tests.
 - `docs/` contains the beginner manual, technical notes, and resource model.
