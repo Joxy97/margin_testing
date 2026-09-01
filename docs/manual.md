@@ -22,16 +22,19 @@ used to construct that date's margin estimate.
 There are two margin methods:
 
 - `qubo` builds and solves a plausibility-steered QUBO, repairs every solver
-  candidate to categorical convergence, then enforces a hard empirically
-  calibrated residual-score cutoff during final decoding;
+  candidate to categorical convergence, and uses the lowest-energy repaired
+  candidate directly. The empirical residual-score threshold is reported as a
+  diagnostic; it does not replace the selected QUBO candidate;
 - `baseline` skips correlations and QUBO solving. Within each scenario, it
   independently chooses the state with the lowest weighted P&L for every
   asset, sums those asset P&Ls, and then retains the worst scenario.
 
 Use `--method both` to compare them from exactly the same PCA fit and generated
-scenarios. The baseline intentionally performs no cross-asset compatibility or
-feasibility checks, so it is a deliberately conservative independent-asset
-reference rather than another QUBO solver.
+scenarios. After scenario preparation, the methods are independent: no greedy
+or scenario-center candidate is inserted into QUBO decoding, and the baseline
+never consumes a QUBO solution. The baseline intentionally performs no
+cross-asset compatibility or feasibility checks, so it is a deliberately
+conservative independent-asset reference rather than another QUBO solver.
 
 More precisely, for factor scenario `s`, asset `i`, residual state `j`, position
 weight `w_i`, and simple return `r_sij`, the baseline calculates
@@ -140,23 +143,27 @@ DAY 1/258 | 2025-01-01 | cuda:0
 Assets: 10,000 | Portfolios: 1 | Scenarios: 105 | Batches: 105 | Steps: 1000 | Runs: 16
 Method: qubo | Solver: cuda:0 | PCA: cuda:0 | Correlation: cuda:0
 ----------------------------------------------------------------------------------------
-[cuda:0 2025-01-01] PCA completed in 2.31s | Factor scenarios enumerated: 105/105
+[cuda:0] PCA completed in 2.31s | Factor scenarios enumerated: 105/105
 ----------------------------------------------------------------------------------------
-[cuda:0 2025-01-01] Scenario 17/105 | data=0.08s | QUBO=1.12s | solve=2.44s |
-decode=0.03s |
-progress=17/105 (16.2%) | ETA=319.5s
-[cuda:0 2025-01-01] RESULT QUBO | margin=... | realized P&L=... | realized loss=... | SME=... |
-selected scenario=...
+[cuda:0] Scenarios [===-----------------]  17/105 ( 16.2%) | avg/scenario |
+data=0.080s | QUBO=1.120s | solve=2.440s | decode=0.030s | ETA=319.5s
+[cuda:0] RESULT QUBO | margin=... | realized P&L=... | realized loss=... | SME=... |
+selected scenario=... | projection error=... (... grid) | time=...
 ----------------------------------------------------------------------------------------
-[cuda:0 2025-01-01] DAY COMPLETE | PCA=2.31s | scenario data=8.42s | QUBO build=118.69s |
+[cuda:0] DAY COMPLETE | PCA=2.31s | scenario data=8.42s | QUBO build=118.69s |
 solve=258.13s | baseline=0.0000s | total=481.85s
 ========================================================================================
 ```
 
-Progress is reported after completed scenario batches and is throttled by
-`--progress-interval`. Consequently, batch size 1 gives the finest progress;
-a large packed batch cannot report its internal scenarios while its single
-solver call is still running.
+In an interactive terminal, scenario progress is redrawn in place on one line.
+Redirected output and non-interactive logs retain one complete line per update.
+The data, QUBO-build, solve, and decode timings are cumulative averages per
+completed scenario, including when multiple scenarios are packed in a batch.
+Updates occur after completed scenario batches and are throttled by
+`--progress-interval`. Consequently, batch size 1 gives the finest progress; a
+large packed batch cannot report its internal scenarios while its single solver
+call is still running. Multi-device workers use ordinary lines so their output
+cannot overwrite another worker's tracker.
 
 ## 5. Output files
 
@@ -177,12 +184,24 @@ rows per date. Its most useful columns are:
 
 - `date`: evaluated market date;
 - `method`: `qubo` or `baseline`;
-- `margin`: calculated non-negative margin;
-- `worst_scenario_pnl`: worst selected scenario P&L;
-- `realized_pnl`: P&L that actually occurred;
 - `gross_exposure`: sum of absolute portfolio positions;
-- `signed_margin_error`: `(margin + realized_pnl) / gross_exposure`;
+- `realized_loss`: negative of the realized P&L, in absolute portfolio units;
+- `margin`: calculated non-negative margin, in absolute portfolio units;
+- `realized_loss_percent_of_gross_exposure`: realized loss divided by gross
+  exposure and multiplied by 100;
+- `margin_percent_of_gross_exposure`: margin divided by gross exposure and
+  multiplied by 100;
+- `signed_margin_error`: `(margin - realized_loss) / gross_exposure`, stored as
+  a fraction rather than percentage points;
 - `selected_scenario`: scenario that produced the worst P&L;
+- `scenario_center_pc1` and `scenario_center_pc2`: factor coordinates of that
+  enumerated scenario;
+- `projected_pc1` and `projected_pc2`: factor coordinates obtained by
+  projecting the method's selected asset-state vector;
+- `projection_error_factor_units`: Euclidean distance between the projected
+  selection and scenario center in native factor-coordinate units;
+- `projection_error_grid_units`: the same component differences divided by
+  their local scenario-grid spacing before taking the Euclidean norm;
 - `raw_one_hot_violations`: QUBO solver constraint violations before repair;
   this is blank for the baseline;
 - `raw_energy` and `repaired_energy`: energy of the winning raw solver output
@@ -190,7 +209,9 @@ rows per date. Its most useful columns are:
 - `raw_feasible_candidates` and `solver_candidates`: raw one-hot feasibility
   diagnostics across randomized trajectories;
 - `plausibility_score`, `plausibility_threshold`, and
-  `hard_plausibility_feasible`: the exact final feasibility check;
+  `hard_plausibility_feasible`: a diagnostic showing whether the selected QUBO
+  state falls inside the calibrated residual-score threshold. It does not
+  filter, replace, or otherwise change either method's solution;
 - `pca_seconds`, `scenario_build_seconds`, `qubo_build_seconds`,
   `solve_seconds`, `baseline_seconds`, and `day_seconds`: timing information;
   and
@@ -206,9 +227,9 @@ backtest-results/assets_00100_margin_backtest.summary.json
 ```
 
 Its `methods` object contains separate error quantiles, under-margin counts and
-rates, mean and worst shortfalls, and runtime for each requested method. A
-single-method summary also retains the original top-level statistics for
-backward compatibility.
+rates, mean and worst shortfalls, projection-error statistics, and runtime for
+each requested method. A single-method summary also retains the original
+top-level statistics for backward compatibility.
 
 A third file records one row of resource diagnostics for every completed day:
 
@@ -342,9 +363,9 @@ Beginners should normally leave this group at its defaults.
 | `--distance-inflation-power X` | `2.0` | Exponent controlling how quickly distance inflation grows. Must be positive. |
 | `--max-inflation-factor X` | `5.0` | Upper bound on distance-based inflation. Must be at least 1. |
 | `--lambda-one-hot X` | `1.0` | Minimum one-hot penalty. The builder automatically raises it above a conservative safe bound derived from all non-constraint QUBO coefficients. |
-| `--lambda-compat X` | `0.1` | Dimensionless strength of SB steering toward low PSD residual scores. It does not define feasibility; the hard cutoff below does. |
+| `--lambda-compat X` | `0.1` | Dimensionless strength of QUBO steering toward low PSD residual scores. The empirical threshold below is also reported, but it does not constrain final decoding. |
 | `--top-k-neighbors N` | `5` | Number of strongest residual-correlation neighbors nominated per asset. The signed undirected union is degree-normalized into a positive-semidefinite score. Zero gives an independent standardized-residual score. |
-| `--plausibility-confidence X` | `0.998` | Empirical quantile used as the hard PSD residual-score cutoff. Must be greater than 0 and at most 1. |
+| `--plausibility-confidence X` | `0.998` | Empirical quantile used as the reported PSD residual-score threshold and to scale compatibility steering. Must be greater than 0 and at most 1. |
 
 ### Devices, numeric precision, and memory
 

@@ -17,6 +17,7 @@ import json
 import math
 import multiprocessing as mp
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -60,6 +61,12 @@ RESULT_COLUMNS = (
     "assets",
     "scenarios",
     "selected_scenario",
+    "scenario_center_pc1",
+    "scenario_center_pc2",
+    "projected_pc1",
+    "projected_pc2",
+    "projection_error_factor_units",
+    "projection_error_grid_units",
     "selected_energy",
     "raw_energy",
     "repaired_energy",
@@ -69,11 +76,11 @@ RESULT_COLUMNS = (
     "plausibility_score",
     "plausibility_threshold",
     "hard_plausibility_feasible",
-    "margin",
-    "worst_scenario_pnl",
-    "realized_pnl",
-    "realized_loss",
     "gross_exposure",
+    "realized_loss",
+    "margin",
+    "realized_loss_percent_of_gross_exposure",
+    "margin_percent_of_gross_exposure",
     "signed_margin_error",
     "pca_seconds",
     "scenario_build_seconds",
@@ -138,7 +145,6 @@ class ScenarioProblem:
     bqm: CompactQubo
     group_offsets: np.ndarray
     portfolio_linear: np.ndarray
-    gross_exposure: float
     plausibility: PlausibilityModel
     plausibility_states: tuple[np.ndarray, ...]
 
@@ -150,6 +156,29 @@ class ScenarioData:
     asset_grids: Sequence[dict[str, np.ndarray]]
     group_offsets: np.ndarray
     portfolio_linear: np.ndarray
+
+
+@dataclass(frozen=True)
+class ProjectionMetrics:
+    scenario_center: np.ndarray
+    projected_factors: np.ndarray
+    factor_error: float
+    grid_error: float
+
+
+@dataclass(frozen=True)
+class SelectionResult:
+    worst_pnl: float
+    scenario_index: int
+    projection: ProjectionMetrics
+    selected_energy: float | None = None
+    raw_energy: float | None = None
+    repaired_energy: float | None = None
+    raw_one_hot_violations: int | None = None
+    raw_feasible_candidates: int | None = None
+    solver_candidates: int | None = None
+    plausibility_score: float | None = None
+    plausibility_threshold: float | None = None
 
 
 @dataclass(frozen=True)
@@ -328,6 +357,58 @@ class ResourceMonitor:
             "peak_vram_mib": peak(self.vram_mib),
             "gpu_vram_total_mib": self.gpu_vram_total_mib,
         }
+
+
+class TerminalProgress:
+    """Render one scenario-progress line in place on interactive terminals."""
+
+    def __init__(
+        self,
+        total: int,
+        prefix: str,
+        *,
+        stream: Any | None = None,
+        interactive: bool | None = None,
+        bar_width: int = 20,
+    ) -> None:
+        if total < 1 or bar_width < 1:
+            raise ValueError("progress total and bar width must be positive")
+        self.total = total
+        self.prefix = prefix
+        self.stream = stream or sys.stdout
+        if interactive is None:
+            is_terminal = bool(getattr(self.stream, "isatty", lambda: False)())
+            interactive = is_terminal and mp.current_process().name == "MainProcess"
+        self.interactive = interactive
+        self.bar_width = bar_width
+        self._previous_width = 0
+        self._active = False
+
+    def update(self, completed: int, detail: str) -> None:
+        completed = min(max(int(completed), 0), self.total)
+        ratio = completed / self.total
+        filled = min(self.bar_width, int(self.bar_width * ratio))
+        bar = "=" * filled + "-" * (self.bar_width - filled)
+        line = (
+            f"{self.prefix} Scenarios [{bar}] "
+            f"{completed:>{len(str(self.total))}}/{self.total} "
+            f"({100.0 * ratio:5.1f}%) | {detail}"
+        )
+        if self.interactive:
+            padding = " " * max(0, self._previous_width - len(line))
+            self.stream.write("\r" + line + padding)
+            self.stream.flush()
+            self._previous_width = len(line)
+            self._active = True
+        else:
+            print(line, file=self.stream, flush=True)
+
+    def finish(self) -> None:
+        if self.interactive and self._active:
+            self.stream.write("\n")
+            self.stream.flush()
+        self._previous_width = 0
+        self._active = False
 
 
 def resolve_market_folder(value: str | Path) -> Path:
@@ -519,20 +600,6 @@ def _scenario_problem(
     state_values = plausibility_state_values(
         data.asset_grids, data.shocks.z_hat, plausibility
     )
-    center = np.fromiter(
-        (int(np.argmin(np.abs(values))) for values in state_values),
-        dtype=np.int64,
-        count=len(state_values),
-    )
-    center_score = plausibility_score(state_values, center, plausibility)
-    if center_score > plausibility.threshold:
-        # A finite grid can miss the continuous residual mean.  Widen only by
-        # the minimum center discretization error so the hard set is non-empty.
-        plausibility = replace(
-            plausibility,
-            threshold=center_score
-            + 64.0 * np.finfo(float).eps * max(1.0, center_score),
-        )
     bqm, _, _ = build_qubos(
         data.asset_grids,
         market.weights,
@@ -554,153 +621,92 @@ def _scenario_problem(
         bqm=bqm,
         group_offsets=data.group_offsets,
         portfolio_linear=data.portfolio_linear,
-        gross_exposure=market.gross_exposure,
         plausibility=plausibility,
         plausibility_states=state_values,
     )
 
 
+def one_hot_state_indices(sample: np.ndarray, group_offsets: np.ndarray) -> np.ndarray:
+    """Return one categorical state index per asset, rejecting invalid samples."""
+
+    values = np.asarray(sample, dtype=np.uint8)
+    offsets = np.asarray(group_offsets, dtype=np.int64)
+    states = np.empty(len(offsets) - 1, dtype=np.int64)
+    for asset in range(len(states)):
+        active = np.flatnonzero(
+            values[int(offsets[asset]) : int(offsets[asset + 1])]
+        )
+        if len(active) != 1:
+            raise ValueError("projection requires exactly one state per asset")
+        states[asset] = int(active[0])
+    return states
+
+
+def greedy_baseline_sample(data: ScenarioData) -> np.ndarray:
+    """Select every asset's minimum weighted-PnL state independently."""
+
+    sample = np.zeros(int(data.group_offsets[-1]), dtype=np.uint8)
+    for asset in range(len(data.group_offsets) - 1):
+        begin = int(data.group_offsets[asset])
+        end = int(data.group_offsets[asset + 1])
+        sample[begin + int(np.argmin(data.portfolio_linear[begin:end]))] = 1
+    return sample
+
+
 def greedy_baseline_pnl(data: ScenarioData) -> float:
-    """Select each asset's minimum weighted PnL state independently."""
+    """Return independent per-asset minimum portfolio PnL."""
 
-    minima = np.minimum.reduceat(data.portfolio_linear, data.group_offsets[:-1])
-    return float(minima.sum())
+    return float(np.dot(data.portfolio_linear, greedy_baseline_sample(data)))
 
 
-def decode_hard_plausible(
-    problem: ScenarioProblem,
-    one_hot_sample: np.ndarray,
-) -> tuple[np.ndarray, float, float]:
-    """Minimize portfolio P&L by categorical descent inside the hard cutoff."""
+def project_scenario_selection(
+    data: ScenarioData,
+    pca: PCAResult,
+    pc_grids: Sequence[np.ndarray],
+    sample: np.ndarray,
+) -> ProjectionMetrics:
+    """Project a one-hot asset state vector into factor and grid-step units."""
 
-    offsets = problem.group_offsets
-    assets = len(offsets) - 1
-    tolerance = 128.0 * np.finfo(float).eps * max(
-        1.0, problem.plausibility.threshold
+    states = one_hot_state_indices(sample, data.group_offsets)
+    selected_z = np.fromiter(
+        (
+            float(data.asset_grids[asset]["z"][state])
+            for asset, state in enumerate(states)
+        ),
+        dtype=float,
+        count=len(states),
     )
-    normalized_portfolio = problem.portfolio_linear / problem.gross_exposure
-    pnl_states = tuple(
-        normalized_portfolio[int(offsets[a]) : int(offsets[a + 1])]
-        for a in range(assets)
-    )
+    projected = (selected_z - pca.weighted_mean) @ pca.loadings.T
+    center = np.asarray(data.shocks.selected_scenario, dtype=float)
+    if projected.shape != center.shape or len(projected) != len(pc_grids):
+        raise ValueError("projection dimensions do not match the scenario grid")
+    delta = projected - center
 
-    neighbors: list[list[tuple[int, float]]] = [[] for _ in range(assets)]
-    for head, tail, weight in zip(
-        problem.plausibility.edge_heads,
-        problem.plausibility.edge_tails,
-        problem.plausibility.edge_weights,
+    grid_scales = np.empty(len(pc_grids), dtype=float)
+    for component, (coordinates_value, center_value) in enumerate(
+        zip(pc_grids, center)
     ):
-        lower, upper, edge_weight = int(head), int(tail), float(weight)
-        neighbors[lower].append((upper, edge_weight))
-        neighbors[upper].append((lower, edge_weight))
-
-    def sample_to_selection(sample: np.ndarray) -> np.ndarray:
-        return np.fromiter(
-            (
-                int(np.flatnonzero(sample[int(offsets[a]) : int(offsets[a + 1])])[0])
-                for a in range(assets)
-            ),
-            dtype=np.int64,
-            count=assets,
-        )
-
-    def selection_to_sample(selection: np.ndarray) -> np.ndarray:
-        sample = np.zeros(int(offsets[-1]), dtype=np.uint8)
-        for asset, state in enumerate(selection):
-            sample[int(offsets[asset]) + int(state)] = 1
-        return sample
-
-    def descend(seed: np.ndarray) -> tuple[np.ndarray, float, float]:
-        selection = np.asarray(seed, dtype=np.int64).copy()
-        values = np.fromiter(
-            (
-                problem.plausibility_states[asset][int(state)]
-                for asset, state in enumerate(selection)
-            ),
-            dtype=float,
-            count=assets,
-        )
-        contexts = np.zeros(assets, dtype=float)
-        for asset, adjacent in enumerate(neighbors):
-            contexts[asset] = sum(weight * values[other] for other, weight in adjacent)
-        score = plausibility_score(
-            problem.plausibility_states, selection, problem.plausibility
-        )
-        pnl = float(sum(pnl_states[a][selection[a]] for a in range(assets)))
-
-        while True:
-            changed = False
-            for asset in range(assets):
-                old_state = int(selection[asset])
-                old_value = float(values[asset])
-                candidates = problem.plausibility_states[asset]
-                score_changes = (
-                    candidates * candidates
-                    - old_value * old_value
-                    - 2.0 * (candidates - old_value) * contexts[asset]
+        coordinates = np.asarray(coordinates_value, dtype=float)
+        if len(coordinates) > 1:
+            position = int(np.argmin(np.abs(coordinates - center_value)))
+            if position == 0:
+                scale = abs(float(coordinates[1] - coordinates[0]))
+            elif position == len(coordinates) - 1:
+                scale = abs(float(coordinates[-1] - coordinates[-2]))
+            else:
+                scale = 0.5 * abs(
+                    float(coordinates[position + 1] - coordinates[position - 1])
                 )
-                feasible = score + score_changes <= problem.plausibility.threshold + tolerance
-                if not np.any(feasible):
-                    continue
-                candidate_pnl = pnl_states[asset]
-                feasible_indices = np.flatnonzero(feasible)
-                best_local = int(
-                    feasible_indices[
-                        np.lexsort(
-                            (
-                                score_changes[feasible_indices],
-                                candidate_pnl[feasible_indices],
-                            )
-                        )[0]
-                    ]
-                )
-                pnl_change = float(candidate_pnl[best_local] - candidate_pnl[old_state])
-                if pnl_change >= -tolerance:
-                    continue
-                new_value = float(candidates[best_local])
-                delta_value = new_value - old_value
-                score = max(0.0, score + float(score_changes[best_local]))
-                pnl += pnl_change
-                selection[asset] = best_local
-                values[asset] = new_value
-                for other, edge_weight in neighbors[asset]:
-                    contexts[other] += edge_weight * delta_value
-                changed = True
-            if not changed:
-                break
-        return selection, pnl, score
+        else:
+            scale = math.sqrt(max(float(pca.eigenvalues[component]), 1e-12))
+        grid_scales[component] = max(scale, 1e-12)
 
-    repaired_selection = sample_to_selection(one_hot_sample)
-    center_selection = np.fromiter(
-        (int(np.argmin(np.abs(values))) for values in problem.plausibility_states),
-        dtype=np.int64,
-        count=assets,
+    return ProjectionMetrics(
+        scenario_center=center.copy(),
+        projected_factors=np.asarray(projected, dtype=float),
+        factor_error=float(np.linalg.norm(delta)),
+        grid_error=float(np.linalg.norm(delta / grid_scales)),
     )
-    greedy_selection = np.fromiter(
-        (int(np.argmin(values)) for values in pnl_states),
-        dtype=np.int64,
-        count=assets,
-    )
-    seeds = (repaired_selection, center_selection, greedy_selection)
-    candidates: list[tuple[float, float, np.ndarray]] = []
-    for seed in seeds:
-        seed_score = plausibility_score(
-            problem.plausibility_states, seed, problem.plausibility
-        )
-        if seed_score <= problem.plausibility.threshold + tolerance:
-            selection, pnl, score = descend(seed)
-            candidates.append((pnl, score, selection))
-    if not candidates:
-        raise RuntimeError("discretized state space contains no plausible portfolio")
-    _, score, selection = min(candidates, key=lambda item: (item[0], item[1]))
-    sample = selection_to_sample(selection)
-    pnl = float(np.dot(problem.portfolio_linear, sample))
-    final_score = plausibility_score(
-        problem.plausibility_states, selection, problem.plausibility
-    )
-    if final_score > problem.plausibility.threshold + tolerance:  # pragma: no cover
-        raise RuntimeError("hard-plausibility decoder returned an infeasible sample")
-    return sample, float(pnl), float(final_score)
 
 
 def _scenario_batches(indices: Sequence[int], size: int) -> list[list[int]]:
@@ -724,6 +730,7 @@ def _upgrade_csv_schema(
     output: Path,
     columns: Sequence[str],
     defaults: dict[str, Any],
+    legacy_columns: Sequence[str] = (),
 ) -> None:
     """Upgrade older resumable CSVs before appending newly added columns."""
 
@@ -732,6 +739,9 @@ def _upgrade_csv_schema(
     frame = pd.read_csv(output)
     if tuple(frame.columns) == tuple(columns):
         return
+    removable = [column for column in legacy_columns if column in frame]
+    if removable:
+        frame = frame.drop(columns=removable)
     unknown = [column for column in frame.columns if column not in columns]
     if unknown:
         raise ValueError(
@@ -740,6 +750,28 @@ def _upgrade_csv_schema(
     for column in columns:
         if column not in frame:
             frame[column] = defaults.get(column, np.nan)
+    if {
+        "gross_exposure",
+        "realized_loss",
+        "realized_loss_percent_of_gross_exposure",
+    }.issubset(frame.columns):
+        missing = frame["realized_loss_percent_of_gross_exposure"].isna()
+        valid = missing & frame["gross_exposure"].ne(0)
+        frame.loc[valid, "realized_loss_percent_of_gross_exposure"] = (
+            100.0
+            * frame.loc[valid, "realized_loss"]
+            / frame.loc[valid, "gross_exposure"]
+        )
+    if {
+        "gross_exposure",
+        "margin",
+        "margin_percent_of_gross_exposure",
+    }.issubset(frame.columns):
+        missing = frame["margin_percent_of_gross_exposure"].isna()
+        valid = missing & frame["gross_exposure"].ne(0)
+        frame.loc[valid, "margin_percent_of_gross_exposure"] = (
+            100.0 * frame.loc[valid, "margin"] / frame.loc[valid, "gross_exposure"]
+        )
     temporary = output.with_suffix(output.suffix + ".schema.tmp")
     frame.to_csv(temporary, index=False, columns=columns)
     temporary.replace(output)
@@ -765,7 +797,7 @@ def _append_result(output: Path, row: dict[str, Any]) -> None:
 
 
 def write_error_summary(output: Path) -> Path:
-    """Write signed-error statistics separately for every margin method."""
+    """Write margin and factor-projection statistics for every method."""
 
     frame = pd.read_csv(output)
     if frame.empty:
@@ -777,7 +809,7 @@ def write_error_summary(output: Path) -> Path:
         errors = method_frame["signed_margin_error"].to_numpy(dtype=float)
         shortfalls = errors[errors < 0.0]
         quantiles = np.quantile(errors, [0.01, 0.05, 0.50, 0.95, 0.99])
-        methods[str(method)] = {
+        method_summary: dict[str, Any] = {
             "days": int(len(errors)),
             "mean_signed_margin_error": float(errors.mean()),
             "std_signed_margin_error": (
@@ -796,6 +828,30 @@ def write_error_summary(output: Path) -> Path:
             "worst_shortfall": float(shortfalls.min()) if len(shortfalls) else 0.0,
             "total_runtime_seconds": float(method_frame["day_seconds"].sum()),
         }
+        for units, column in (
+            ("factor_units", "projection_error_factor_units"),
+            ("grid_units", "projection_error_grid_units"),
+        ):
+            if column not in method_frame:
+                continue
+            projection_errors = method_frame[column].to_numpy(dtype=float)
+            projection_errors = projection_errors[np.isfinite(projection_errors)]
+            if not len(projection_errors):
+                continue
+            method_summary.update(
+                {
+                    f"mean_projection_error_{units}": float(
+                        projection_errors.mean()
+                    ),
+                    f"median_projection_error_{units}": float(
+                        np.median(projection_errors)
+                    ),
+                    f"maximum_projection_error_{units}": float(
+                        projection_errors.max()
+                    ),
+                }
+            )
+        methods[str(method)] = method_summary
     summary: dict[str, Any] = {"methods": methods}
     # Preserve the original top-level fields for single-method consumers while
     # making the per-method grouping authoritative for comparisons.
@@ -826,6 +882,7 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             config.output,
             RESULT_COLUMNS,
             {"method": "qubo", "scenario_build_seconds": 0.0, "baseline_seconds": 0.0},
+            ("worst_scenario_pnl", "realized_pnl"),
         )
         _upgrade_csv_schema(
             _diagnostics_path(config.output),
@@ -869,11 +926,12 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             print(f"[{day_position + 1}/{len(market.evaluation_dates)}] {date_text}: resumed")
             continue
         day_started = time.perf_counter()
-        progress_context = f"[{resolved_device} {date_text}]"
+        progress_context = f"[{resolved_device}]"
         if config.progress_interval > 0:
             print(
                 "\n".join(
                     (
+                        "",
                         "=" * 88,
                         f"DAY {day_position + 1}/{len(market.evaluation_dates)} | "
                         f"{date_text} | {resolved_device}",
@@ -886,6 +944,7 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                         f"Method: {config.method} | Solver: {resolved_device} | "
                         f"PCA: {pca_device} | Correlation: {correlation_device}",
                         "-" * 88,
+                        "",
                     )
                 ),
                 flush=True,
@@ -901,7 +960,9 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
         prepared, pca = rolling_ew_pca(
             prior, config.ew_lambda, pca_device, config.pca_dtype
         )
-        _, scenario_grid, _ = build_scenario_grid(pca, config.grid_points, 1.0)
+        pc_grids, scenario_grid, _ = build_scenario_grid(
+            pca, config.grid_points, 1.0
+        )
         shock_context = prepare_shock_grid_context(prepared, pca, config.window)
         pca_seconds = time.perf_counter() - pca_started
         if config.progress_interval > 0:
@@ -910,12 +971,10 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                 f"Factor scenarios enumerated: {len(scenario_indices)}/{len(scenario_indices)}",
                 flush=True,
             )
-            print("-" * 88, flush=True)
+            print("-" * 88 + "\n", flush=True)
 
-        best_qubo: tuple[
-            float, int, float, float, float, int, int, int, float, float
-        ] | None = None
-        best_baseline: tuple[float, int] | None = None
+        best_qubo: SelectionResult | None = None
+        best_baseline: SelectionResult | None = None
         scenario_build_seconds = 0.0
         build_seconds = 0.0
         solve_seconds = 0.0
@@ -924,8 +983,13 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
         scenario_progress_started = time.perf_counter()
         last_progress_report = scenario_progress_started
         completed_scenarios = 0
-        for batch_position, scenario_batch in enumerate(
-            _scenario_batches(scenario_indices, config.scenario_batch_size), start=1
+        progress_tracker = (
+            TerminalProgress(len(scenario_indices), progress_context)
+            if config.progress_interval > 0
+            else None
+        )
+        for scenario_batch in _scenario_batches(
+            scenario_indices, config.scenario_batch_size
         ):
             scenario_started = time.perf_counter()
             if config.build_workers == 1:
@@ -964,8 +1028,18 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             if run_baseline:
                 baseline_started = time.perf_counter()
                 for data in scenario_data:
-                    candidate = (greedy_baseline_pnl(data), data.scenario_index)
-                    if best_baseline is None or candidate[0] < best_baseline[0]:
+                    sample = greedy_baseline_sample(data)
+                    candidate = SelectionResult(
+                        worst_pnl=float(np.dot(data.portfolio_linear, sample)),
+                        scenario_index=data.scenario_index,
+                        projection=project_scenario_selection(
+                            data, pca, pc_grids, sample
+                        ),
+                    )
+                    if (
+                        best_baseline is None
+                        or candidate.worst_pnl < best_baseline.worst_pnl
+                    ):
                         best_baseline = candidate
                 batch_baseline_seconds = time.perf_counter() - baseline_started
                 baseline_seconds += batch_baseline_seconds
@@ -982,20 +1056,14 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                     progress_eta = (
                         len(scenario_indices) - completed_scenarios
                     ) / progress_rate
-                    scenario_label = (
-                        f"Scenario {scenario_batch[0] + 1}/{all_scenario_count}"
-                        if len(scenario_batch) == 1
-                        else f"Batch {batch_position}/{scenario_batch_count} "
-                        f"({len(scenario_batch)} scenarios)"
-                    )
-                    print(
-                        f"{progress_context} {scenario_label} | "
-                        f"data={batch_scenario_seconds:.2f}s | "
-                        f"baseline={batch_baseline_seconds:.4f}s | "
-                        f"progress={completed_scenarios}/{len(scenario_indices)} "
-                        f"({100.0 * completed_scenarios / len(scenario_indices):.1f}%) | "
+                    if progress_tracker is None:  # pragma: no cover
+                        raise RuntimeError("progress tracker was not initialized")
+                    progress_tracker.update(
+                        completed_scenarios,
+                        "avg/scenario "
+                        f"data={scenario_build_seconds / completed_scenarios:.3f}s | "
+                        f"baseline={baseline_seconds / completed_scenarios:.4f}s | "
                         f"elapsed={progress_elapsed:.1f}s | ETA={progress_eta:.1f}s",
-                        flush=True,
                     )
                     last_progress_report = progress_now
                 del scenario_data
@@ -1048,24 +1116,35 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             batch_solve_seconds = sum(result.solve_seconds for result in solved)
             solve_seconds += batch_solve_seconds
             decode_started = time.perf_counter()
-            for problem, result in zip(problems, solved):
-                decoded, scenario_pnl, plausible_score = decode_hard_plausible(
-                    problem, result.sample
+            for data, problem, result in zip(scenario_data, problems, solved):
+                decoded = result.sample
+                selection = one_hot_state_indices(
+                    decoded, problem.group_offsets
                 )
-                decoded_energy = problem.bqm.energy(decoded)
-                candidate = (
-                    scenario_pnl,
-                    problem.scenario_index,
-                    decoded_energy,
-                    result.raw_energy,
-                    result.energy,
-                    result.raw_one_hot_violations,
-                    result.raw_feasible_candidates,
-                    result.candidate_count,
-                    plausible_score,
-                    problem.plausibility.threshold,
+                plausible_score = plausibility_score(
+                    problem.plausibility_states,
+                    selection,
+                    problem.plausibility,
                 )
-                if best_qubo is None or candidate[0] < best_qubo[0]:
+                candidate = SelectionResult(
+                    worst_pnl=float(np.dot(problem.portfolio_linear, decoded)),
+                    scenario_index=problem.scenario_index,
+                    projection=project_scenario_selection(
+                        data, pca, pc_grids, decoded
+                    ),
+                    selected_energy=problem.bqm.energy(decoded),
+                    raw_energy=result.raw_energy,
+                    repaired_energy=result.energy,
+                    raw_one_hot_violations=result.raw_one_hot_violations,
+                    raw_feasible_candidates=result.raw_feasible_candidates,
+                    solver_candidates=result.candidate_count,
+                    plausibility_score=plausible_score,
+                    plausibility_threshold=problem.plausibility.threshold,
+                )
+                if (
+                    best_qubo is None
+                    or candidate.worst_pnl < best_qubo.worst_pnl
+                ):
                     best_qubo = candidate
             batch_decode_seconds = time.perf_counter() - decode_started
             decode_seconds += batch_decode_seconds
@@ -1081,23 +1160,21 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                 progress_eta = (
                     len(scenario_indices) - completed_scenarios
                 ) / progress_rate
-                scenario_label = (
-                    f"Scenario {scenario_batch[0] + 1}/{all_scenario_count}"
-                    if len(scenario_batch) == 1
-                    else f"Batch {batch_position}/{scenario_batch_count} "
-                    f"({len(scenario_batch)} scenarios)"
-                )
-                print(
-                    f"{progress_context} {scenario_label} | "
-                    f"data={batch_scenario_seconds:.2f}s | "
-                    f"QUBO={batch_build_seconds:.2f}s | solve={batch_solve_seconds:.2f}s | "
-                    f"decode={batch_decode_seconds:.2f}s | "
-                    f"progress={completed_scenarios}/{len(scenario_indices)} "
-                    f"({100.0 * completed_scenarios / len(scenario_indices):.1f}%) | "
+                if progress_tracker is None:  # pragma: no cover
+                    raise RuntimeError("progress tracker was not initialized")
+                progress_tracker.update(
+                    completed_scenarios,
+                    "avg/scenario "
+                    f"data={scenario_build_seconds / completed_scenarios:.3f}s | "
+                    f"QUBO={build_seconds / completed_scenarios:.3f}s | "
+                    f"solve={solve_seconds / completed_scenarios:.3f}s | "
+                    f"decode={decode_seconds / completed_scenarios:.3f}s | "
                     f"ETA={progress_eta:.1f}s",
-                    flush=True,
                 )
                 last_progress_report = progress_now
+
+        if progress_tracker is not None:
+            progress_tracker.finish()
 
         if run_qubo and best_qubo is None:  # pragma: no cover
             raise RuntimeError("no QUBO scenario was solved")
@@ -1108,57 +1185,24 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
         resource_values = resources.stop()
         actual_day_seconds = time.perf_counter() - day_started
 
-        method_results: list[tuple[
-            str,
-            float,
-            int,
-            float | None,
-            float | None,
-            float | None,
-            int | None,
-            int | None,
-            int | None,
-            float | None,
-            float | None,
-        ]] = []
+        method_results: list[tuple[str, SelectionResult]] = []
         if best_qubo is not None:
-            method_results.append(
-                ("qubo", *best_qubo)
-            )
+            method_results.append(("qubo", best_qubo))
         if best_baseline is not None:
-            method_results.append(
-                (
-                    "baseline",
-                    best_baseline[0],
-                    best_baseline[1],
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-            )
+            method_results.append(("baseline", best_baseline))
 
-        for (
-            method,
-            worst_pnl,
-            selected_scenario,
-            selected_energy,
-            raw_energy,
-            repaired_energy,
-            raw_violations,
-            raw_feasible,
-            solver_candidates,
-            plausible_score,
-            plausible_threshold,
-        ) in method_results:
+        print("", flush=True)
+
+        for method, result in method_results:
             if (date_text, method) in completed:
                 continue
-            margin = max(0.0, -worst_pnl)
-            signed_error = (margin + realized_pnl) / market.gross_exposure
+            margin = max(0.0, -result.worst_pnl)
+            realized_loss = -realized_pnl
+            realized_loss_percent = (
+                100.0 * realized_loss / market.gross_exposure
+            )
+            margin_percent = 100.0 * margin / market.gross_exposure
+            signed_error = (margin - realized_loss) / market.gross_exposure
             method_day_seconds = (
                 pca_seconds
                 + scenario_build_seconds
@@ -1176,25 +1220,32 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                 "calibration_returns": len(prior),
                 "assets": len(market.tickers),
                 "scenarios": len(scenario_indices),
-                "selected_scenario": selected_scenario,
-                "selected_energy": selected_energy,
-                "raw_energy": raw_energy,
-                "repaired_energy": repaired_energy,
-                "raw_one_hot_violations": raw_violations,
-                "raw_feasible_candidates": raw_feasible,
-                "solver_candidates": solver_candidates,
-                "plausibility_score": plausible_score,
-                "plausibility_threshold": plausible_threshold,
+                "selected_scenario": result.scenario_index,
+                "scenario_center_pc1": result.projection.scenario_center[0],
+                "scenario_center_pc2": result.projection.scenario_center[1],
+                "projected_pc1": result.projection.projected_factors[0],
+                "projected_pc2": result.projection.projected_factors[1],
+                "projection_error_factor_units": result.projection.factor_error,
+                "projection_error_grid_units": result.projection.grid_error,
+                "selected_energy": result.selected_energy,
+                "raw_energy": result.raw_energy,
+                "repaired_energy": result.repaired_energy,
+                "raw_one_hot_violations": result.raw_one_hot_violations,
+                "raw_feasible_candidates": result.raw_feasible_candidates,
+                "solver_candidates": result.solver_candidates,
+                "plausibility_score": result.plausibility_score,
+                "plausibility_threshold": result.plausibility_threshold,
                 "hard_plausibility_feasible": (
-                    plausible_score <= plausible_threshold
-                    if plausible_score is not None and plausible_threshold is not None
+                    result.plausibility_score <= result.plausibility_threshold
+                    if result.plausibility_score is not None
+                    and result.plausibility_threshold is not None
                     else None
                 ),
-                "margin": margin,
-                "worst_scenario_pnl": worst_pnl,
-                "realized_pnl": realized_pnl,
-                "realized_loss": -realized_pnl,
                 "gross_exposure": market.gross_exposure,
+                "realized_loss": realized_loss,
+                "margin": margin,
+                "realized_loss_percent_of_gross_exposure": realized_loss_percent,
+                "margin_percent_of_gross_exposure": margin_percent,
                 "signed_margin_error": signed_error,
                 "pca_seconds": pca_seconds,
                 "scenario_build_seconds": scenario_build_seconds,
@@ -1212,13 +1263,16 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
             print(
                 f"{progress_context} RESULT {method.upper()} | margin={margin:.8g} | "
                 f"realized P&L={realized_pnl:.8g} | "
-                f"realized loss={-realized_pnl:.8g} | SME={signed_error:.8g} | "
-                f"selected scenario={selected_scenario} | time={method_day_seconds:.2f}s",
+                f"realized loss={realized_loss:.8g} | SME={signed_error:.8g} | "
+                f"selected scenario={result.scenario_index} | "
+                f"projection error={result.projection.factor_error:.4g} "
+                f"({result.projection.grid_error:.4g} grid) | "
+                f"time={method_day_seconds:.2f}s",
                 flush=True,
             )
 
         if config.progress_interval > 0:
-            print("-" * 88, flush=True)
+            print("\n" + "-" * 88, flush=True)
             print(
                 f"{progress_context} DAY COMPLETE | PCA={pca_seconds:.2f}s | "
                 f"scenario data={scenario_build_seconds:.2f}s | "
@@ -1226,7 +1280,9 @@ def run_backtest(config: BacktestConfig) -> pd.DataFrame:
                 f"baseline={baseline_seconds:.4f}s | total={actual_day_seconds:.2f}s",
                 flush=True,
             )
-            print("=" * 88, flush=True)
+            print("=" * 88 + "\n", flush=True)
+        else:
+            print("", flush=True)
 
         effective_run_batch_size = (
             min(config.sbm.run_batch_size or config.sbm.runs, config.sbm.runs)

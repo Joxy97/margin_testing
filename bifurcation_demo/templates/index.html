@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>1D Simulated Bifurcation</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main>
+  <header><div><h1>1D simulated bifurcation</h1><p>Independent Hamiltonian particles cross from one well into two as <i>a(t)</i> changes sign.</p></div><div id="status">paused</div></header>
+  <section class="controls" aria-label="simulation controls">
+    <button id="play">Play</button><button id="reset">Reset</button>
+    <label>Particles <input id="count" type="number" min="2" max="1000" value="180"></label>
+    <label>Initial x spread <input id="x_spread" type="number" min="0" step="0.01" value="0.16"></label>
+    <label>Initial p spread <input id="p_spread" type="number" min="0" step="0.01" value="0.32"></label>
+    <label>Ramp rate <input id="ramp_rate" type="number" min="0.001" step="0.01" value="0.18"></label>
+    <label>Final hill height <input id="hill_height" type="number" min="0.001" step="0.05" value="0.36"></label>
+    <label>K <input id="k" type="number" min="0.01" step="0.1" value="1"></label>
+    <label>Damping γ <input id="gamma" type="number" min="0" step="0.01" value="0"></label>
+    <label>Interaction strength J <input id="interaction_strength" type="number" min="0" max="1" step="0.01" value="0.12"></label>
+    <label>Time step <input id="dt" type="number" min="0.001" max="0.1" step="0.001" value="0.012"></label>
+    <label class="check"><input id="show_interactions" type="checkbox" checked> Show interactions</label>
+  </section>
+  <div class="readout"><strong>a(t) = <span id="a">—</span></strong><span>center hill ΔV = <span id="barrier">—</span></span><span>time <span id="time">—</span></span><span>branch readout: <code>sign(x)</code></span></div>
+  <section class="charts">
+    <figure class="wide"><figcaption>Potential V(x,t); particle positions projected onto the curve</figcaption><canvas id="potential" aria-label="potential curve with particles"></canvas></figure>
+    <figure><figcaption>Phase space: x versus p</figcaption><canvas id="phase" aria-label="phase space"></canvas></figure>
+    <figure><figcaption>Position histogram</figcaption><canvas id="hist" aria-label="histogram"></canvas></figure>
+  </section>
+  <p class="note"><strong>Ramp rate</strong> controls how fast the center changes from a bowl into a hill. <strong>Final hill height</strong> sets the energy barrier. Couplings use <code>−Jᵢⱼxᵢxⱼ</code>: green favors the same branch and red favors opposite branches; thicker lines mean larger |J|. Hiding lines does not disable their forces—set interaction strength to zero and reset for independent particles.</p>
+</main>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body></html>

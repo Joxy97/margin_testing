@@ -96,7 +96,7 @@ class ShockGridResult:
 
 @dataclass(frozen=True)
 class PlausibilityModel:
-    """Sparse positive-semidefinite residual score and empirical cutoff.
+    """Sparse positive-semidefinite residual score and empirical threshold.
 
     With standardized residuals ``u``, the score is
 
@@ -200,7 +200,7 @@ def parse_args() -> argparse.Namespace:
         "--plausibility-confidence",
         type=float,
         default=0.998,
-        help="Empirical confidence level for the hard residual-score cutoff.",
+        help="Confidence level for the reported residual-score threshold.",
     )
     parser.add_argument("--visual-asset-index", type=int, default=0)
     return parser.parse_args()
@@ -837,7 +837,7 @@ def fit_plausibility_model(
     neighbor_indices: np.ndarray | None = None,
     neighbor_correlations: np.ndarray | None = None,
 ) -> PlausibilityModel:
-    """Fit a PSD residual score and calibrate its hard empirical quantile."""
+    """Fit a PSD residual score and calibrate its empirical quantile."""
 
     samples = np.asarray(residual_samples, dtype=float)
     if samples.ndim != 2 or len(samples) < 2:
@@ -1006,8 +1006,9 @@ def build_qubos(
         exposure = 1.0
     portfolio_linear = raw_portfolio_linear / exposure
 
-    # ``lambda_compat`` is now a dimensionless steering ratio rather than an
-    # exposure-dependent penalty.  Hard acceptance is handled separately.
+    # ``lambda_compat`` is a dimensionless steering ratio rather than an
+    # exposure-dependent penalty. The empirical threshold sets its scale and
+    # remains a reported diagnostic; it is not a post-solve acceptance rule.
     pnl_scale = float(np.max(np.abs(portfolio_linear), initial=0.0))
     threshold_scale = (
         max(plausibility_model.threshold, 1.0)
@@ -1371,7 +1372,7 @@ def build_report(
             ("Minimum one-hot penalty", args.lambda_one_hot),
             ("Plausibility steering ratio", args.lambda_compat),
             ("Top-k neighbors", args.top_k_neighbors),
-            ("Hard plausibility confidence", args.plausibility_confidence),
+            ("Plausibility confidence", args.plausibility_confidence),
         ],
         columns=["parameter", "value"],
     )
@@ -1491,9 +1492,10 @@ def build_report(
         + f"<p>Sparse PSD plausibility asset edges used: "
         f"{compatibility_edges:,} for detailed scenario {scenario_index}. "
         "The BQM steers SB toward the empirically calibrated plausible region; "
-        "the rolling decoder enforces that cutoff exactly. One-hot behavior is "
-        "encoded by a coefficient-derived safe quadratic penalty. No solver "
-        "was called.</p>"
+        "the empirical threshold is reported as a rolling-backtest diagnostic "
+        "and does not replace the QUBO solution. One-hot behavior is encoded "
+        "by a coefficient-derived safe quadratic penalty. No solver was "
+        "called.</p>"
         + table_html(qubo_table)
         + "<h3>Per-scenario output files</h3>"
         + table_html(scenario_model_summary, max_rows=500),

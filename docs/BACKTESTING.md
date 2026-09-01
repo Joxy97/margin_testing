@@ -12,21 +12,32 @@ For every evaluation date it:
 3. Builds the 21 by 5 scenario grid.
 4. Creates each scenario's per-asset state grids and portfolio P&L vector once.
 5. On the QUBO path, builds a sparse positive-semidefinite residual score from
-   the degree-normalized, undirected top-k correlation graph and calibrates a
-   hard empirical plausibility cutoff. Portfolio P&L is normalized by gross
+   the degree-normalized, undirected top-k correlation graph and calibrates an
+   empirical plausibility threshold. Portfolio P&L is normalized by gross
    exposure and the one-hot penalty is raised to a coefficient-derived safe
    bound.
 6. Packs compact QUBOs into a block-diagonal CSR matrix and solves them with
    simulated bifurcation. Every randomized candidate is repaired and improved
-   to categorical convergence before energy comparison. Final decoding then
-   minimizes P&L subject to the hard plausibility cutoff.
+   to categorical convergence before energy comparison. The lowest-energy
+   repaired QUBO candidate is used directly; neither a greedy candidate nor a
+   scenario-center candidate is injected during decoding. The plausibility
+   threshold is reported as a diagnostic and does not replace the QUBO result.
 7. On the baseline path, independently selects the minimum weighted-PnL state
    for each asset in each scenario. It applies no cross-asset compatibility or
-   feasibility checks.
+   feasibility checks and never consumes a QUBO solution.
 8. For each requested method, selects the minimum portfolio PnL across
    scenarios and issues `margin = max(0, -worst_pnl)`.
-9. Reveals that day's realized PnL and writes one labelled method row with
-   `signed_margin_error = (margin + realized_pnl) / gross_exposure`.
+9. Projects each method's selected asset-state vector into the same EW-PCA
+   factor space and measures its distance from the selected scenario center in
+   factor-coordinate units and local scenario-grid-step units.
+10. Reveals that day's realized loss and writes one labelled method row with
+   `signed_margin_error = (margin - realized_loss) / gross_exposure`.
+
+The financial result columns are ordered as gross exposure, realized loss,
+margin, realized loss as a percentage of gross exposure, margin as a percentage
+of gross exposure, and signed margin error. The two percentage columns store
+percentage points; for example, `6.4` means `6.4%`. Signed margin error remains
+a fraction, so `0.064` means `6.4%`.
 
 ## Install
 
@@ -122,8 +133,17 @@ GPU PCA and exact blockwise conditional correlations use PyTorch. QUBO
 coefficient expansion remains on CPU, while the dominant sparse SBM loop is
 executed on the selected Torch device. The output is checkpointed after every
 method/date pair; `--resume` skips pairs already present in the CSV. A sibling
-`.summary.json` groups signed-error quantiles, under-margin rate, and shortfall
-statistics by method.
+`.summary.json` groups signed-error quantiles, under-margin rate, shortfall
+statistics, and factor-projection errors by method.
+
+The projection uses the asset state selected by each method. If `z` is that
+vector in normalized asset space, the factor coordinate is
+`(z - weighted_mean) @ loadings.T`. The factor-unit error is the Euclidean
+distance from the enumerated scenario center. The grid-unit error first divides
+each component difference by that component's local scenario-grid spacing,
+then takes the Euclidean norm. A grid error of `1` therefore means one grid step
+of total displacement; diagonal displacement can exceed `1` even when each
+component is less than one step away.
 
 A sibling `.diagnostics.csv` contains one resource row per completed date. It
 records settings and batch counts, phase timings, process CPU/RAM, and—when

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
@@ -20,22 +21,47 @@ if str(SRC) not in sys.path:
 from backtest_orchestrator import (  # noqa: E402
     BacktestConfig,
     ScenarioData,
-    ScenarioProblem,
-    decode_hard_plausible,
+    TerminalProgress,
     greedy_baseline_pnl,
+    greedy_baseline_sample,
+    project_scenario_selection,
     repair_one_hot,
     rolling_ew_pca,
     run_backtest,
 )
 from market_to_qubo import (  # noqa: E402
-    PlausibilityModel,
     build_qubos,
     fit_ew_pca,
     fit_plausibility_model,
-    plausibility_score,
 )
 from qubo_model import CompactQubo  # noqa: E402
 from sbm_torch import SBMConfig, TorchBatchSBMSolver  # noqa: E402
+
+
+class ProgressTrackerTests(unittest.TestCase):
+    def test_interactive_progress_reuses_one_terminal_line(self) -> None:
+        stream = io.StringIO()
+        tracker = TerminalProgress(
+            10, "[cpu]", stream=stream, interactive=True, bar_width=10
+        )
+        tracker.update(2, "ETA=8.0s")
+        tracker.update(10, "ETA=0.0s")
+        tracker.finish()
+        rendered = stream.getvalue()
+        self.assertEqual(rendered.count("\r"), 2)
+        self.assertEqual(rendered.count("\n"), 1)
+        self.assertIn("Scenarios [==========] 10/10 (100.0%)", rendered)
+
+    def test_noninteractive_progress_keeps_log_lines(self) -> None:
+        stream = io.StringIO()
+        tracker = TerminalProgress(
+            10, "[cpu]", stream=stream, interactive=False, bar_width=10
+        )
+        tracker.update(2, "ETA=8.0s")
+        tracker.update(10, "ETA=0.0s")
+        tracker.finish()
+        self.assertEqual(len(stream.getvalue().splitlines()), 2)
+        self.assertNotIn("\r", stream.getvalue())
 
 
 class TorchBatchSolverTests(unittest.TestCase):
@@ -234,38 +260,40 @@ class QuboTests(unittest.TestCase):
         self.assertAlmostEqual(first.score(residual), second.score(residual[permutation]))
         self.assertAlmostEqual(first.threshold, second.threshold)
 
-    def test_hard_decoder_never_accepts_an_implausible_sample(self) -> None:
-        plausibility = PlausibilityModel(
-            residual_mean=np.zeros(2),
-            residual_scale=np.ones(2),
-            edge_heads=np.empty(0, dtype=np.int64),
-            edge_tails=np.empty(0, dtype=np.int64),
-            edge_weights=np.empty(0),
-            threshold=1.0,
-            confidence=0.95,
-        )
-        states = (np.array([-1.0, 0.0, 1.0]),) * 2
-        problem = ScenarioProblem(
+    def test_projection_reports_factor_and_grid_units(self) -> None:
+        class Shocks:
+            selected_scenario = np.array([0.0, 0.0])
+
+        data = ScenarioData(
             scenario_index=0,
-            bqm=CompactQubo(
-                linear=np.zeros(6),
-                heads=np.empty(0, dtype=np.int32),
-                tails=np.empty(0, dtype=np.int32),
-                quadratic=np.empty(0),
-            ),
-            group_offsets=np.array([0, 3, 6], dtype=np.int64),
-            portfolio_linear=np.array([-2.0, 0.0, 1.0, -3.0, 0.0, 1.0]),
-            gross_exposure=1.0,
-            plausibility=plausibility,
-            plausibility_states=states,
+            shocks=Shocks(),
+            asset_grids=[
+                {"z": np.array([0.0, 2.0])},
+                {"z": np.array([0.0, 1.0])},
+            ],
+            group_offsets=np.array([0, 2, 4], dtype=np.int64),
+            portfolio_linear=np.array([0.0, -1.0, 0.0, -2.0]),
         )
-        raw = np.array([1, 0, 0, 1, 0, 0], dtype=np.uint8)
-        decoded, pnl, score = decode_hard_plausible(problem, raw)
-        self.assertLessEqual(score, plausibility.threshold)
-        self.assertAlmostEqual(score, plausibility_score(states, np.array([0, 1]), plausibility))
-        self.assertAlmostEqual(pnl, -2.0)
-        self.assertEqual(int(decoded[:3].sum()), 1)
-        self.assertEqual(int(decoded[3:].sum()), 1)
+        pca = type(
+            "Pca",
+            (),
+            {
+                "weighted_mean": np.zeros(2),
+                "loadings": np.eye(2),
+                "eigenvalues": np.array([4.0, 1.0]),
+            },
+        )()
+        sample = greedy_baseline_sample(data)
+        np.testing.assert_array_equal(sample, np.array([0, 1, 0, 1]))
+        projection = project_scenario_selection(
+            data,
+            pca,
+            (np.array([-2.0, 0.0, 2.0]), np.array([-1.0, 0.0, 1.0])),
+            sample,
+        )
+        np.testing.assert_allclose(projection.projected_factors, [2.0, 1.0])
+        self.assertAlmostEqual(projection.factor_error, np.sqrt(5.0))
+        self.assertAlmostEqual(projection.grid_error, np.sqrt(2.0))
 
     def test_exporter_and_backtester_share_identical_ew_pca(self) -> None:
         rng = np.random.default_rng(91)
@@ -346,20 +374,51 @@ class EndToEndTests(unittest.TestCase):
             )
             result = run_backtest(config)
             self.assertEqual(len(result), 1)
+            financial_columns = [
+                "gross_exposure",
+                "realized_loss",
+                "margin",
+                "realized_loss_percent_of_gross_exposure",
+                "margin_percent_of_gross_exposure",
+                "signed_margin_error",
+            ]
+            first_financial = list(result.columns).index("gross_exposure")
+            self.assertEqual(
+                list(result.columns)[
+                    first_financial : first_financial + len(financial_columns)
+                ],
+                financial_columns,
+            )
+            self.assertNotIn("worst_scenario_pnl", result.columns)
+            self.assertNotIn("realized_pnl", result.columns)
             row = result.iloc[0]
             self.assertEqual(int(row["calibration_returns"]), 20)
             self.assertLess(pd.Timestamp(row["calibration_end"]), pd.Timestamp(row["date"]))
             self.assertEqual(int(row["scenarios"]), 2)
-            self.assertTrue(bool(row["hard_plausibility_feasible"]))
-            self.assertLessEqual(
-                float(row["plausibility_score"]),
-                float(row["plausibility_threshold"]) + 1e-12,
+            self.assertTrue(
+                np.isfinite(float(row["projection_error_factor_units"]))
+            )
+            self.assertTrue(
+                np.isfinite(float(row["projection_error_grid_units"]))
+            )
+            self.assertAlmostEqual(
+                float(row["selected_energy"]),
+                float(row["repaired_energy"]),
+                places=12,
             )
             self.assertEqual(int(row["solver_candidates"]), config.sbm.runs)
             expected_error = (
-                float(row["margin"]) + float(row["realized_pnl"])
+                float(row["margin"]) - float(row["realized_loss"])
             ) / float(row["gross_exposure"])
             self.assertAlmostEqual(float(row["signed_margin_error"]), expected_error)
+            self.assertAlmostEqual(
+                float(row["realized_loss_percent_of_gross_exposure"]),
+                100.0 * float(row["realized_loss"]) / float(row["gross_exposure"]),
+            )
+            self.assertAlmostEqual(
+                float(row["margin_percent_of_gross_exposure"]),
+                100.0 * float(row["margin"]) / float(row["gross_exposure"]),
+            )
             self.assertTrue(output.is_file())
             self.assertTrue(output.with_suffix(".summary.json").is_file())
             diagnostics_path = output.with_suffix(".diagnostics.csv")
@@ -383,8 +442,8 @@ class EndToEndTests(unittest.TestCase):
                 float(changed_result.iloc[0]["margin"]), float(row["margin"]), places=12
             )
             self.assertNotAlmostEqual(
-                float(changed_result.iloc[0]["realized_pnl"]),
-                float(row["realized_pnl"]),
+                float(changed_result.iloc[0]["realized_loss"]),
+                float(row["realized_loss"]),
                 places=8,
             )
 
@@ -394,19 +453,27 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(len(both), 2)
             qubo = both.loc[both["method"] == "qubo"].iloc[0]
             baseline = both.loc[both["method"] == "baseline"].iloc[0]
-            self.assertLessEqual(
-                float(baseline["worst_scenario_pnl"]),
-                float(qubo["worst_scenario_pnl"]) + 1e-12,
-            )
             self.assertGreaterEqual(
                 float(baseline["margin"]), float(qubo["margin"]) - 1e-12
             )
             self.assertEqual(float(baseline["qubo_build_seconds"]), 0.0)
             self.assertEqual(float(baseline["solve_seconds"]), 0.0)
+            for result_row in (qubo, baseline):
+                self.assertTrue(
+                    np.isfinite(
+                        float(result_row["projection_error_factor_units"])
+                    )
+                )
+                self.assertTrue(
+                    np.isfinite(float(result_row["projection_error_grid_units"]))
+                )
             summary = json.loads(
                 both_output.with_suffix(".summary.json").read_text(encoding="utf-8")
             )
             self.assertEqual(set(summary["methods"]), {"baseline", "qubo"})
+            for method_summary in summary["methods"].values():
+                self.assertIn("mean_projection_error_factor_units", method_summary)
+                self.assertIn("mean_projection_error_grid_units", method_summary)
 
             baseline_output = Path(temporary) / "baseline.csv"
             baseline_only = run_backtest(

@@ -251,7 +251,8 @@
   const numericColumns = new Set([
     "calibration_returns", "assets", "scenarios", "selected_scenario", "selected_energy",
     "raw_one_hot_violations", "margin", "worst_scenario_pnl", "realized_pnl",
-    "realized_loss", "gross_exposure", "signed_margin_error", "pca_seconds",
+    "realized_loss", "gross_exposure", "realized_loss_percent_of_gross_exposure",
+    "margin_percent_of_gross_exposure", "signed_margin_error", "pca_seconds",
     "scenario_build_seconds", "qubo_build_seconds", "solve_seconds", "baseline_seconds",
     "day_seconds", "steps", "runs", "scenario_batch_size", "scenario_batches",
     "build_workers", "run_batch_size", "solver_run_batches_per_scenario_batch",
@@ -328,6 +329,14 @@
         if (!row.method) row.method = "qubo";
         if (!Number.isFinite(row.realized_loss) && Number.isFinite(row.realized_pnl)) {
           row.realized_loss = -row.realized_pnl;
+        }
+        if (Number.isFinite(row.gross_exposure) && row.gross_exposure !== 0) {
+          if (!Number.isFinite(row.realized_loss_percent_of_gross_exposure) && Number.isFinite(row.realized_loss)) {
+            row.realized_loss_percent_of_gross_exposure = 100 * row.realized_loss / row.gross_exposure;
+          }
+          if (!Number.isFinite(row.margin_percent_of_gross_exposure) && Number.isFinite(row.margin)) {
+            row.margin_percent_of_gross_exposure = 100 * row.margin / row.gross_exposure;
+          }
         }
       });
       rows.sort((a, b) => a.date.localeCompare(b.date) || a.method.localeCompare(b.method));
@@ -621,15 +630,32 @@
 
   function renderTable(rows) {
     if(!rows.length)return $("dataTable").innerHTML=`<div class="empty"><div>No rows in this date range.</div></div>`;
-    const cols=["date","method","margin","realized_loss","signed_margin_error","selected_scenario","raw_one_hot_violations","pca_seconds","qubo_build_seconds","solve_seconds","day_seconds","device"];
+    const cols=[
+      {key:"date",label:"date"},
+      {key:"method",label:"method"},
+      {key:"gross_exposure",label:"gross_exposure"},
+      {key:"realized_loss",label:"realized_loss"},
+      {key:"margin",label:"margin"},
+      {key:"realized_loss_percent_of_gross_exposure",label:"realized_loss (% GE)",percent:true},
+      {key:"margin_percent_of_gross_exposure",label:"margin (% GE)",percent:true},
+      {key:"signed_margin_error",label:"signed_margin_error"},
+      {key:"selected_scenario",label:"selected_scenario",integer:true},
+      {key:"raw_one_hot_violations",label:"raw_one_hot_violations",integer:true},
+      {key:"pca_seconds",label:"pca_seconds"},
+      {key:"qubo_build_seconds",label:"qubo_build_seconds"},
+      {key:"solve_seconds",label:"solve_seconds"},
+      {key:"day_seconds",label:"day_seconds"},
+      {key:"device",label:"device"}
+    ];
     const body=rows.slice().sort((a,b)=>b.date.localeCompare(a.date)||a.method.localeCompare(b.method)).slice(0,1000).map(r=>{
       const cells=cols.map(c=>{
-        let v=r[c]; if(typeof v==="number")v=num(v,c.includes("scenario")||c.includes("violations")?0:6);
-        const cls=c==="signed_margin_error"?(Number(r[c])<0?"negative":"positive"):"";
+        let v=r[c.key];
+        if(typeof v==="number")v=c.percent?`${num(v,4)}%`:num(v,c.integer?0:6);
+        const cls=c.key==="signed_margin_error"?(Number(r[c.key])<0?"negative":"positive"):"";
         return `<td class="${cls}">${escapeHTML(v ?? "")}</td>`;
       }).join(""); return `<tr class="${Number(r.signed_margin_error)<0?"breach":""}">${cells}</tr>`;
     }).join("");
-    $("dataTable").innerHTML=`<table><thead><tr>${cols.map(c=>`<th>${escapeHTML(c)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
+    $("dataTable").innerHTML=`<table><thead><tr>${cols.map(c=>`<th>${escapeHTML(c.label)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
   }
 
   folderInput.addEventListener("change", e => loadFolder(e.target.files).catch(err => setStatus(err.message || String(err), "bad")));
