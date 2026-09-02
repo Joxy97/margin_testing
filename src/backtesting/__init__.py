@@ -10,6 +10,7 @@ from .backtest_results import (
 )
 from .margin_backtester import BacktestMarginEngine, MarginBacktester
 from .csv_reporter import BacktestCSVReporter, BacktestReportFiles
+from .checkpoint import BacktestCheckpointStore
 
 __all__ = [
     "BacktestBatchResults",
@@ -17,6 +18,7 @@ __all__ = [
     "BacktestResults",
     "BaselColor",
     "BacktestCSVReporter",
+    "BacktestCheckpointStore",
     "BacktestReportFiles",
     "DailyBacktestTimings",
     "DailyBacktestResult",

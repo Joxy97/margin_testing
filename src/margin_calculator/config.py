@@ -3,12 +3,12 @@
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from risk_state_generator import PortfolioRiskStateBQMManager
+from risk_state_generator import PortfolioRiskStateBQMVisitor
 
 from .bqm_margin_calculator import BQMMarginCalculator
 from .greedy_margin_calculator import GreedyMarginCalculator
-from .greedy_portfolio_risk_state_scenario import (
-    GreedyPortfolioRiskStateScenario,
+from .state_aware_greedy_margin_calculator import (
+    StateAwareGreedyMarginCalculator,
 )
 from .optimization.optimization_solver.bqm_solver.bqm_solver_config import (
     BQMSolverConfig,
@@ -25,18 +25,20 @@ class BQMMarginCalculatorConfig:
 
     solver: BQMSolverConfig = field(default_factory=BQMSolverConfig)
     modelParameters: Mapping[str, Any] = field(default_factory=dict)
-    bqmManager: PortfolioRiskStateBQMManager | None = None
+    bqmVisitor: PortfolioRiskStateBQMVisitor | None = None
     executionPolicy: BQMExecutionPolicy = field(
         default_factory=SequentialBQMExecutionPolicy
     )
+    comparisonPnlAnchor: str | None = None
 
     def createMarginCalculator(self) -> BQMMarginCalculator:
         return BQMMarginCalculator(
             bqmSolver=self.solver.createBQMSolver(),
             modelParameters=self.modelParameters,
             solverParameters=self.solver.solverParameters,
-            bqmManager=self.bqmManager,
+            bqmVisitor=self.bqmVisitor,
             executionPolicy=self.executionPolicy,
+            comparisonPnlAnchor=self.comparisonPnlAnchor,
         )
 
 
@@ -44,10 +46,22 @@ class BQMMarginCalculatorConfig:
 class GreedyMarginCalculatorConfig:
     """Configuration for deterministic greedy margin calculation."""
 
-    scenarioVisitor: GreedyPortfolioRiskStateScenario | None = None
-
     def createMarginCalculator(self) -> GreedyMarginCalculator:
-        return GreedyMarginCalculator(self.scenarioVisitor)
+        return GreedyMarginCalculator()
 
 
-MarginCalculatorConfig = BQMMarginCalculatorConfig | GreedyMarginCalculatorConfig
+@dataclass(frozen=True)
+class StateAwareGreedyMarginCalculatorConfig:
+    """Configuration for risk-state-specific scenario margining."""
+
+    pnlAnchor: str = "market"
+
+    def createMarginCalculator(self) -> StateAwareGreedyMarginCalculator:
+        return StateAwareGreedyMarginCalculator(pnlAnchor=self.pnlAnchor)
+
+
+MarginCalculatorConfig = (
+    BQMMarginCalculatorConfig
+    | GreedyMarginCalculatorConfig
+    | StateAwareGreedyMarginCalculatorConfig
+)

@@ -63,6 +63,32 @@ class YamlConfigurationTest(unittest.TestCase):
             (date(2025, 1, 2), date(2025, 1, 3)),
         )
 
+    def test_long_portfolio_csv_sums_duplicate_instrument_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "portfolio.csv").write_text(
+                "client_id,ticker,weight\nclient,AAPL,1.25\nclient,AAPL,-0.25\n",
+                encoding="utf-8",
+            )
+            config_path = root / "margin.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "marginDate": "2025-01-02",
+                        "portfolio": {
+                            "csv": "portfolio.csv",
+                            "clientId": "client",
+                        },
+                        "engine": {"marginCalculator": {"type": "greedy"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            application = MarginApplicationConfig.fromYaml(config_path)
+
+        self.assertEqual(application.portfolio.weights["AAPL"], Decimal("1.00"))
+
     def test_loads_and_runs_a_complete_local_greedy_application(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -151,6 +177,7 @@ class YamlConfigurationTest(unittest.TestCase):
             {"device": "auto"},
         )
         self.assertEqual(calculator.solver.solverParameters["runs"], 16)
+        self.assertEqual(calculator.comparisonPnlAnchor, "market")
         self.assertEqual(
             calculator.solver.solverParameters["dtype"],
             "float32",
@@ -254,6 +281,38 @@ class YamlConfigurationTest(unittest.TestCase):
         self.assertIsInstance(solver, TorchSBMBQMSolver)
         self.assertEqual(solver.device, "cpu")
         self.assertEqual(calculator.solver.solverParameters["runs"], 4)
+
+    def test_constructs_multi_device_torch_sbm_from_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "torch_multi_gpu.yaml"
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        "marginDate": "2024-01-11",
+                        "portfolio": {"weights": {"AAPL": 1}},
+                        "engine": {
+                            "marginCalculator": {
+                                "type": "bqm",
+                                "solver": {
+                                    "type": "torch_sbm",
+                                    "constructorParameters": {
+                                        "devices": ["cuda:0", "cuda:1"]
+                                    },
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            application = MarginApplicationConfig.fromYaml(path)
+
+        calculator = application.engine.marginCalculator
+        self.assertIsInstance(calculator, BQMMarginCalculatorConfig)
+        solver = calculator.solver.createBQMSolver()
+        self.assertIsInstance(solver, TorchSBMBQMSolver)
+        self.assertEqual(solver.requestedDevices, ("cuda:0", "cuda:1"))
 
     def test_rejects_unknown_yaml_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

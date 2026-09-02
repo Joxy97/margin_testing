@@ -6,7 +6,6 @@ from unittest.mock import Mock, call
 
 import numpy
 import pandas
-from sklearn.preprocessing import StandardScaler
 
 from download_unit import DataRequest
 from portfolio import Portfolio
@@ -316,7 +315,7 @@ class PCAGridTest(unittest.TestCase):
         self.assertTrue(numpy.all(risk_state.correlations.firstAssets >= 0))
         self.assertTrue(numpy.all(risk_state.correlations.secondAssets >= 0))
 
-    def test_correlated_generator_uses_marginlab_compatibility_formula(
+    def test_correlated_generator_uses_symmetric_gaussian_compatibility(
         self,
     ) -> None:
         generator = CorrelatedReturnsVolaGridRiskStateGenerator()
@@ -331,9 +330,13 @@ class PCAGridTest(unittest.TestCase):
             neighborCorrelations=numpy.array([[0.5], [0.5]]),
         )
 
-        expected_b = 0.5 * 3.0 / 2.0 * -1.0
-        denominator = 3.0**2 * (1.0 - 0.5**2)
-        expected_coefficient = (-2.0 - expected_b) ** 2 / denominator
+        residual_a = -1.0 / 2.0
+        residual_b = -2.0 / 3.0
+        expected_coefficient = (
+            residual_a**2
+            - 2.0 * 0.5 * residual_a * residual_b
+            + residual_b**2
+        ) / (1.0 - 0.5**2)
         self.assertAlmostEqual(
             correlations.coefficients[
                 (correlations.firstAssets == 0)
@@ -343,6 +346,33 @@ class PCAGridTest(unittest.TestCase):
             ][0],
             expected_coefficient,
         )
+
+    def test_correlated_generator_keeps_union_of_directed_top_k_edges(
+        self,
+    ) -> None:
+        correlations = (
+            CorrelatedReturnsVolaGridRiskStateGenerator()
+            ._getStatePairCoefficients(
+                standardizedGrids=[
+                    numpy.array([-1.0, 1.0]),
+                    numpy.array([-1.0, 1.0]),
+                    numpy.array([-1.0, 1.0]),
+                ],
+                scenarioCenter=numpy.zeros(3),
+                conditionalStd=numpy.ones(3),
+                neighborIndices=numpy.array([[1], [0], [0]]),
+                neighborCorrelations=numpy.array([[0.4], [0.4], [-0.7]]),
+            )
+        )
+
+        pairs = set(
+            zip(
+                correlations.firstAssets.tolist(),
+                correlations.secondAssets.tolist(),
+            )
+        )
+        self.assertIn((0, 1), pairs)
+        self.assertIn((0, 2), pairs)
 
     def test_blockwise_neighbors_match_dense_correlations(self) -> None:
         rng = numpy.random.default_rng(9)
@@ -573,7 +603,7 @@ class PCAGridTest(unittest.TestCase):
         self.assertIs(provider.getPCAGrid(first_key), first_grid)
         self.assertIsNotNone(provider.getPCAGrid(third_key))
 
-    def test_returns_pca_grid_constructs_weighted_centered_pca(self) -> None:
+    def test_returns_pca_grid_uses_one_consistent_exponential_measure(self) -> None:
         data = pandas.DataFrame(
             {
                 "date": pandas.date_range("2024-01-01", periods=6),
@@ -593,9 +623,23 @@ class PCAGridTest(unittest.TestCase):
 
         prices = data.loc[0:3, ["AAPL", "MSFT"]]
         log_returns = numpy.log(prices / prices.shift(1)).iloc[1:]
-        standardized = StandardScaler().fit_transform(log_returns)
         weights = numpy.array([0.25, 0.5, 1.0])
         weights /= weights.sum()
+        log_return_values = log_returns.to_numpy(dtype=float)
+        expected_log_return_mean = numpy.sum(
+            weights[:, None] * log_return_values,
+            axis=0,
+        )
+        expected_log_return_scale = numpy.sqrt(
+            numpy.sum(
+                weights[:, None]
+                * (log_return_values - expected_log_return_mean) ** 2,
+                axis=0,
+            )
+        )
+        standardized = (
+            log_return_values - expected_log_return_mean
+        ) / expected_log_return_scale
         expected_mean = numpy.sum(weights[:, None] * standardized, axis=0)
         centered = standardized - expected_mean
         covariance = centered.T @ (weights[:, None] * centered)
@@ -603,9 +647,15 @@ class PCAGridTest(unittest.TestCase):
         order = numpy.argsort(expected_eigenvalues)[::-1]
         expected_eigenvalues = expected_eigenvalues[order]
         expected_loadings = eigenvectors[:, order].T
+        pivots = numpy.argmax(numpy.abs(expected_loadings), axis=1)
+        expected_loadings *= numpy.sign(
+            expected_loadings[numpy.arange(len(expected_loadings)), pivots]
+        )[:, None]
         expected_factors = centered @ expected_loadings.T
 
         self.assertEqual(grid.current_date, date(2024, 1, 5))
+        self.assertEqual(grid.calibrationStartDate, date(2024, 1, 2))
+        self.assertEqual(grid.calibrationEndDate, date(2024, 1, 4))
         numpy.testing.assert_allclose(grid.lambdas, expected_eigenvalues)
         numpy.testing.assert_allclose(
             grid.explained,
@@ -624,11 +674,21 @@ class PCAGridTest(unittest.TestCase):
         )
         numpy.testing.assert_allclose(
             grid.logReturnMean,
-            StandardScaler().fit(log_returns).mean_,
+            expected_log_return_mean,
         )
         numpy.testing.assert_allclose(
             grid.logReturnScale,
-            StandardScaler().fit(log_returns).scale_,
+            expected_log_return_scale,
+        )
+        numpy.testing.assert_allclose(
+            expected_mean,
+            numpy.zeros(2),
+            atol=1e-12,
+        )
+        numpy.testing.assert_allclose(
+            numpy.sum(weights[:, None] * standardized**2, axis=0),
+            numpy.ones(2),
+            atol=1e-12,
         )
 
     def test_returns_pca_grid_aligns_missing_prices_like_marginlab(self) -> None:
@@ -668,6 +728,20 @@ class PCAGridTest(unittest.TestCase):
         self.assertEqual(grid.factors.shape, (3, 2))
         self.assertTrue(numpy.isfinite(grid.factors).all())
 
+    def test_returns_pca_grid_rejects_duplicate_market_dates(self) -> None:
+        data = pandas.DataFrame(
+            {
+                "date": pandas.to_datetime(
+                    ["2024-01-01", "2024-01-02", "2024-01-02", "2024-01-03"]
+                ),
+                "AAPL": [100.0, 101.0, 102.0, 103.0],
+            }
+        )
+        key = ReturnsPCAKey(["AAPL"], 2, date(2024, 1, 4), 0.94, 1)
+
+        with self.assertRaisesRegex(ValueError, "dates must be unique"):
+            ReturnsPCAGrid.construct(key, data)
+
     def test_wide_returns_pca_matches_dense_covariance(self) -> None:
         rng = numpy.random.default_rng(7)
         instruments = tuple(f"asset_{index}" for index in range(12))
@@ -686,9 +760,16 @@ class PCAGridTest(unittest.TestCase):
         )
 
         grid = ReturnsPCAGrid.construct(key, data)
-        standardized = StandardScaler().fit_transform(returns)
         weights = key.ew_lambda ** numpy.arange(5, -1, -1, dtype=float)
         weights /= weights.sum()
+        weighted_mean = numpy.sum(weights[:, None] * returns, axis=0)
+        weighted_scale = numpy.sqrt(
+            numpy.sum(
+                weights[:, None] * (returns - weighted_mean) ** 2,
+                axis=0,
+            )
+        )
+        standardized = (returns - weighted_mean) / weighted_scale
         mean = numpy.sum(weights[:, None] * standardized, axis=0)
         centered = standardized - mean
         covariance = centered.T @ (weights[:, None] * centered)

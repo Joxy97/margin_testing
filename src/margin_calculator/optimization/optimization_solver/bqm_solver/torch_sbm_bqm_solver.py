@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import warnings
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
@@ -21,7 +22,6 @@ from .bqm_solver_factory import BQMSolverFactory
 
 
 _RUN_SEED_STRIDE = 0x9E3779B97F4A7C15
-_PROBLEM_SEED_STRIDE = 0x0D1B54A32D192ED03
 _MAX_TORCH_SEED = (1 << 63) - 1
 
 
@@ -66,17 +66,63 @@ class TorchSBMBQMSolver(BQMSolver):
         "energy_chunk_size": 1_000_000,
     }
 
-    def __init__(self, device: str = "auto") -> None:
-        self.requestedDevice = str(device)
-        self._resolvedDevice: str | None = None
+    def __init__(
+        self,
+        device: str = "auto",
+        devices: Sequence[str] | None = None,
+    ) -> None:
+        if devices is not None:
+            if device != "auto":
+                raise ValueError("Torch SBM cannot define both device and devices")
+            if isinstance(devices, (str, bytes)) or not isinstance(
+                devices, Sequence
+            ):
+                raise TypeError("Torch SBM devices must be a sequence")
+            if not devices:
+                raise ValueError("Torch SBM devices must not be empty")
+            requested_devices = tuple(str(item) for item in devices)
+        else:
+            requested_devices = (str(device),)
+        if any(not item.strip() for item in requested_devices):
+            raise ValueError("Torch SBM devices must not contain empty names")
+        self.requestedDevices = requested_devices
+        self.requestedDevice = requested_devices[0]
+        self._resolvedDevices: tuple[str, ...] | None = None
+        self._workerSolvers: tuple[TorchSBMBQMSolver, ...] | None = None
         self._solveLock = Lock()
 
     @property
     def device(self) -> str:
-        """Return the resolved Torch device, importing Torch lazily."""
-        if self._resolvedDevice is None:
-            self._resolvedDevice = self._resolveDevice(self.requestedDevice)
-        return self._resolvedDevice
+        """Return the first resolved Torch device for compatibility."""
+        return self.devices[0]
+
+    @property
+    def batchParallelism(self) -> int:
+        """Return the number of configured device workers."""
+        return len(self.requestedDevices)
+
+    @property
+    def devices(self) -> tuple[str, ...]:
+        """Return all resolved Torch devices, importing Torch lazily."""
+        if self._resolvedDevices is None:
+            resolved = tuple(
+                self._resolveDevice(requested)
+                for requested in self.requestedDevices
+            )
+            if len(resolved) > 1:
+                if any(
+                    not value.startswith("cuda:")
+                    or not value.removeprefix("cuda:").isdigit()
+                    for value in resolved
+                ):
+                    raise ValueError(
+                        "Torch SBM multi-device execution requires explicit "
+                        "indexed CUDA/ROCm devices such as cuda:0"
+                    )
+                if len(set(resolved)) != len(resolved):
+                    raise ValueError("Torch SBM devices must be unique")
+            self._resolvedDevices = resolved
+        return self._resolvedDevices
 
     @property
     def acceleratorBackend(self) -> str:
@@ -97,14 +143,74 @@ class TorchSBMBQMSolver(BQMSolver):
         problems: Sequence[QUBOProblem],
         solverParameters: Mapping[str, Any] | None = None,
     ) -> list[BQMOptimizationResult]:
-        """Solve all problems in one block-diagonal sparse Torch batch."""
+        """Solve problems in block-diagonal batches on one or more devices."""
         if not problems:
             return []
         if any(not isinstance(problem, QUBOProblem) for problem in problems):
             raise TypeError("Torch SBM problems must be QUBOProblem objects")
         parameters = self._getParameters(solverParameters)
         with self._solveLock:
+            if len(self.devices) > 1 and len(problems) > 1:
+                return self._solveMultiDevice(problems, parameters)
             return self._solveBatch(problems, parameters)
+
+    def _solveMultiDevice(
+        self,
+        problems: Sequence[QUBOProblem],
+        parameters: Mapping[str, Any],
+    ) -> list[BQMOptimizationResult]:
+        """Split one ordered batch across independent device workers."""
+        worker_count = min(len(self.devices), len(problems))
+        workers = self._getWorkerSolvers()[:worker_count]
+        base_size, remainder = divmod(len(problems), worker_count)
+        shards: list[tuple[int, int]] = []
+        start = 0
+        for worker_index in range(worker_count):
+            stop = start + base_size + (worker_index < remainder)
+            shards.append((start, stop))
+            start = stop
+
+        def solve_shard(
+            worker: TorchSBMBQMSolver,
+            start: int,
+            stop: int,
+        ) -> tuple[int, list[BQMOptimizationResult]]:
+            return start, worker.solveMany(
+                problems[start:stop],
+                parameters,
+            )
+
+        ordered: list[BQMOptimizationResult | None] = [None] * len(problems)
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="torch-sbm-device",
+        ) as executor:
+            futures = [
+                executor.submit(solve_shard, worker, start, stop)
+                for worker, (start, stop) in zip(workers, shards)
+            ]
+            for future in futures:
+                start, results = future.result()
+                ordered[start : start + len(results)] = results
+        if any(result is None for result in ordered):
+            raise RuntimeError(
+                "Torch SBM device worker returned an incomplete batch"
+            )
+        self._mergeWorkerState(workers)
+        return [result for result in ordered if result is not None]
+
+    def _getWorkerSolvers(self) -> tuple[TorchSBMBQMSolver, ...]:
+        if self._workerSolvers is None:
+            self._workerSolvers = tuple(
+                type(self)(device=device) for device in self.devices
+            )
+        return self._workerSolvers
+
+    def _mergeWorkerState(
+        self,
+        workers: Sequence[TorchSBMBQMSolver],
+    ) -> None:
+        """Merge diagnostic state after a multi-device solve, when needed."""
 
     def _solveBatch(
         self,
@@ -176,6 +282,10 @@ class TorchSBMBQMSolver(BQMSolver):
                     field,
                     c0_rows,
                     packed.variableOffsets,
+                    numpy.asarray(
+                        [problem.seedOffset for problem in problems],
+                        dtype=numpy.uint64,
+                    ),
                     width,
                     run_start,
                     parameters,
@@ -200,7 +310,7 @@ class TorchSBMBQMSolver(BQMSolver):
             BQMOptimizationResult(
                 *self._selectBestCandidates(
                     problem_candidates,
-                    problem.oneHotGroups,
+                    problem,
                 )
             )
             for problem, problem_candidates in zip(problems, candidates)
@@ -213,6 +323,7 @@ class TorchSBMBQMSolver(BQMSolver):
         field: Any,
         c0Rows: Any,
         variableOffsets: numpy.ndarray,
+        problemSeedOffsets: numpy.ndarray,
         width: int,
         runStart: int,
         parameters: Mapping[str, Any],
@@ -229,7 +340,7 @@ class TorchSBMBQMSolver(BQMSolver):
                 run = runStart + local_run
                 seed = (
                     parameters["seed"]
-                    + _PROBLEM_SEED_STRIDE * problem_index
+                    + int(problemSeedOffsets[problem_index])
                     + _RUN_SEED_STRIDE * run
                 ) % _MAX_TORCH_SEED
                 generator = torch.Generator(device=device)

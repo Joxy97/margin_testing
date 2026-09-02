@@ -13,6 +13,7 @@ from scipy.stats import binom
 
 from backtesting import (
     BacktestBatchResults,
+    BacktestCheckpointStore,
     BacktestCSVReporter,
     BaselColor,
     MarginBacktester,
@@ -80,6 +81,8 @@ class MarginBacktesterTest(unittest.TestCase):
         self.assertTrue(result.dailyResults[0].breach)
         self.assertFalse(result.dailyResults[0].covered)
         self.assertFalse(result.dailyResults[1].breach)
+        self.assertAlmostEqual(result.dailyResults[0].marginError, -0.5)
+        self.assertAlmostEqual(result.dailyResults[0].shortfall, 0.5)
         self.assertEqual(result.violations, 1)
         engine = self._engine(reports, realized_pnls)
         MarginBacktester().backtest(engine, portfolio, dates)
@@ -109,9 +112,13 @@ class MarginBacktesterTest(unittest.TestCase):
         self.assertEqual(result.violations, 5)
         self.assertAlmostEqual(
             result.baselProbability,
-            float(binom.cdf(5, 250, 0.002)),
+            float(binom.cdf(4, 250, 0.002)),
         )
-        self.assertEqual(result.baselColor, BaselColor.RED)
+        self.assertAlmostEqual(
+            result.coveragePValue,
+            float(binom.sf(4, 250, 0.002)),
+        )
+        self.assertEqual(result.baselColor, BaselColor.YELLOW)
 
     def test_basel_color_uses_marginlab_threshold_boundaries(self) -> None:
         self.assertEqual(
@@ -195,7 +202,12 @@ class MarginBacktesterTest(unittest.TestCase):
         backtest_date = date(2024, 1, 2)
         results = MarginBacktester().backtestMany(
             self._engine(
-                {backtest_date: MarginReport(1.0)},
+                {
+                    backtest_date: MarginReport(
+                        1.0,
+                        comparisonMargins={"greedy": 0.5},
+                    )
+                },
                 {backtest_date: -2.0},
             ),
             {
@@ -217,6 +229,10 @@ class MarginBacktesterTest(unittest.TestCase):
 
             self.assertEqual(files.breaches.parent, Path(directory) / "client_a")
             self.assertEqual(breaches[0]["breach"], "True")
+            self.assertAlmostEqual(float(breaches[0]["shortfall"]), 1.0)
+            self.assertEqual(breaches[0]["greedy_breach"], "True")
+            self.assertAlmostEqual(float(breaches[0]["greedy_shortfall"]), 1.5)
+            self.assertEqual(performance[0]["greedy_violations"], "1")
             self.assertEqual(
                 {row["stage"] for row in performance},
                 {
@@ -226,8 +242,45 @@ class MarginBacktesterTest(unittest.TestCase):
                     "realized_data_acquisition",
                     "realized_pnl_calculation",
                     "total",
+                    "preparation",
                 },
             )
+
+    def test_checkpoint_round_trip_and_resume_skip_completed_days(self) -> None:
+        first_date = date(2024, 1, 2)
+        second_date = date(2024, 1, 3)
+        portfolio = Portfolio(weights={"AAPL": Decimal("10")})
+        first_engine = self._engine(
+            {first_date: MarginReport(1.0), second_date: MarginReport(1.0)},
+            {first_date: -0.5, second_date: -0.5},
+        )
+        first_day = MarginBacktester().backtest(
+            first_engine,
+            portfolio,
+            [first_date],
+        ).dailyResults[0]
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = BacktestCheckpointStore(directory, "experiment-a")
+            store.save("client/a", (first_day,))
+            restored = store.load("client/a")
+            second_engine = self._engine(
+                {second_date: MarginReport(1.0)},
+                {second_date: -0.5},
+            )
+            result = MarginBacktester().backtest(
+                second_engine,
+                portfolio,
+                [first_date, second_date],
+                completedResults=restored,
+            )
+
+        self.assertEqual(result.days, 2)
+        second_engine.generateReport.assert_called_once_with(portfolio, second_date)
+        second_engine.prepareBacktest.assert_called_once_with(
+            portfolio,
+            (second_date,),
+        )
 
 
 if __name__ == "__main__":

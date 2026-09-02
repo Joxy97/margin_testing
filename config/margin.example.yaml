@@ -53,6 +53,10 @@ engine:
 
   marginCalculator:
     type: bqm
+    # Evaluate the greedy baseline while consuming this exact risk-state stream.
+    comparison:
+      type: state_aware_greedy
+      pnlAnchor: market
     modelParameters:
       lambdaOneHot: 2.0
       lambdaCompat: 0.1
@@ -66,6 +70,8 @@ engine:
       type: torch_sbm
       constructorParameters:
         device: auto
+        # For multi-GPU execution, remove device and configure, for example:
+        # devices: [cuda:0, cuda:1, cuda:2, cuda:3, cuda:4, cuda:5, cuda:6, cuda:7]
       solverParameters:
         steps: 10000
         runs: 16

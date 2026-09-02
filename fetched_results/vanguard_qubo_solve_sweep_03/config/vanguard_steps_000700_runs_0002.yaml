@@ -1,0 +1,77 @@
+engine:
+  dataManager:
+    cacheType: lru
+    maxMemoryBytes: 268435456
+    memorySize: 16
+  downloadManager:
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    providerSelection: local_first
+    providers:
+      vanguard_csv:
+        type: local_csv
+    requestParameters:
+      locations:
+      - /workspace/margin_testing/vanguard_market/vanguard_portfolio_202426_marginlab_close_history_2024.csv
+      - /workspace/margin_testing/vanguard_market/vanguard_portfolio_202426_marginlab_close_backtest_2025.csv
+  marginCalculator:
+    executionPolicy:
+      batchSize: 105
+      maxBatchBytes: 536870912
+      memoryMultiplier: 3.0
+      type: batch
+    modelParameters:
+      lambdaCompat: 0.1
+      lambdaOneHot: 1.0
+    solver:
+      constructorParameters:
+        devices:
+        - cuda:0
+        - cuda:1
+        - cuda:2
+        - cuda:3
+        - cuda:4
+        - cuda:5
+        - cuda:6
+        - cuda:7
+      solverParameters:
+        a0: 1.0
+        c0: 0.02
+        dt: 0.1
+        dtype: float32
+        energy_chunk_size: 1000000
+        gamma: 0.0
+        initial_scale: 0.1
+        run_batch_size: 16
+        runs: 2
+        seed: 20260603
+        steps: 700
+      type: torch_sbm
+    structuralCacheMemorySize: 16
+    type: bqm
+  riskStateGenerator:
+    allowEmptyBinFallback: true
+    components: 2
+    correlationBlockBytes: 134217728
+    distanceInflationAlpha: 0.5
+    distanceInflationPower: 2.0
+    ew_lambda: 0.93
+    ew_window: 125
+    maxInflationFactor: 5.0
+    nNearest: null
+    nZBins: 21
+    pcaGridProvider:
+      cacheType: lru
+      memorySize: 128
+    residualSigmaRange: 5.0
+    scenariosPerComponents:
+    - 21
+    - 5
+    tailDensityGamma: 1.0
+    topKNeighbors: 5
+    type: correlated_returns_vola_grid
+marginDate: '2025-01-01'
+portfolio:
+  cash: '0'
+  clientId: vanguard_202426
+  csv: /workspace/margin_testing/vanguard_market/vanguard_portfolio_202426_marginlab_complete_history.csv

@@ -28,6 +28,13 @@ class PortfolioTest(unittest.TestCase):
         self.assertEqual(second.cash, Decimal("0"))
         self.assertEqual(second.weights, {})
 
+    def test_instruments_have_canonical_order(self) -> None:
+        first = Portfolio(weights={"MSFT": Decimal("2"), "AAPL": Decimal("1")})
+        second = Portfolio(weights={"AAPL": Decimal("1"), "MSFT": Decimal("2")})
+
+        self.assertEqual(first.instruments, ("AAPL", "MSFT"))
+        self.assertEqual(first.instruments, second.instruments)
+
 
 if __name__ == "__main__":
     unittest.main()

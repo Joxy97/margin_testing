@@ -11,7 +11,8 @@ the paper's optional heating term, in three forms:
   schedules independent small QUBOs across cores.
 - `solve_gpu`: CUDA CSR kernels, enabled with `SBM_ENABLE_CUDA`.
 - `TorchSBMBQMSolver`: block-diagonal sparse matrix-matrix updates that batch
-  both independent QUBOs and randomized trajectories on CPU or CUDA.
+  both independent QUBOs and randomized trajectories on CPU, one GPU, or a
+  configured set of GPUs.
 - `dsb_hls`: a fixed-size, fixed-point-capable Vitis HLS kernel with `P_r` row
   and `P_c` column unrolling plus `P_b` replicated row blocks. `solve_fpga_sim`
   runs the same kernel as ordinary C++ with floating-point values for verification.
@@ -68,13 +69,56 @@ selector. `run_batch_size` bounds trajectory-state memory; the outer BQM batch
 size bounds the block-diagonal scenario matrix. Use `float64` when validating
 against the native solver and `float32` for the higher-throughput path.
 
+To distribute every outer BQM batch across eight GPUs, replace the singular
+`device` option with explicit indexed devices:
+
+```yaml
+executionPolicy:
+  type: batch
+  batchSize: 105  # Keep this at least as large as the GPU count.
+  maxBatchBytes: 536870912
+  memoryMultiplier: 3.0
+solver:
+  type: torch_sbm
+  constructorParameters:
+    devices:
+      - cuda:0
+      - cuda:1
+      - cuda:2
+      - cuda:3
+      - cuda:4
+      - cuda:5
+      - cuda:6
+      - cuda:7
+  solverParameters:
+    steps: 1000
+    runs: 16
+    run_batch_size: 16
+    dtype: float32
+```
+
+The solver divides each ordered batch into contiguous, approximately equal
+problem-count shards and executes one shard per GPU concurrently. Results are
+restored to input order. Every `QUBOProblem` carries a stable identity-derived
+seed offset, so its trajectories do not change when execution-policy batch
+boundaries or device shards change. The native C ABI likewise accepts one seed
+per problem while retaining batched execution. A batch with fewer
+problems than devices uses only as many GPUs as it has problems. Devices must
+be unique and explicitly indexed; `device` and `devices` cannot be configured
+together. For a multi-device solver, `maxBatchBytes` is applied per concurrent
+GPU: the execution policy scales its total batch allowance by the device count
+and admits at least one problem per GPU, just as it admits one oversized
+problem for a single-device solver.
+
 AMD GPUs use PyTorch's ROCm build. PyTorch exposes HIP/ROCm devices through its
 `torch.cuda` API, so the solver accepts `device: rocm`, `device: amd`, and
 `device: hip` as aliases for the internal `cuda` device. `device: auto` selects
 either a CUDA or ROCm accelerator whenever `torch.cuda.is_available()` is true.
 The installed wheel must report a non-null `torch.version.hip`, and the GPU must
 appear in AMD's ROCm compatibility matrix; the Python solver cannot add driver
-or hardware support for an unsupported Radeon generation.
+or hardware support for an unsupported Radeon generation. For indexed
+multi-GPU ROCm execution, use PyTorch's `cuda:0`, `cuda:1`, and so on device
+names.
 
 ## Adaptive Torch solver
 
@@ -86,13 +130,15 @@ PyTorch implementation and the bSB/dSB literature:
 - a pressure-slope schedule and optional heated dynamics;
 - periodic per-agent Ising-energy monitoring, best-state retention, and early
   stopping after energies remain stable;
-- exact float64 QUBO scoring followed by coordinate descent that repairs and
-  preserves every declared one-hot group.
+- exact float64 QUBO scoring followed by coordinate descent that preserves
+  every declared one-hot group.
 
-The last step is application-specific: SB remains an unconstrained heuristic,
-so a low-energy terminal state is not guaranteed to satisfy one-hot groups.
-The repair/polish step makes that constraint explicit without adding it to the
-general SBM dynamics.
+SB remains an unconstrained heuristic, so a low-energy terminal state is not
+guaranteed to satisfy one-hot groups. Candidate selection shared by all BQM
+solvers chooses the best feasible trajectory when one exists. Otherwise it
+repairs every trajectory by categorical descent against the full QUBO and
+rescoring; the adaptive solver can additionally polish an already feasible
+answer.
 
 ```yaml
 solver:

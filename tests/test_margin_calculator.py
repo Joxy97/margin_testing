@@ -11,9 +11,9 @@ from margin_calculator import (
     BQMMarginCalculator,
     GreedyMarginCalculator,
     GreedyMarginCalculatorConfig,
-    GreedyPortfolioRiskStateScenario,
     MarginCalculator,
     OptimizationMarginCalculator,
+    StateAwareGreedyRiskStateVisitor,
 )
 from margin_calculator.optimization.optimization_result import BQMOptimizationResult
 from margin_calculator.optimization.optimization_solver.bqm_solver import (
@@ -26,7 +26,6 @@ from risk_state_generator import ReturnsVolaGridRiskState
 from risk_state_generator import (
     CorrelatedReturnsVolaGridRiskState,
     CorrelationFactors,
-    PortfolioRiskState,
 )
 
 
@@ -47,8 +46,13 @@ class StubBQMSolver(BQMSolver):
 
 
 class BatchTrackingSolver(BQMSolver):
-    def __init__(self) -> None:
+    def __init__(self, batchParallelism: int = 1) -> None:
         self.batchSizes: list[int] = []
+        self._batchParallelism = batchParallelism
+
+    @property
+    def batchParallelism(self) -> int:
+        return self._batchParallelism
 
     def solve(
         self,
@@ -81,12 +85,9 @@ class MarginCalculatorTest(unittest.TestCase):
         portfolio = Portfolio(
             weights={"AAPL": Decimal("10"), "MSFT": Decimal("-5")}
         )
-        visitor = GreedyPortfolioRiskStateScenario()
+        visitor = StateAwareGreedyRiskStateVisitor()
 
-        pnl = PortfolioRiskState.fromRiskState(
-            risk_state,
-            portfolio,
-        ).acceptGreedy(visitor)
+        pnl = visitor.portfolioPnl(risk_state, portfolio)
 
         self.assertAlmostEqual(pnl, -0.65)
 
@@ -115,12 +116,12 @@ class MarginCalculatorTest(unittest.TestCase):
             },
         )
 
-        pnl = PortfolioRiskState.fromRiskState(
+        pnl = StateAwareGreedyRiskStateVisitor().portfolioPnl(
             risk_state,
             Portfolio(
                 weights={"LONG": Decimal("10"), "SHORT": Decimal("-5")}
             ),
-        ).acceptGreedy(GreedyPortfolioRiskStateScenario())
+        )
 
         self.assertAlmostEqual(pnl, -0.65)
 
@@ -138,12 +139,9 @@ class MarginCalculatorTest(unittest.TestCase):
         self.assertAlmostEqual(margin, 0.3)
 
     def test_greedy_margin_config_constructs_the_calculator(self) -> None:
-        visitor = GreedyPortfolioRiskStateScenario()
-
-        calculator = GreedyMarginCalculatorConfig(visitor).createMarginCalculator()
+        calculator = GreedyMarginCalculatorConfig().createMarginCalculator()
 
         self.assertIsInstance(calculator, GreedyMarginCalculator)
-        self.assertIs(calculator.scenarioVisitor, visitor)
 
     def test_batch_policy_submits_bounded_native_batches(self) -> None:
         solver = BatchTrackingSolver()
@@ -187,6 +185,27 @@ class MarginCalculatorTest(unittest.TestCase):
 
         self.assertEqual(solver.batchSizes, [2, 1])
 
+    def test_batch_policy_fills_parallel_workers_before_applying_budget(self) -> None:
+        solver = BatchTrackingSolver(batchParallelism=3)
+        policy = BatchBQMExecutionPolicy(
+            batchSize=10,
+            maxBatchBytes=16,
+            memoryMultiplier=1.0,
+        )
+        problems = [
+            QUBOProblem(
+                numpy.zeros(4),
+                numpy.array([], dtype=numpy.uint32),
+                numpy.array([], dtype=numpy.uint32),
+                numpy.array([]),
+            )
+            for _ in range(4)
+        ]
+
+        list(policy.execute(solver, enumerate(problems)))
+
+        self.assertEqual(solver.batchSizes, [3, 1])
+
     def test_bqm_calculator_returns_the_largest_scenario_loss(self) -> None:
         risk_states = [
             ReturnsVolaGridRiskState(
@@ -227,6 +246,35 @@ class MarginCalculatorTest(unittest.TestCase):
                 for problem in solver.problems
             )
         )
+
+    def test_bqm_and_greedy_comparison_share_the_risk_state_stream(self) -> None:
+        consumed = []
+
+        def risk_states():
+            for loss in (-0.05, -0.10):
+                consumed.append(loss)
+                yield ReturnsVolaGridRiskState(
+                    {"AAPL": numpy.array([[loss, 0.20], [0.01, 0.25]])}
+                )
+
+        calculator = BQMMarginCalculator(
+            StubBQMSolver(
+                [
+                    BQMOptimizationResult({"x_0_0": 1, "x_0_1": 0}),
+                    BQMOptimizationResult({"x_0_0": 1, "x_0_1": 0}),
+                ]
+            ),
+            comparisonPnlAnchor="market",
+        )
+
+        margin = calculator.calculateMargin(
+            risk_states(),
+            Portfolio(weights={"AAPL": Decimal("10")}),
+        )
+
+        self.assertEqual(consumed, [-0.05, -0.10])
+        self.assertAlmostEqual(margin, 1.0)
+        self.assertEqual(calculator.lastComparisonMargins, {"greedy": 1.0})
 
     def test_margin_is_never_negative(self) -> None:
         risk_state = ReturnsVolaGridRiskState(

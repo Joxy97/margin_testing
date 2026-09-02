@@ -13,10 +13,15 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from data_manager import DataManagerConfig, PartitionedPickleDataStore
+from data_manager import (
+    DataManagerConfig,
+    DerivativeQuoteDataManagerConfig,
+    PartitionedPickleDataStore,
+)
 from download_manager import DownloadManagerConfig, LocalFirstProviderSelection
 from download_unit import (
     DateChunker,
+    DerivativeCSVDataProvider,
     InstrumentChunker,
     LocalCSVDataProvider,
     ProductChunker,
@@ -26,16 +31,26 @@ from margin_calculator import (
     BQMMarginCalculatorConfig,
     BatchBQMExecutionPolicy,
     GreedyMarginCalculatorConfig,
+    StateAwareGreedyMarginCalculatorConfig,
     SequentialBQMExecutionPolicy,
 )
 from margin_calculator.optimization.optimization_solver.bqm_solver import (
     BQMSolverConfig,
 )
-from portfolio import Portfolio
+from portfolio import (
+    DerivativePosition,
+    DerivativesPortfolio,
+    EquityContract,
+    EquityOptionContract,
+    FuturesContract,
+    FuturesOptionContract,
+    Portfolio,
+)
 from risk_state_generator import (
     CorrelatedReturnsVolaGridRiskStateGeneratorConfig,
+    OptionScenarioRiskStateGeneratorConfig,
     PCAGridProvider,
-    PortfolioRiskStateBQMManager,
+    PortfolioRiskStateBQMVisitor,
     ReturnsVolaGridRiskStateGeneratorConfig,
     StructuralQUBOTemplateCache,
 )
@@ -53,7 +68,7 @@ class MarginApplicationConfig:
     """Everything required to construct and run one margin calculation."""
 
     engine: MarginEngineConfig
-    portfolio: Portfolio
+    portfolio: Portfolio | DerivativesPortfolio
     marginDate: date
     backtestRequests: Mapping[str, PortfolioBacktestRequest] = field(
         default_factory=dict
@@ -83,16 +98,35 @@ class MarginApplicationConfig:
         """Construct the engine and run the configured margin calculation."""
         return self.createEngine().generateReport(self.portfolio, self.marginDate)
 
-    def generateBacktest(self) -> BacktestBatchResults:
+    def generateBacktest(
+        self,
+        checkpointStore: Any | None = None,
+        resume: bool = False,
+    ) -> BacktestBatchResults:
         """Run every named portfolio request from the YAML backtest block."""
         from backtesting import MarginBacktester
 
         if not self.backtestRequests:
             raise ValueError("YAML configuration does not contain a backtest block")
+        if resume and checkpointStore is None:
+            raise ValueError("resume requires a checkpointStore")
         return MarginBacktester().backtestMany(
             self.createEngine(),
             self.backtestRequests,
             self.backtestConfidenceLevel,
+            (
+                {
+                    name: checkpointStore.load(name)
+                    for name in self.backtestRequests
+                }
+                if resume and checkpointStore is not None
+                else None
+            ),
+            (
+                checkpointStore.save
+                if checkpointStore is not None
+                else None
+            ),
         )
 
 
@@ -112,6 +146,11 @@ class _YamlConfigParser:
         portfolio = self._portfolio(
             self._required(root, "portfolio", "root")
         )
+        if (
+            isinstance(portfolio, DerivativesPortfolio)
+            and root.get("backtest") is not None
+        ):
+            raise ValueError("derivative portfolio backtesting is not supported yet")
         requests, confidence_level, output_directory = self._backtest(
             root.get("backtest"),
             portfolio,
@@ -307,6 +346,7 @@ class _YamlConfigParser:
             self._only(config, {"type"}, path)
             provider_type = self._required(config, "type", path)
         providers = {
+            "derivative_csv": DerivativeCSVDataProvider,
             "local_csv": LocalCSVDataProvider,
             "yfinance": YfinanceDataProvider,
         }
@@ -337,14 +377,23 @@ class _YamlConfigParser:
             )
         raise ValueError(f"Unknown chunker: {chunker_type!r}")
 
-    def _dataManager(self, value: Any) -> DataManagerConfig:
+    def _dataManager(self, value: Any) -> Any:
         path = "engine.dataManager"
         config = self._mapping(value, path)
         self._only(
             config,
-            {"cacheType", "memorySize", "maxMemoryBytes", "backingStore"},
+            {"type", "cacheType", "memorySize", "maxMemoryBytes", "backingStore"},
             path,
         )
+        manager_type = str(config.get("type", "close_prices"))
+        if manager_type == "derivative_quotes":
+            if set(config) != {"type"}:
+                raise ValueError(
+                    "derivative_quotes data manager accepts only the type key"
+                )
+            return DerivativeQuoteDataManagerConfig()
+        if manager_type != "close_prices":
+            raise ValueError(f"Unknown data manager: {manager_type!r}")
         backing_store = None
         if config.get("backingStore") is not None:
             store = self._mapping(config["backingStore"], f"{path}.backingStore")
@@ -392,7 +441,12 @@ class _YamlConfigParser:
             config["scenariosPerComponents"] = tuple(
                 int(item) for item in config["scenariosPerComponents"]
             )
+        if "volatilityShifts" in config:
+            config["volatilityShifts"] = tuple(
+                float(item) for item in config["volatilityShifts"]
+            )
         classes = {
+            "option_scenarios": OptionScenarioRiskStateGeneratorConfig,
             "returns_vola_grid": ReturnsVolaGridRiskStateGeneratorConfig,
             "correlated_returns_vola_grid": (
                 CorrelatedReturnsVolaGridRiskStateGeneratorConfig
@@ -410,11 +464,36 @@ class _YamlConfigParser:
         path = "engine.marginCalculator"
         config = dict(self._mapping(value, path))
         calculator_type = str(config.pop("type", "bqm"))
+        if calculator_type == "state_aware_greedy":
+            self._only(config, {"pnlAnchor"}, path)
+            return StateAwareGreedyMarginCalculatorConfig(
+                pnlAnchor=str(config.get("pnlAnchor", "market"))
+            )
         if calculator_type == "greedy":
             self._only(config, set(), path)
             return GreedyMarginCalculatorConfig()
         if calculator_type != "bqm":
             raise ValueError(f"Unknown margin calculator: {calculator_type!r}")
+
+        comparison = config.pop("comparison", None)
+        comparison_pnl_anchor = None
+        if comparison is not None:
+            comparison_config = self._mapping(
+                comparison,
+                f"{path}.comparison",
+            )
+            self._only(
+                comparison_config,
+                {"type", "pnlAnchor"},
+                f"{path}.comparison",
+            )
+            if str(comparison_config.get("type", "state_aware_greedy")) != (
+                "state_aware_greedy"
+            ):
+                raise ValueError("BQM comparison type must be state_aware_greedy")
+            comparison_pnl_anchor = str(
+                comparison_config.get("pnlAnchor", "market")
+            )
 
         solver = self._mapping(config.pop("solver", {}), f"{path}.solver")
         self._only(
@@ -446,9 +525,9 @@ class _YamlConfigParser:
             config.pop("executionPolicy", {"type": "sequential"}),
             f"{path}.executionPolicy",
         )
-        manager = None
+        visitor = None
         if "structuralCacheMemorySize" in config:
-            manager = PortfolioRiskStateBQMManager(
+            visitor = PortfolioRiskStateBQMVisitor(
                 StructuralQUBOTemplateCache(
                     int(config.pop("structuralCacheMemorySize"))
                 )
@@ -462,8 +541,9 @@ class _YamlConfigParser:
                     f"{path}.modelParameters",
                 )
             ),
-            bqmManager=manager,
+            bqmVisitor=visitor,
             executionPolicy=policy,
+            comparisonPnlAnchor=comparison_pnl_anchor,
         )
 
     def _executionPolicy(self, value: Any, path: str) -> Any:
@@ -494,10 +574,35 @@ class _YamlConfigParser:
             )
         raise ValueError(f"Unknown BQM execution policy: {policy_type!r}")
 
-    def _portfolio(self, value: Any) -> Portfolio:
+    def _portfolio(self, value: Any) -> Portfolio | DerivativesPortfolio:
         path = "portfolio"
         config = self._mapping(value, path)
-        self._only(config, {"weights", "csv", "clientId", "cash"}, path)
+        self._only(
+            config,
+            {"weights", "csv", "clientId", "cash", "positions", "metadata"},
+            path,
+        )
+        if "positions" in config:
+            if "weights" in config or "csv" in config:
+                raise ValueError("portfolio must not combine positions with weights or csv")
+            positions = config["positions"]
+            if isinstance(positions, (str, bytes)) or not isinstance(positions, list):
+                raise TypeError("portfolio.positions must be a list")
+            return DerivativesPortfolio(
+                positions=tuple(
+                    self._derivativePosition(item, f"{path}.positions[{index}]")
+                    for index, item in enumerate(positions)
+                ),
+                cash=Decimal(str(config.get("cash", 0))),
+                metadata={
+                    str(key): str(item)
+                    for key, item in self._mapping(
+                        config.get("metadata", {}), f"{path}.metadata"
+                    ).items()
+                },
+            )
+        if "metadata" in config:
+            raise ValueError("portfolio.metadata is only valid with positions")
         if "weights" in config and "csv" in config:
             raise ValueError("portfolio must not define both weights and csv")
         if "csv" in config:
@@ -513,6 +618,65 @@ class _YamlConfigParser:
         return Portfolio(
             weights={str(key): Decimal(str(amount)) for key, amount in weights.items()},
             cash=Decimal(str(config.get("cash", 0))),
+        )
+
+    def _derivativePosition(self, value: Any, path: str) -> DerivativePosition:
+        config = self._mapping(value, path)
+        instrument_type = str(self._required(config, "instrumentType", path))
+        common_keys = {
+            "instrumentType", "symbol", "quantity", "multiplier", "currency"
+        }
+        allowed = {
+            "equity": common_keys,
+            "future": common_keys | {"expirationDate"},
+            "futures_option": common_keys
+            | {"expirationDate", "strike", "optionType", "exerciseStyle"},
+            "equity_option": common_keys
+            | {
+                "expirationDate", "strike", "optionType", "exerciseStyle",
+                "dividendYield",
+            },
+        }
+        if instrument_type not in allowed:
+            raise ValueError(f"Unknown instrument type: {instrument_type!r}")
+        self._only(config, allowed[instrument_type], path)
+        common = {
+            "symbol": str(self._required(config, "symbol", path)),
+            "multiplier": Decimal(str(config.get("multiplier", 1))),
+            "currency": str(config.get("currency", "USD")),
+        }
+        if instrument_type == "equity":
+            contract = EquityContract(**common)
+        elif instrument_type == "future":
+            contract = FuturesContract(
+                **common,
+                expirationDate=self._date(
+                    self._required(config, "expirationDate", path),
+                    f"{path}.expirationDate",
+                ),
+            )
+        elif instrument_type in {"futures_option", "equity_option"}:
+            option = {
+                **common,
+                "expirationDate": self._date(
+                    self._required(config, "expirationDate", path),
+                    f"{path}.expirationDate",
+                ),
+                "strike": Decimal(str(self._required(config, "strike", path))),
+                "optionType": str(self._required(config, "optionType", path)),
+                "exerciseStyle": str(config.get("exerciseStyle", "E")),
+            }
+            contract = (
+                FuturesOptionContract(**option)
+                if instrument_type == "futures_option"
+                else EquityOptionContract(
+                    **option,
+                    dividendYield=float(config.get("dividendYield", 0.0)),
+                )
+            )
+        return DerivativePosition(
+            contract=contract,
+            quantity=Decimal(str(self._required(config, "quantity", path))),
         )
 
     def _portfolioWeightsFromCsv(
@@ -565,7 +729,13 @@ class _YamlConfigParser:
         clientId: Any,
     ) -> Mapping[str, str]:
         selected_rows = self._selectPortfolioRows(csvPath, rows, clientId)
-        return {row["ticker"]: row["weight"] for row in selected_rows}
+        weights: dict[str, Decimal] = {}
+        for row in selected_rows:
+            ticker = str(row["ticker"])
+            weights[ticker] = weights.get(ticker, Decimal("0")) + Decimal(
+                str(row["weight"])
+            )
+        return {ticker: str(weight) for ticker, weight in weights.items()}
 
     def _widePortfolioWeights(
         self,
