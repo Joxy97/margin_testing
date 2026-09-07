@@ -1,0 +1,66 @@
+# Full feasible-range FHS-EVT backtest for the real Yahoo 200-asset portfolio.
+# With AR(20), burn-in 50, and 5% tails, 471 returns leave 401 retained
+# residuals and at least 20 observations in each fitted tail.
+marginDate: 2021-11-15
+
+portfolio:
+  csv: ../../yahoo_history_downloader/portfolio.csv
+  clientId: synthetic_0000
+  cash: "0"
+
+backtest:
+  confidenceLevel: 0.998
+  outputDirectory: ../../backtest_results/yahoo_00200_pc_vs_fhs_evt_full_nodes2_xi20/fhs_evt
+  datesFromCsv:
+    path: ../../yahoo_history_downloader/yahoo_output_2020_2026-09-03/historical_close_200.csv
+    startDate: 2021-11-15
+    endDate: 2026-09-03
+
+engine:
+  downloadManager:
+    providers:
+      yahoo_history_csv:
+        type: local_csv
+    providerSelection: local_first
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    requestParameters:
+      location: ../../yahoo_history_downloader/yahoo_output_2020_2026-09-03/historical_close_200.csv
+
+  dataManager:
+    cacheType: lru
+    memorySize: 16
+    maxMemoryBytes: 536870912
+
+  riskStateGenerator:
+    type: fhs_evt
+    historyDays: 1825
+    minimumObservations: 471
+    meanModel: ar
+    arOrder: 20
+    varianceModel: gjr_garch
+    burnIn: 50
+    ewmaLambda: 0.94
+    persistenceBuffer: 0.005
+    optimizerMaxIterations: 500
+    rowWeightDecay: 1.0
+    tailMassCandidates: [0.05]
+    minimumTailObservations: 20
+    evtShapeLowerBound: -0.20
+    evtShapeUpperBound: 0.20
+    evtQuadraturePoints: 512
+    thresholdStabilityTolerance: 0.20
+    integrationNodes: 2
+    endpointProbability: 1.0e-10
+    stressSigmaLevels: [3]
+    targetScenarios: 105
+    reduceScenarios: false
+    protectProbabilityExtremes: true
+    localSwapPasses: 1
+    recalibrationIntervalDays: 366
+    calibrationWorkers: 10
+    modelVersion: fhs-evt-ar20-burn50-tail05-full-nodes2-xi20-yahoo-v1
+
+  marginCalculator:
+    type: state_aware_greedy
+    pnlAnchor: market

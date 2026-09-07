@@ -102,8 +102,11 @@ def plotBacktestComparison(
     fetchedCsvPath: str | Path,
     greedyCsvPath: str | Path,
     outputPath: str | Path | None = None,
+    firstLabel: str = "Torch SBM (fetched)",
+    secondLabel: str = "Greedy",
+    title: str | None = None,
 ) -> Path:
-    """Plot aligned Torch SBM and greedy margin time series."""
+    """Plot aligned realized loss and two margin time series."""
     fetched_path = Path(fetchedCsvPath).expanduser().resolve()
     output_path = (
         Path(outputPath).expanduser().resolve()
@@ -138,20 +141,22 @@ def plotBacktestComparison(
     margin_axis.plot(
         data["date"],
         data["fetched_margin_percent"],
-        label="Torch SBM (fetched)",
+        label=firstLabel,
         color="tab:orange",
         linewidth=1.8,
     )
     margin_axis.plot(
         data["date"],
         data["greedy_margin_percent"],
-        label="Greedy",
+        label=secondLabel,
         color="tab:green",
         linewidth=1.5,
         linestyle="--",
     )
     margin_axis.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
-    margin_axis.set_title(f"Torch SBM vs Greedy Margin — {portfolio_label}")
+    margin_axis.set_title(
+        title or f"{firstLabel} vs {secondLabel} Margin — {portfolio_label}"
+    )
     margin_axis.set_ylabel("Percent of gross exposure (%)")
     margin_axis.grid(True, alpha=0.25)
     margin_axis.legend()
@@ -169,7 +174,7 @@ def plotBacktestComparison(
         where=data["margin_difference"] >= 0.0,
         color="tab:red",
         alpha=0.25,
-        label="Torch SBM higher",
+        label=f"{firstLabel} higher",
     )
     difference_axis.fill_between(
         data["date"],
@@ -178,7 +183,7 @@ def plotBacktestComparison(
         where=data["margin_difference"] < 0.0,
         color="tab:green",
         alpha=0.25,
-        label="Torch SBM lower",
+        label=f"{firstLabel} lower",
     )
     difference_axis.axhline(0.0, color="black", linewidth=0.8)
     difference_axis.set_ylabel("Difference\n(percentage points)")
@@ -219,12 +224,26 @@ def main() -> None:
         type=Path,
         help="PNG output path; defaults beside the fetched CSV",
     )
+    parser.add_argument(
+        "--first-label",
+        default="Torch SBM (fetched)",
+        help="legend label for the first CSV margin series",
+    )
+    parser.add_argument(
+        "--second-label",
+        default="Greedy",
+        help="legend label for the second CSV margin series",
+    )
+    parser.add_argument("--title", help="optional plot title")
     arguments = parser.parse_args()
     print(
         plotBacktestComparison(
             arguments.fetched_csv,
             arguments.greedy_csv,
             arguments.output,
+            arguments.first_label,
+            arguments.second_label,
+            arguments.title,
         )
     )
 

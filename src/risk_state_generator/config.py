@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .correlated_returns_vola_grid_risk_state_generator import (
     CorrelatedReturnsVolaGridRiskStateGenerator,
 )
+from .fhs_evt_risk_state_generator import FHSEVTRiskStateGenerator
 from .pca_grid_provider import PCAGridProvider
 from .returns_vola_grid_risk_state_generator import (
     ReturnsVolaGridRiskStateGenerator,
@@ -90,8 +91,44 @@ class OptionScenarioRiskStateGeneratorConfig:
         return OptionScenarioRiskStateGenerator(**vars(self))
 
 
+@dataclass(frozen=True)
+class FHSEVTRiskStateGeneratorConfig:
+    """Configuration for deterministic filtered-historical EVT scenarios."""
+
+    historyDays: int = 1825
+    minimumObservations: int = 252
+    meanModel: str = "constant"
+    arOrder: int = 1
+    varianceModel: str = "gjr_garch"
+    burnIn: int = 50
+    ewmaLambda: float = 0.94
+    persistenceBuffer: float = 0.005
+    optimizerMaxIterations: int = 500
+    rowWeightDecay: float = 1.0
+    tailMassCandidates: tuple[float, ...] = (0.025, 0.05, 0.075, 0.10)
+    minimumTailObservations: int = 20
+    evtShapeLowerBound: float = -0.45
+    evtShapeUpperBound: float = 0.45
+    evtQuadraturePoints: int = 512
+    thresholdStabilityTolerance: float = 0.20
+    integrationNodes: int = 1
+    endpointProbability: float = 1e-10
+    stressSigmaLevels: tuple[int, ...] = (3, 4, 5)
+    targetScenarios: int = 105
+    reduceScenarios: bool = True
+    protectProbabilityExtremes: bool = True
+    localSwapPasses: int = 1
+    recalibrationIntervalDays: int = 0
+    calibrationWorkers: int = 1
+    modelVersion: str = "fhs-evt-v1"
+
+    def createRiskStateGenerator(self) -> FHSEVTRiskStateGenerator:
+        return FHSEVTRiskStateGenerator(**vars(self))
+
+
 RiskStateGeneratorConfig = (
     ReturnsVolaGridRiskStateGeneratorConfig
     | CorrelatedReturnsVolaGridRiskStateGeneratorConfig
     | OptionScenarioRiskStateGeneratorConfig
+    | FHSEVTRiskStateGeneratorConfig
 )

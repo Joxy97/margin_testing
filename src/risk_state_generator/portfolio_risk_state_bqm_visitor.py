@@ -16,6 +16,7 @@ from cache import Cache, CacheFactory
 from .risk_state import (
     CorrelatedReturnsVolaGridRiskState,
     CorrelationFactors,
+    FHSEVTRiskState,
     ReturnsVolaGridRiskState,
     RiskState,
 )
@@ -98,6 +99,21 @@ class PortfolioRiskStateBQMVisitor:
             lambdaCompat=0.0,
         )
 
+    @createBQM.register(FHSEVTRiskState)
+    def _(
+        self,
+        riskState: FHSEVTRiskState,
+        portfolio: Portfolio,
+        parameters: Mapping[str, Any],
+    ) -> QUBOProblem:
+        return self._createBQM(
+            riskState,
+            portfolio,
+            CorrelationFactors.empty(),
+            lambdaOneHot=parameters.get("lambdaOneHot", 1.0),
+            lambdaCompat=0.0,
+        )
+
     @createBQM.register(CorrelatedReturnsVolaGridRiskState)
     def _(
         self,
@@ -126,6 +142,19 @@ class PortfolioRiskStateBQMVisitor:
     def _(
         self,
         riskState: ReturnsVolaGridRiskState,
+        portfolio: Portfolio,
+        bqmOptimizationResult: BQMOptimizationResult,
+    ) -> float:
+        return -self._decodePortfolioReturn(
+            riskState,
+            portfolio,
+            bqmOptimizationResult.sample,
+        )
+
+    @decodeMargin.register(FHSEVTRiskState)
+    def _(
+        self,
+        riskState: FHSEVTRiskState,
         portfolio: Portfolio,
         bqmOptimizationResult: BQMOptimizationResult,
     ) -> float:

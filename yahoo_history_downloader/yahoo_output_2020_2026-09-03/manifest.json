@@ -1,0 +1,653 @@
+{
+  "status": "complete",
+  "input_sha256": {
+    "C:\\Users\\Lazar\\OneDrive\\Documents\\margin_tedting_bifurcation_modelues\\margin_testing\\yahoo_history_downloader\\portfolio.csv": "01ae538747fb0869c6ac752ed2b7ec3c3d30711421f26e33dd74775df9faa6e6",
+    "C:\\Users\\Lazar\\OneDrive\\Documents\\margin_tedting_bifurcation_modelues\\margin_testing\\yahoo_history_downloader\\portfolio(1).csv": "ed6898aa5048ae55a09b0f6442c9a9ccbc3554f822fabab7316cd9d6de9385f8"
+  },
+  "start": "2020-01-01",
+  "end_exclusive": "2026-09-04",
+  "first_date": "2020-01-02",
+  "last_date": "2026-09-03",
+  "rows": 1677,
+  "yfinance_version": "1.4.1",
+  "universe_source": "Yahoo Finance equity screener; region=us; quoteType=EQUITY; currency=USD",
+  "ranking_snapshot": "2026-09-04T10:08:06.858180+02:00",
+  "selection": "Top 1000 complete-history USD US-screened equities by snapshot market cap; top 200 subset",
+  "mapping_scope": "Separate per portfolio; same numeric ID can map to different equities",
+  "caveats": [
+    "Current-universe selection has survivorship and look-ahead bias; not a historical backtest universe.",
+    "Yahoo Close follows provider split-adjustment conventions; Adj Close also reflects distributions.",
+    "Share classes and ADRs may coexist; 1000 securities does not guarantee 1000 unique issuers.",
+    "Source pages fetched sequentially; market caps are a retrieval snapshot, not simultaneous ticks."
+  ],
+  "outputs": {
+    "historical_close_200.csv": "7ccf3e65a2469493aaa77f23681413a32ac1a6da2d91dd1d938f13069e33aa44",
+    "historical_adjusted_close_200.csv": "187fdd71c90fce90245ccae81297dc3acfff7ba1280604b8c65b725f5ee98ccd",
+    "ticker_mapping_200.csv": "4ae45a5994e924d064d107f77c695230ab296fc1c32a38a2ac32c325cdbebbc0",
+    "historical_close_1000.csv": "ca4b79fa26bc6a4f233cc31bbebc6e2e2d8cac07fb4059ff5eb1ec4c5db7375e",
+    "historical_adjusted_close_1000.csv": "930605bf238c418dd5a1d4449b42246ab518bd00b897e124f8730ee58a3154d7",
+    "ticker_mapping_1000.csv": "66031d05c7b0197eca0096155bfaeabf0f722ba995b731477c2890786a9000d2"
+  },
+  "rejected": [
+    {
+      "symbol": "SPCX",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SKHY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "PLTR",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SSNLF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CYATY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CGXYY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "ARM",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "GEV",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SNDK",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "APH",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "KXIAY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SCCO",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SMERY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SMEGF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "NEMCL",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SNOW",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "MTSUY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "HOOD",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "ABNB",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "WFC-PC",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "GPMXY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CIXPF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "APP",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "ATLPF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CEG",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "PSTVY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "MGCLY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DASH",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DLEGF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SNHIY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "XIACF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "XIACY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "PROSY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "PSBKF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "MNST",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BCMXY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CHDRF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "ATLFF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "MHVIY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "WBKCY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BAM",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "JPPTY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "NETTF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "NU",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CMCLY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "JPSTF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "WUXAY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "WUXIF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SFBQF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "AVIKF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "JHPCY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "PCRHY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "NNFSF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "RNMBF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "NBIS",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "FJIKY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "FKURF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "CMPGF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SEMHF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DNBBF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "COIN",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BSQKZ",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "MDLN",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "HONA",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "ALAB",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CARR",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DRPRF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "LOBLY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DRPRY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "GALDY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CRWV",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CNSWY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "TYHOY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "GDERF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "HNHAF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "PTPIF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "PSKOF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CBRS",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "RVMD",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "ANYYY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "TYHOF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DLICY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "HLNCF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "HLN",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "JXAMY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SMTOY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "EQBBF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SMTOF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "ERBKY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BMPSY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "RKLB",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DTGHF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "TLLXY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DTRUY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "NIPNF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "RKT",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SMPNY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "JDCMF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SDZXF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "OTPBF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "VIK",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DSCSY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SDZNY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DISPF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "RPRX",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "RSNHF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "RSHGY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "KVUE",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "IBIDY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "VG",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "TTDKF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "DLMAY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "GUOSF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "IBIDF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "ICTEY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "EPIAF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SAABY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CKHUF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CKHGY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SHNDY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BPERF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BAIDF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "ITCTY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BEIGF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SUTNY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "GEHC",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "JPHLF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "CHHQY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "ICTEF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "CRDO",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "UMGNF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "AVIVF",
+      "reason": "Nonpositive or nonfinite price"
+    },
+    {
+      "symbol": "PITAF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "RDDT",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "UNVGY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "RBLX",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "KBGGY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "TRPCF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BNNCY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CMTDF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CRCL",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "FISV",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "HHUSF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CPNG",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "HNSPF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "AIBRF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "HPGLY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "EPOBY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "OTIS",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DSMFF",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "SUNB",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "DSFIY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "BSP",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "CTOWY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    },
+    {
+      "symbol": "PMRTY",
+      "reason": "Missing a required trading date or price field; no filling allowed"
+    }
+  ]
+}

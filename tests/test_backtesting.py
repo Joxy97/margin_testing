@@ -5,7 +5,7 @@ import csv
 import tempfile
 from datetime import date, timedelta
 from decimal import Decimal
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 import pandas
@@ -281,6 +281,39 @@ class MarginBacktesterTest(unittest.TestCase):
             portfolio,
             (second_date,),
         )
+
+    def test_checkpoint_retries_transient_atomic_replace_lock(self) -> None:
+        first_date = date(2024, 1, 2)
+        portfolio = Portfolio(weights={"AAPL": Decimal("10")})
+        engine = self._engine(
+            {first_date: MarginReport(1.0)},
+            {first_date: -0.5},
+        )
+        first_day = MarginBacktester().backtest(
+            engine,
+            portfolio,
+            [first_date],
+        ).dailyResults[0]
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = BacktestCheckpointStore(directory, "experiment-a")
+            real_replace = __import__("os").replace
+            attempts = iter((False, True))
+
+            def flaky_replace(source, destination):
+                if not next(attempts):
+                    raise PermissionError
+                return real_replace(source, destination)
+
+            replace = Mock(side_effect=flaky_replace)
+            with patch("backtesting.checkpoint.os.replace", replace), patch(
+                "backtesting.checkpoint.time.sleep"
+            ) as sleep:
+                store.save("client/a", (first_day,))
+
+            self.assertEqual(store.load("client/a"), (first_day,))
+            self.assertEqual(replace.call_count, 2)
+            sleep.assert_called_once_with(0.05)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -15,6 +16,10 @@ from .backtest_results import DailyBacktestResult, DailyBacktestTimings
 
 class BacktestCheckpointStore:
     """Persist completed days, scoped to an exact experiment fingerprint."""
+
+    _replaceAttempts = 20
+    _initialReplaceDelaySeconds = 0.05
+    _maximumReplaceDelaySeconds = 0.5
 
     def __init__(self, directory: str | Path, experimentFingerprint: str) -> None:
         self.directory = Path(directory).expanduser().resolve()
@@ -52,7 +57,18 @@ class BacktestCheckpointStore:
             json.dumps(document, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        os.replace(temporary, path)
+        delay = self._initialReplaceDelaySeconds
+        for attempt in range(self._replaceAttempts):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt + 1 == self._replaceAttempts:
+                    raise
+                # Cloud-synced Windows folders can briefly lock the destination
+                # immediately after observing a previous atomic replacement.
+                time.sleep(delay)
+                delay = min(delay * 2.0, self._maximumReplaceDelaySeconds)
 
     @staticmethod
     def _encodeDaily(result: DailyBacktestResult) -> dict[str, object]:

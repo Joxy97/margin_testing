@@ -50,6 +50,27 @@ class PlotBacktestComparisonTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "identical"):
                 plotBacktestComparison(fetched, greedy)
 
+    def test_accepts_custom_comparison_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "fhs.csv"
+            second = root / "pca.csv"
+            output = root / "comparison.png"
+            self._writeCsv(first, [6.0, 7.0])
+            self._writeCsv(second, [5.5, 6.5])
+
+            result = plotBacktestComparison(
+                first,
+                second,
+                output,
+                firstLabel="FHS-EVT",
+                secondLabel="PCA",
+                title="FHS-EVT vs PCA",
+            )
+
+            self.assertEqual(result, output)
+            self.assertGreater(result.stat().st_size, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

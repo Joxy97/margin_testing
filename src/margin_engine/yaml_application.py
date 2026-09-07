@@ -48,6 +48,7 @@ from portfolio import (
 )
 from risk_state_generator import (
     CorrelatedReturnsVolaGridRiskStateGeneratorConfig,
+    FHSEVTRiskStateGeneratorConfig,
     OptionScenarioRiskStateGeneratorConfig,
     PCAGridProvider,
     PortfolioRiskStateBQMVisitor,
@@ -445,7 +446,16 @@ class _YamlConfigParser:
             config["volatilityShifts"] = tuple(
                 float(item) for item in config["volatilityShifts"]
             )
+        if "tailMassCandidates" in config:
+            config["tailMassCandidates"] = tuple(
+                float(item) for item in config["tailMassCandidates"]
+            )
+        if "stressSigmaLevels" in config:
+            config["stressSigmaLevels"] = tuple(
+                int(item) for item in config["stressSigmaLevels"]
+            )
         classes = {
+            "fhs_evt": FHSEVTRiskStateGeneratorConfig,
             "option_scenarios": OptionScenarioRiskStateGeneratorConfig,
             "returns_vola_grid": ReturnsVolaGridRiskStateGeneratorConfig,
             "correlated_returns_vola_grid": (

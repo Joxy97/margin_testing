@@ -17,6 +17,7 @@ python -m pip install -r requirements.txt
 
 PYTHONPATH=src python -m margin_engine config/margin.example.yaml
 PYTHONPATH=src python -m margin_engine config/options.example.yaml
+PYTHONPATH=src python -m margin_engine config/fhs_evt.example.yaml
 python run_backtest.py config/backtests/assets_00010.yaml
 python run_backtest.py config/backtests/assets_00010.yaml --resume
 python plot_backtest.py backtest_results/<portfolio>/breaches.csv
@@ -103,7 +104,7 @@ Backtesting calls only the public `MarginEngine` methods. It prefetches the unio
 - `src/download_manager/`: provider selection and download-strategy orchestration.
 - `src/data_manager/`: in-memory LRU caching, interval-aware missing-data lookup, and optional partitioned pickle backing storage.
 - `src/cache/`: small generic cache abstractions used by market data, PCA grids, and QUBO topology caches.
-- `src/risk_state_generator/`: exponentially weighted PCA, shock-grid construction, optional cross-asset compatibility/correlation factors, and portfolio risk-state visitors.
+- `src/risk_state_generator/`: exponentially weighted PCA, deterministic FHS-EVT filtering/tails/dependence/reduction, shock-grid construction, optional cross-asset compatibility/correlation factors, and portfolio risk-state visitors.
 - `src/margin_calculator/`: greedy and BQM margin strategies, compact QUBO representation, execution policies, and solver adapters.
 - `src/backtesting/`: rolling evaluation, breach/Basel results, exact coverage p-values, timing data, checkpoints, and CSV output.
 - `src/sbm/`, `include/sbm/`: native C++17 simulated-bifurcation model, solvers, CLI, and Python C ABI bridge.
@@ -168,6 +169,7 @@ The root YAML contains `marginDate`, `portfolio`, `engine`, and optionally `back
 - Download algorithms are `single_request` and `exponential_backoff`; chunkers are `date`, `instrument`, or nested `product` chunkers.
 - The data backing store type is `partitioned_pickle`.
 - Risk generators are `returns_vola_grid` and `correlated_returns_vola_grid`.
+- Risk generator `fhs_evt` builds synchronized log-return factors, filters them with GJR-GARCH/GARCH or EWMA, fits empirical-body/GPD-tail marginals, retains weighted historical checkerboard dependence, adds protected zero-weight joint tail stresses, and deterministically reduces to 105 joint scenarios by default. Set `reduceScenarios: false` to publish every dependence-cell/node parent plus the protected stresses. `recalibrationIntervalDays` separates scheduled structural calibration from daily conditional-state updates, and `calibrationWorkers` parallelizes independent factor fits without changing result order. See `config/fhs_evt.example.yaml`.
 - Risk generator `option_scenarios` creates shared underlying-price/volatility stresses for one-symbol derivative portfolios.
 - Margin calculators are `greedy`, `state_aware_greedy`, and `bqm`.
 - A `bqm` calculator may define `comparison: {type: state_aware_greedy, pnlAnchor: market}` to compute a paired greedy margin from the exact same lazy risk-state stream.
@@ -200,6 +202,8 @@ Implement the corresponding abstract interface, preserve exact request coverage,
 ### Add a risk-state family
 
 Implement `RiskStateGenerator.createDataRequest` and lazy `getRiskStates`, add the raw risk-state type, and register the visitor operations needed by greedy/BQM calculation. Add a frozen typed config, select it in `_riskStateGenerator`, and test dimensions, instrument order, conditioning, and empty/degenerate history behavior.
+
+FHS-EVT scenario rows are indivisible joint states: each emitted `FHSEVTRiskState` contains exactly one return per instrument. Never combine different owner rows into independent per-asset grids. Probability scenarios carry positive weights that sum to one, either directly from the parent rule or after medoid reassignment; protected stress scenarios carry exactly zero probability. Statistical fitting and optional parent-set reduction live under `src/risk_state_generator/fhs_evt/`; portfolio/QUBO evaluation remains in the existing visitors and calculators.
 
 ### Add a margin calculator
 

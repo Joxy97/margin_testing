@@ -1,0 +1,59 @@
+# Deterministic one-day filtered-historical/EVT margin example.
+marginDate: 2024-01-31
+
+portfolio:
+  weights:
+    AAPL: "10"
+    MSFT: "5"
+  cash: "0"
+
+engine:
+  downloadManager:
+    providers:
+      yahoo:
+        type: yfinance
+    providerSelection: local_first
+    downloadAlgorithm: single_request
+
+  dataManager:
+    cacheType: lru
+    memorySize: 16
+
+  riskStateGenerator:
+    type: fhs_evt
+    historyDays: 1825
+    minimumObservations: 252
+    meanModel: constant
+    varianceModel: gjr_garch
+    burnIn: 50
+    ewmaLambda: 0.94
+    rowWeightDecay: 1.0
+    tailMassCandidates: [0.025, 0.05, 0.075, 0.10]
+    minimumTailObservations: 20
+    integrationNodes: 1
+    endpointProbability: 1.0e-10
+    stressSigmaLevels: [3, 4, 5]
+    targetScenarios: 105
+    # Set false to publish every dependence-cell/node parent plus stresses.
+    reduceScenarios: true
+    protectProbabilityExtremes: true
+    localSwapPasses: 1
+    # Zero refits structural parameters every run. A positive interval reuses
+    # the approved snapshot while updating daily conditional filter states.
+    recalibrationIntervalDays: 0
+    calibrationWorkers: 1
+
+  marginCalculator:
+    type: bqm
+    comparison:
+      type: state_aware_greedy
+      pnlAnchor: market
+    modelParameters:
+      lambdaOneHot: 2.0
+    executionPolicy:
+      type: batch
+      batchSize: 105
+    solver:
+      type: simulated_annealing
+      solverParameters:
+        num_reads: 20

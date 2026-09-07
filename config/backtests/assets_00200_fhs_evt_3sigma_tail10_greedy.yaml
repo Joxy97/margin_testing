@@ -1,0 +1,66 @@
+# FHS-EVT backtest with fixed 10% tails and protected 3-sigma stresses.
+marginDate: 2025-01-01
+
+portfolio:
+  csv: ../../synthetic_market/assets_00200/portfolio.csv
+  clientId: synthetic_0000
+  cash: "0"
+
+backtest:
+  confidenceLevel: 0.998
+  outputDirectory: ../../backtest_results/fhs_evt_3sigma_tail10/assets_00200
+  datesFromCsv:
+    path: ../../synthetic_market/assets_00200/backtest_close.csv
+    startDate: 2025-01-01
+    endDate: 2025-12-26
+
+engine:
+  downloadManager:
+    providers:
+      synthetic_csv:
+        type: local_csv
+    providerSelection: local_first
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    requestParameters:
+      locations:
+        - ../../synthetic_market/assets_00200/historical_close.csv
+        - ../../synthetic_market/assets_00200/backtest_close.csv
+
+  dataManager:
+    cacheType: lru
+    memorySize: 16
+    maxMemoryBytes: 268435456
+
+  riskStateGenerator:
+    type: fhs_evt
+    historyDays: 1825
+    minimumObservations: 252
+    meanModel: ar
+    arOrder: 3
+    varianceModel: gjr_garch
+    burnIn: 10
+    ewmaLambda: 0.94
+    persistenceBuffer: 0.005
+    optimizerMaxIterations: 500
+    rowWeightDecay: 1.0
+    # Exactly 80% empirical body, 10% lower GPD tail, and 10% upper GPD tail.
+    tailMassCandidates: [0.10]
+    minimumTailObservations: 20
+    evtShapeLowerBound: -0.45
+    evtShapeUpperBound: 0.45
+    evtQuadraturePoints: 512
+    thresholdStabilityTolerance: 0.20
+    integrationNodes: 1
+    endpointProbability: 1.0e-10
+    stressSigmaLevels: [3]
+    targetScenarios: 105
+    protectProbabilityExtremes: true
+    localSwapPasses: 1
+    recalibrationIntervalDays: 366
+    calibrationWorkers: 1
+    modelVersion: fhs-evt-ar3-burn10-tail10-3sigma-v1
+
+  marginCalculator:
+    type: state_aware_greedy
+    pnlAnchor: market

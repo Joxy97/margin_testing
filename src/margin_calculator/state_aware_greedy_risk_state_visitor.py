@@ -8,6 +8,7 @@ import numpy
 
 from portfolio import Portfolio, contractKey
 from risk_state_generator import (
+    FHSEVTRiskState,
     OptionScenarioRiskState,
     ReturnsVolaGridRiskState,
     RiskState,
@@ -52,6 +53,18 @@ class StateAwareGreedyRiskStateVisitor:
             grid.returnBounds[:, 1],
         )
         return float(positions @ worst_returns)
+
+    @portfolioPnl.register
+    def _(self, riskState: FHSEVTRiskState, portfolio: Portfolio) -> float:
+        grid = riskState.returnsVolaGrid
+        positions = numpy.fromiter(
+            (float(portfolio.weights.get(item, 0)) for item in grid.instruments),
+            dtype=float,
+            count=len(grid),
+        )
+        if not numpy.isfinite(positions).all():
+            raise ValueError("portfolio contains a non-finite position")
+        return float(positions @ grid.gridValues[:, 0, 0])
 
     @portfolioPnl.register
     def _(self, riskState: OptionScenarioRiskState, portfolio) -> float:

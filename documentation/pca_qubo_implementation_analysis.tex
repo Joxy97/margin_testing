@@ -1,0 +1,265 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{microtype}
+
+\geometry{margin=25mm}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\lstdefinelanguage{yaml}{
+  basicstyle=\ttfamily\small,
+  comment=[l]{\#},
+  commentstyle=\color{gray},
+  morestring=[b]",
+  morestring=[b]',
+  stringstyle=\color{green!40!black},
+  showstringspaces=false,
+  breaklines=true,
+  columns=fullflexible
+}
+
+\title{Analysis of the PCA Scenario QUBO Implementation}
+\author{Repository code review}
+\date{7 September 2026}
+
+\begin{document}
+\maketitle
+
+\section{Executive conclusion}
+
+Yes, the PCA path can encode a categorical choice among up to 21 return bins for
+each asset. It imposes one-hot constraints independently for every asset, and the
+correlated variant adds pairwise cross-asset compatibility terms. There is,
+however, an important distinction between two different uses of the number 21:
+
+\begin{center}
+\begin{tabular}{@{}p{0.28\textwidth}p{0.62\textwidth}@{}}
+\toprule
+Quantity & Meaning \\
+\midrule
+\texttt{scenariosPerComponents: [21, 5]}
+& The outer PCA factor grid contains $21\times5=105$ factor states when two
+principal components are used. \\
+\texttt{nZBins: 21}
+& For each outer PCA state, each asset has up to 21 candidate idiosyncratic
+residual-return bins. These are the categorical choices encoded in the QUBO. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Consequently, this is not one QUBO containing 105 indivisible market scenarios.
+It is normally a stream of 105 separate QUBOs, one for each PCA factor state.
+Within each QUBO, the optimizer selects one residual bin per asset. The margin
+calculator then takes the greatest decoded portfolio loss across the 105 outer
+states.
+
+\section{Scenario construction}
+
+For an outer PCA factor state $s$, the generator first constructs the common
+factor return centre
+\begin{equation}
+  \mathbf{c}_s = \boldsymbol{\mu}_{\mathrm{PCA}}
+  + \mathbf{f}_s^{\mathsf T}\mathbf{L},
+\end{equation}
+where $\mathbf{f}_s$ is the selected principal-component shock and $\mathbf{L}$
+maps component shocks back to asset space.
+
+Around this common centre, each asset $i$ receives a discrete candidate set
+\begin{equation}
+  \mathcal{R}^{(s)}_i
+  = \left\{r^{(s)}_{i1},\ldots,r^{(s)}_{iK_i}\right\},
+  \qquad K_i \leq 21.
+\end{equation}
+The candidates are derived from standardized historical residuals and the
+asset's residual volatility. The configured residual-sigma range can filter
+candidate bins, so ``21'' is a maximum rather than a guarantee that every asset
+always has exactly 21 valid choices.
+
+In the reviewed configuration, the relevant grid settings are conceptually:
+
+\begin{lstlisting}[language=yaml]
+nComponents: 2
+scenariosPerComponents: [21, 5]
+nZBins: 21
+residualSigmaRange: 5
+\end{lstlisting}
+
+With \texttt{nNearest: null}, the implementation may use up to 100 recent
+observations from the exponentially weighted fitting window when constructing
+the residual grid.
+
+\section{QUBO variables and one-hot constraints}
+
+For every asset $i$ and candidate bin $k$, the encoder creates one binary
+variable
+\begin{equation}
+  x_{ik}\in\{0,1\}.
+\end{equation}
+The intended categorical constraint is
+\begin{equation}
+  \sum_{k=1}^{K_i}x_{ik}=1
+  \qquad\text{for every asset }i.
+\end{equation}
+
+The loss term for portfolio weights $w_i$ is linear in these variables. Using
+the sign convention of the implementation, a representative per-state energy is
+\begin{equation}
+\begin{split}
+ E_s(\mathbf{x}) ={}&
+   \sum_i\sum_k w_i r^{(s)}_{ik}x_{ik} \\
+ &+\lambda_{\mathrm{OH}}
+   \sum_i\left(\sum_k x_{ik}-1\right)^2 \\
+ &+\lambda_{\mathrm{compat}}
+   \sum_{(i,j)\in\mathcal{E}}\sum_{k,\ell}
+   C^{(s)}_{ij,k\ell}x_{ik}x_{j\ell}.
+\end{split}
+\end{equation}
+
+Expanding the one-hot penalty gives the required linear and quadratic biases:
+\begin{equation}
+ \left(\sum_k x_{ik}-1\right)^2
+ =-\sum_k x_{ik}+2\sum_{k<\ell}x_{ik}x_{i\ell}+1,
+\end{equation}
+because $x_{ik}^2=x_{ik}$ for binary variables. Thus each asset constitutes its
+own one-hot group, and choosing zero or multiple bins is penalized.
+
+The solver path first prefers the lowest-energy feasible one-hot sample. If a
+solver supplies no feasible candidate, the framework projects the returned
+sample into the categorical groups and applies deterministic local improvement
+before decoding. This post-processing is a defensive mechanism; it does not
+replace the one-hot penalty encoded in the QUBO.
+
+\section{Cross-asset compatibility}
+
+Cross-asset compatibility is present only when the
+\texttt{correlated\_returns\_vola\_grid} generator is used. For the plain
+\texttt{returns\_vola\_grid} generator, the BQM visitor explicitly sets the
+compatibility penalty to zero.
+
+For the correlated generator, asset pairs are built from the undirected union
+of directed top-$k$ absolute-correlation nominations. With \texttt{topK: 5}, an
+asset nominates its five strongest correlation neighbours, and an edge is kept
+if either endpoint nominates the other.
+
+For an edge $(i,j)$ and standardized candidate residuals $z_{ik}$ and
+$z_{j\ell}$, the compatibility cost is based on a bivariate Gaussian
+Mahalanobis form:
+\begin{equation}
+  C_{ij,k\ell}
+  =\frac{z_{ik}^2-2\rho_{ij}z_{ik}z_{j\ell}+z_{j\ell}^2}
+  {1-\rho_{ij}^2}.
+\end{equation}
+This cost is multiplied by $\lambda_{\mathrm{compat}}$ and inserted as a
+quadratic coupling between $x_{ik}$ and $x_{j\ell}$.
+
+The compatibility term is soft, not a hard prohibition. It discourages
+statistically implausible combinations, but a sufficiently adverse portfolio
+loss can outweigh it depending on the penalty scale.
+
+\section{What remains joint and what is recombined}
+
+The PCA construction has two dependence layers:
+
+\begin{enumerate}
+  \item The outer PCA point is a joint common-factor shock applied to every
+  asset simultaneously.
+  \item Conditional on that PCA point, the QUBO selects an idiosyncratic
+  residual bin separately for each asset. In the correlated generator, pairwise
+  compatibility costs regularize these selections.
+\end{enumerate}
+
+Therefore the PCA QUBO does perform cross-asset recombination of residual bins.
+It does not treat each historical or generated row as an indivisible joint
+scenario. This is intentional for the PCA grid model.
+
+That behavior differs fundamentally from FHS--EVT. An FHS--EVT risk state
+contains one synchronized return for every instrument, and the entire row is an
+indivisible joint scenario. A correct FHS--EVT evaluator must never take one
+asset's shock from one row and another asset's shock from a different row.
+
+\begin{center}
+\begin{tabular}{@{}p{0.26\textwidth}p{0.31\textwidth}p{0.33\textwidth}@{}}
+\toprule
+Property & PCA return/volatility grid & FHS--EVT \\
+\midrule
+Outer state
+& One common PCA-factor point
+& One complete synchronized joint scenario \\
+Inner asset choice
+& One residual bin per asset
+& None \\
+Cross-asset handling
+& PCA factor dependence plus optional soft pairwise residual compatibility
+& Dependence already embedded in the scenario row \\
+Correct optimization unit
+& Categorical asset-bin assignment conditional on a PCA point
+& Whole scenario row \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Configuration-specific answer}
+
+The standard synthetic 200-asset BQM configuration uses the correlated PCA
+generator and therefore has both one-hot constraints and cross-asset
+compatibility. Its key settings include:
+
+\begin{lstlisting}[language=yaml]
+riskStateGenerator:
+  type: correlated_returns_vola_grid
+  nComponents: 2
+  scenariosPerComponents: [21, 5]
+  nZBins: 21
+  topK: 5
+
+marginCalculator:
+  type: bqm
+  lambdaOneHot: 1.0
+  lambdaCompat: 0.1
+\end{lstlisting}
+
+By contrast, the latest Yahoo 200-asset PCA-versus-FHS--EVT comparison used
+\texttt{returns\_vola\_grid} with the greedy calculator. That particular PCA
+comparator did not invoke a QUBO and did not apply cross-asset compatibility.
+
+\section{Direct answer}
+
+For the PCA BQM configuration, the answer is yes: the QUBO chooses one of up to
+21 residual bins for each asset, enforces one-hot selection for every asset, and
+the correlated variant incorporates pairwise cross-asset compatibility. It does
+this separately for each of the 105 outer PCA factor points and takes the worst
+decoded portfolio result across those points.
+
+The 105 PCA points and the 21 per-asset QUBO bins are distinct dimensions and
+should not be conflated. Nor should the PCA construction be imposed on FHS--EVT,
+whose output rows must remain indivisible joint scenarios.
+
+\section{Implementation references}
+
+The conclusions above were traced through the following repository files:
+
+\begin{itemize}
+  \item \path{src/risk_state_generator/returns_vola_grid_risk_state_generator.py}
+  \item \path{src/risk_state_generator/correlated_returns_vola_grid_risk_state_generator.py}
+  \item \path{src/risk_state_generator/portfolio_risk_state_bqm_visitor.py}
+  \item \path{src/margin_calculator/bqm_margin_calculator.py}
+  \item \path{config/backtests/assets_00200.yaml}
+  \item \path{config/backtests/yahoo_00200_pca_four_year_full.yaml}
+  \item \path{config/backtests/yahoo_00200_fhs_evt_ar2_tail075_expanding_semiannual_full_nodes2_xi20.yaml}
+\end{itemize}
+
+This document records a read-only analysis. No source-code alterations were made
+as part of the underlying QUBO review.
+
+\end{document}
