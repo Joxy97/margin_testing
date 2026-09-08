@@ -1,7 +1,3 @@
-"""Base type for optimization solver results."""
+"""Compatibility name for the implemented optimization result family."""
 
-
-class OptimizationSolverResult:
-    """Represent the result returned by an optimization solver."""
-
-    pass
+from .bqm_optimization_result import BQMOptimizationResult as OptimizationSolverResult

@@ -26,6 +26,50 @@ from risk_state_generator import OptionScenarioRiskStateGeneratorConfig
 
 
 class OptionPricingTest(unittest.TestCase):
+    def test_contract_and_quote_share_canonical_identity(self) -> None:
+        import pandas
+        from decimal import Decimal
+        from portfolio.derivatives import FuturesOptionContract, contractKey
+        from option_pricing.conventions import FuturesOptionMarketConvention
+        contract = FuturesOptionContract("ES", date(2025, 6, 20), Decimal("100.00"), "c")
+        row = next(pandas.DataFrame({"symbol": ["ES"],
+            "expiration_date": [pandas.Timestamp("2025-06-20")], "strike": [100.],
+            "option_type": ["C"], "exercise_style": ["E"]}).itertuples(index=False))
+        key = contractKey(contract)
+        self.assertEqual(key, FuturesOptionMarketConvention().optionMarketPriceKey(row))
+        self.assertEqual((key.symbol, key.strike), ("ES", "100"))
+
+    def test_unmatched_shock_history_reports_fallback(self) -> None:
+        import pandas
+        from option_pricing.calibration import VolatilityShockEstimator
+
+        quotes = pandas.DataFrame({
+            "date": pandas.to_datetime(["2024-01-01", "2024-01-03", "2024-01-05"]),
+            "symbol": "A", "instrument_type": "equity", "price": [100, 102, 101],
+        })
+        result = VolatilityShockEstimator(minimumObservations=2, fallbackRho=-.6).estimate(
+            quotes.iloc[::-1], "A", "equity_option",
+            {date(2024, 1, day): value for day, value in ((2, .2), (3, .21), (5, .19))}, .2)
+        self.assertEqual((result.rho, result.matchedIntervals, result.correlationFallback),
+                         (-.6, 1, True))
+
+    def test_shock_correlation_matches_both_interval_endpoints(self) -> None:
+        import pandas
+        from option_pricing.calibration import VolatilityShockEstimator
+
+        quotes = pandas.DataFrame({
+            "date": pandas.date_range("2024-01-01", periods=7),
+            "symbol": "A", "instrument_type": "equity",
+            "price": [100 * exp(x) for x in (0, .01, .03, .06, .10, .15, .21)],
+        })
+        history = {date(2024, 1, day): .2 * exp(value)
+                   for day, value in ((1, 0), (2, .02), (4, .9), (5, .98), (6, 1.08), (7, 1.2))}
+        result = VolatilityShockEstimator(minimumObservations=3).estimate(
+            quotes, "A", "equity_option", history, .2)
+
+        # Matched Jan 1–2, 4–5, 5–6, 6–7 changes are exactly twice price returns.
+        self.assertAlmostEqual(result.rho, 1.0)
+
     def test_black76_put_call_parity(self) -> None:
         model = Black76PricingModel()
         call = model.price(100.0, 95.0, 0.5, 0.04, 0.20, "C")
@@ -61,6 +105,62 @@ class OptionPricingTest(unittest.TestCase):
 
 
 class OptionMarginApplicationTest(unittest.TestCase):
+    def test_lazy_scenarios_share_an_immutable_prepared_market(self) -> None:
+        import pandas
+        from download_unit import DataRequest
+        from risk_state_generator import RiskStateGenerationContext
+        from risk_state_generator.option_scenario_risk_state_generator import OptionScenarioRiskStateGenerator
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quotes.csv"
+            self._writeQuotes(path)
+            quotes = pandas.read_csv(path)
+        context = RiskStateGenerationContext(quotes, DataRequest(instruments=["ES"],
+            start_date=date(2025, 1, 1), end_date=date(2025, 1, 10), data_type="derivativeQuotes"),
+            date(2025, 1, 10))
+        states = OptionScenarioRiskStateGenerator().getRiskStates(context)
+        first = next(states)
+        prices = dict(first.marketPrices)
+        quotes.loc[:, "price"] = 0.
+        second = next(states)
+        self.assertIs(first.preparedMarket, second.preparedMarket)
+        self.assertEqual(dict(second.marketPrices), prices)
+        with self.assertRaises(TypeError):
+            second.marketPrices[next(iter(prices))] = 0.
+        states.close()
+
+    def test_option_preparation_rejects_conflicting_duplicate_quotes(self) -> None:
+        import pandas
+        from download_unit import DataRequest
+        from risk_state_generator import RiskStateGenerationContext
+        from risk_state_generator.option_scenario_risk_state_generator import OptionScenarioRiskStateGenerator
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quotes.csv"
+            self._writeQuotes(path)
+            quotes = pandas.read_csv(path)
+        duplicate = quotes.iloc[[0]].copy()
+        duplicate["price"] += 1.
+        quotes = pandas.concat([quotes, duplicate], ignore_index=True)
+        context = RiskStateGenerationContext(quotes, DataRequest(instruments=["ES"],
+            start_date=date(2025, 1, 1), end_date=date(2025, 1, 10), data_type="derivativeQuotes"),
+            date(2025, 1, 10))
+        with self.assertRaisesRegex(ValueError, "Conflicting"):
+            list(OptionScenarioRiskStateGenerator().getRiskStates(context))
+
+    def test_option_preparation_rejects_future_quotes(self) -> None:
+        import pandas
+        from download_unit import DataRequest
+        from risk_state_generator import RiskStateGenerationContext
+        from risk_state_generator.option_scenario_risk_state_generator import OptionScenarioRiskStateGenerator
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quotes.csv"
+            self._writeQuotes(path)
+            quotes = pandas.read_csv(path)
+        context = RiskStateGenerationContext(quotes, DataRequest(instruments=["ES"],
+            start_date=date(2025, 1, 1), end_date=date(2025, 1, 9), data_type="derivativeQuotes"),
+            date(2025, 1, 9))
+        with self.assertRaisesRegex(ValueError, "future"):
+            list(OptionScenarioRiskStateGenerator().getRiskStates(context))
+
     def test_yaml_application_margins_a_futures_option_portfolio(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

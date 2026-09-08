@@ -28,6 +28,8 @@ class DownloadManager:
         self.providerSelection = providerSelection or LocalFirstProviderSelection()
         self.downloadAlgorithm = downloadAlgorithm
         self.downloadParameters = dict(downloadParameters or {})
+        self.downloadUnit = DownloadUnitFactory.createDownloadUnit(
+            downloadAlgorithm, self.downloadParameters)
 
     def returnProviders(self, dataType: str) -> list[DataProvider]:
         """Return registered providers capable of supplying ``dataType``."""
@@ -36,6 +38,10 @@ class DownloadManager:
             for provider in self.providers.values()
             if dataType in provider.getDataTypes()
         ]
+
+    def datasetIdentity(self, command: DataRequest) -> str:
+        provider = self.providerSelection.selectProvider(self.returnProviders(command.data_type))
+        return provider.datasetIdentity(command)
 
     def addProvider(self, key: str, provider: DataProvider) -> None:
         """Add a provider, replacing the provider already stored under ``key``."""
@@ -84,8 +90,4 @@ class DownloadManager:
         """Select a provider and download the requested type of data."""
         providers = self.returnProviders(dataType)
         provider = self.providerSelection.selectProvider(providers)
-        download_unit = DownloadUnitFactory.createDownloadUnit(
-            self.downloadAlgorithm,
-            self.downloadParameters,
-        )
-        return download_unit.getData(provider, command)
+        return self.downloadUnit.getData(provider, command)

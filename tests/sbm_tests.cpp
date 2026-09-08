@@ -34,6 +34,28 @@ void test_qubo_ising_equivalence() {
     }
 }
 
+void test_preparation_rebinds_coefficients_with_zero_and_parallel_edges() {
+    sbm::QUBOPreparation preparation(1024);
+    sbm::BinaryQuadraticModel bqm{{-1.0, 2.0}, {{0, 1, 0.0}, {0, 1, 4.0}}, .5};
+    const auto first = preparation.prepare(bqm);
+    bqm.quadratic[0].bias = 2.0;
+    const auto second = preparation.prepare(bqm);
+    require(first.topology == second.topology, "prepared topology was not reused");
+    require(std::abs(first.energy({1, 1}) - 5.5) < 1e-12, "first prepared coefficients changed");
+    require(std::abs(second.energy({1, 1}) - 7.5) < 1e-12, "rebound source energy differs");
+}
+
+void test_prepared_maxcut_returns_a_partition_and_its_objective() {
+    const sbm::maxcut::Graph graph{3, {{0, 1, 1.0}, {0, 1, 2.0}, {1, 2, 2.0}, {0, 2, 1.0}}};
+    sbm::maxcut::PreparedSearch search(graph);
+    const auto exact = search.exact();
+    require(std::abs(exact.cut - 5.0) < 1e-12, "parallel-edge MaxCut reference differs");
+    for (const auto& result : {exact, search.greedy(4, 10, 7), search.anneal(4, 10, 7)}) {
+        require(std::abs(result.cut - graph.cut_value(result.partition)) < 1e-12,
+                "prepared MaxCut objective disagrees with returned partition");
+    }
+}
+
 void test_cpu_solver() {
     sbm::SolverParameters parameters;
     parameters.steps = 200;
@@ -143,6 +165,8 @@ void test_fpga_sim_solver() {
 int main() {
     try {
         test_qubo_ising_equivalence();
+        test_preparation_rebinds_coefficients_with_zero_and_parallel_edges();
+        test_prepared_maxcut_returns_a_partition_and_its_objective();
         test_maxcut_qubo_equivalence();
         test_cpu_solver();
         test_cpu_batch_solver();

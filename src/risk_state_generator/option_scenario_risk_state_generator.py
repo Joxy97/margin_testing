@@ -15,6 +15,7 @@ from option_pricing import (
     VolatilitySmileCalibrator,
 )
 from portfolio import DerivativesPortfolio
+from option_pricing.prepared_market import OptionMarketPreparer
 
 from .risk_state import OptionScenarioRiskState
 from .risk_state_generation_context import RiskStateGenerationContext
@@ -98,7 +99,7 @@ class OptionScenarioRiskStateGenerator(RiskStateGenerator):
             fallbackVolOfVolatility=fallbackVolOfVolatility,
             marketConventions=self.smileCalibrator.marketConventions,
         )
-        self.marketConventions = self.smileCalibrator.marketConventions
+        self.marketPreparer = OptionMarketPreparer(self.smileCalibrator, self.volatilityShockEstimator)
 
     def createDataRequest(
         self, portfolio: DerivativesPortfolio, marginDate: date
@@ -118,34 +119,10 @@ class OptionScenarioRiskStateGenerator(RiskStateGenerator):
     def getRiskStates(
         self, context: RiskStateGenerationContext
     ) -> Iterator[OptionScenarioRiskState]:
-        data = self._normalized(context.marketData)
-        current = data.loc[data["date"].dt.date == context.marginDate].copy()
-        if current.empty:
-            raise ValueError(f"No derivative quotes for {context.marginDate}")
-        curves, spots = self._marketInputs(current, context.marginDate)
-        smiles = self.smileCalibrator.calibrate(
-            current, context.marginDate, curves, spots
-        )
-        market_prices = self._marketPrices(current)
-        symbol = context.dataRequest.instruments[0]
-        market_smiles = [
-            (kind, expiry, smile)
-            for (kind, item_symbol, expiry), smile in smiles.items()
-            if item_symbol == symbol
-        ]
-        if not market_smiles:
-            raise ValueError(f"No option smile could be calibrated for {symbol}")
-        market_kind, _, nearest_smile = min(
-            market_smiles, key=lambda item: item[1]
-        )
-        atm_volatility = nearest_smile.volatility(0.0)
-        parameters = self.volatilityShockEstimator.estimate(
-            data,
-            symbol,
-            market_kind,
-            self._atmVolatilityHistory(data, symbol),
-            atm_volatility,
-        )
+        market = self.marketPreparer.prepare(context.marketData, context.marginDate,
+                                             context.dataRequest.instruments[0])
+        atm_volatility = market.atmVolatility
+        parameters = market.shockParameters
         raw_scan = (
             NormalDist().inv_cdf(self.confidenceLevel)
             * atm_volatility
@@ -166,13 +143,14 @@ class OptionScenarioRiskStateGenerator(RiskStateGenerator):
             ))
             for band in self.volatilityShifts:
                 yield OptionScenarioRiskState(
+                    preparedMarket=market,
                     valuationDate=context.marginDate,
                     priceShock=float(price_shock),
                     volatilityShift=predicted + band,
-                    forwardCurves=curves,
-                    spotPrices=spots,
-                    smiles=smiles,
-                    marketPrices=market_prices,
+                    forwardCurves=market.forwardCurves,
+                    spotPrices=market.spotPrices,
+                    smiles=market.smiles,
+                    marketPrices=market.marketPrices,
                     riskFreeRate=self.riskFreeRate,
                     dayCountBasis=self.dayCountBasis,
                     tradingDaysPerYear=self.tradingDaysPerYear,
@@ -181,65 +159,3 @@ class OptionScenarioRiskStateGenerator(RiskStateGenerator):
                     maximumVolatility=self.maximumVolatility,
                     americanOptionSteps=self.americanOptionSteps,
                 )
-
-    @staticmethod
-    def _normalized(data):
-        import pandas
-
-        result = data.copy()
-        result["date"] = pandas.to_datetime(result["date"], errors="raise")
-        result["expiration_date"] = pandas.to_datetime(
-            result["expiration_date"], errors="raise"
-        )
-        for column, default in (
-            ("strike", 0.0), ("option_type", ""), ("exercise_style", "E"),
-            ("dividend_yield", 0.0),
-        ):
-            if column not in result:
-                result[column] = default
-            result[column] = result[column].fillna(default)
-        result["instrument_type"] = result["instrument_type"].astype(str).str.lower()
-        result["option_type"] = result["option_type"].astype(str).str.upper()
-        result["exercise_style"] = result["exercise_style"].astype(str).str.upper()
-        return result
-
-    def _marketInputs(self, quotes, valuationDate):
-        curves = {}
-        spots = {}
-        for convention in self.marketConventions.values():
-            curves.update(convention.forwardCurves(quotes, valuationDate))
-            spots.update(convention.spotPrices(quotes))
-        return curves, spots
-
-    def _atmVolatilityHistory(self, data, symbol):
-        history = {}
-        for timestamp, rows in data.groupby("date"):
-            valuation_date = timestamp.date()
-            curves, spots = self._marketInputs(rows, valuation_date)
-            smiles = self.smileCalibrator.calibrate(
-                rows, valuation_date, curves, spots
-            )
-            candidates = [
-                (expiry, smile)
-                for (_, item_symbol, expiry), smile in smiles.items()
-                if item_symbol == symbol
-            ]
-            if candidates:
-                history[valuation_date] = min(
-                    candidates, key=lambda item: item[0]
-                )[1].volatility(0.0)
-        return history
-
-    def _marketPrices(self, current):
-        key_builders = {}
-        for convention in self.marketConventions.values():
-            key_builders[convention.optionInstrumentType] = (
-                convention.optionMarketPriceKey
-            )
-            key_builders[convention.underlyingInstrumentType] = (
-                convention.underlyingMarketPriceKey
-            )
-        return {
-            key_builders[str(row.instrument_type)](row): float(row.price)
-            for row in current.itertuples(index=False)
-        }

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
+from .interval_coverage import IntervalCoverage
 from download_unit import DataRequest
+from dataclasses import dataclass, field
+
+
+@dataclass
+class DerivativeQuotePartition:
+    data: object = None
+    coverage: IntervalCoverage = field(default_factory=IntervalCoverage)
 
 
 class DerivativeQuoteDataManager:
@@ -16,27 +22,23 @@ class DerivativeQuoteDataManager:
     )
 
     def __init__(self) -> None:
-        self.data = None
-        self.coverage = {}
+        self.partitions = {}
+
+    def _entry(self, command: DataRequest) -> DerivativeQuotePartition:
+        key = command.datasetIdentity, command.data_type, command.period
+        return self.partitions.setdefault(key, DerivativeQuotePartition())
 
     def getData(self, command: DataRequest):
-        if self.data is None or self.getMissingRequests(command):
+        if self._entry(command).data is None or self.getMissingRequests(command):
             return None
         return self._select(command)
 
     def getMissingRequests(self, command: DataRequest) -> list[DataRequest]:
-        grouped = {}
-        for symbol in command.instruments:
-            for interval in self._missingIntervals(
-                command.start_date, command.end_date, self.coverage.get(symbol, [])
-            ):
-                grouped.setdefault(interval, []).append(symbol)
-        return [
-            command.withChanges(
-                instruments=tuple(symbols), start_date=start, end_date=end
-            )
-            for (start, end), symbols in grouped.items()
-        ]
+        return self._entry(command).coverage.missingRequests(command)
+
+    def getAvailableData(self, command: DataRequest):
+        """Copy any retained quotes independently of complete interval coverage."""
+        return None if self._entry(command).data is None else self._select(command)
 
     def storeData(self, command: DataRequest, data):
         import pandas
@@ -69,17 +71,16 @@ class DerivativeQuoteDataManager:
         for column in ("price", "strike", "multiplier", "dividend_yield"):
             normalized[column] = pandas.to_numeric(normalized[column], errors="raise")
         self._validate(normalized, command)
-        combined = normalized if self.data is None else pandas.concat(
-            (self.data, normalized), ignore_index=True
+        combined = normalized if self._entry(command).data is None else pandas.concat(
+            (self._entry(command).data, normalized), ignore_index=True
         )
-        self.data = combined.drop_duplicates(
+        if (combined.groupby(list(self.identityColumns), dropna=False)
+                .nunique(dropna=False) > 1).any().any():
+            raise ValueError("Conflicting observations for the same derivative quote")
+        self._entry(command).data = combined.drop_duplicates(
             list(self.identityColumns), keep="last"
         ).sort_values(["date", "symbol", "expiration_date", "strike"])
-        for symbol in command.instruments:
-            intervals = self.coverage.setdefault(symbol, [])
-            self.coverage[symbol] = self._mergeIntervals(
-                [*intervals, (command.start_date, command.end_date)]
-            )
+        self._entry(command).coverage.add(command)
         return self._select(command)
 
     @staticmethod
@@ -105,7 +106,7 @@ class DerivativeQuoteDataManager:
         missing_symbols = set(command.instruments).difference(
             data["symbol"].astype(str)
         )
-        if missing_symbols:
+        if missing_symbols and not data.empty:
             raise ValueError(f"Derivative quotes are missing symbols: {sorted(missing_symbols)}")
 
     def _select(self, command: DataRequest):
@@ -113,32 +114,7 @@ class DerivativeQuoteDataManager:
 
         start = pandas.Timestamp(command.start_date)
         end = pandas.Timestamp(command.end_date)
-        return self.data.loc[
-            self.data["symbol"].astype(str).isin(command.instruments)
-            & self.data["date"].between(start, end)
+        return self._entry(command).data.loc[
+            self._entry(command).data["symbol"].astype(str).isin(command.instruments)
+            & self._entry(command).data["date"].between(start, end)
         ].copy().reset_index(drop=True)
-
-    @staticmethod
-    def _mergeIntervals(intervals):
-        merged = []
-        for start, end in sorted(intervals):
-            if not merged or start > merged[-1][1] + timedelta(days=1):
-                merged.append((start, end))
-            else:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        return merged
-
-    @classmethod
-    def _missingIntervals(cls, start, end, covered):
-        missing, cursor = [], start
-        for covered_start, covered_end in cls._mergeIntervals(covered):
-            if covered_end < cursor:
-                continue
-            if covered_start > end:
-                break
-            if covered_start > cursor:
-                missing.append((cursor, min(end, covered_start - timedelta(days=1))))
-            cursor = max(cursor, covered_end + timedelta(days=1))
-        if cursor <= end:
-            missing.append((cursor, end))
-        return missing

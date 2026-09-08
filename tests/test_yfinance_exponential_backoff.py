@@ -67,12 +67,12 @@ class YfinanceExponentialBackoffIntegrationTest(unittest.TestCase):
 
         data = unit.getData(provider, command)
 
-        self.assertEqual(len(data), 6)
-        self.assertTrue(any(not frame.empty for frame in data))
-        dataframe = pandas.concat(data)
+        self.assertFalse(data.empty)
+        self.assertTrue(data["date"].is_unique)
+        self.assertEqual(list(data.columns), ["date", *instruments])
         with tempfile.TemporaryDirectory() as directory:
             csv_path = Path(directory) / "yfinance_data.csv"
-            unit.storeData(dataframe, csv_path)
+            unit.storeData(data, csv_path)
             self.assertTrue(csv_path.is_file())
             self.assertGreater(csv_path.stat().st_size, 0)
 

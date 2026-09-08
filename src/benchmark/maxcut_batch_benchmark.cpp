@@ -56,96 +56,16 @@ double peak_rss_mib() {
     return 0.0;
 }
 
-double gain(
-    std::size_t vertex, const std::vector<std::uint8_t>& partition,
-    const sbm::maxcut::Adjacency& adjacency) {
-    double value = 0.0;
-    for (std::size_t p = adjacency.row_offsets[vertex];
-         p < adjacency.row_offsets[vertex + 1]; ++p) {
-        value += partition[vertex] == partition[adjacency.neighbors[p]]
-                     ? adjacency.weights[p]
-                     : -adjacency.weights[p];
-    }
-    return value;
-}
-
 double exact(const sbm::maxcut::Graph& graph) {
-    auto adjacency = sbm::maxcut::make_adjacency(graph);
-    std::vector<std::uint8_t> partition(graph.vertices, 0);
-    double current = 0.0;
-    double best = 0.0;
-    const std::uint64_t states = 1ULL << (graph.vertices - 1);
-    for (std::uint64_t state = 1; state < states; ++state) {
-        const auto vertex = 1 + static_cast<std::size_t>(__builtin_ctzll(state));
-        current += gain(vertex, partition, adjacency);
-        partition[vertex] ^= 1;
-        best = std::max(best, current);
-    }
-    return best;
+    return sbm::maxcut::PreparedSearch(graph).exact().cut;
 }
 
-double greedy(
-    const sbm::maxcut::Graph& graph, int runs, int sweeps, std::uint64_t seed) {
-    auto adjacency = sbm::maxcut::make_adjacency(graph);
-    std::mt19937_64 rng(seed);
-    std::vector<std::uint32_t> order(graph.vertices);
-    std::iota(order.begin(), order.end(), 0);
-    double best = 0.0;
-    for (int run = 0; run < runs; ++run) {
-        std::vector<std::uint8_t> partition(graph.vertices);
-        for (auto& bit : partition) bit = rng() & 1U;
-        double current = graph.cut_value(partition);
-        for (int sweep = 0; sweep < sweeps; ++sweep) {
-            std::shuffle(order.begin(), order.end(), rng);
-            bool changed = false;
-            for (auto vertex : order) {
-                const double delta = gain(vertex, partition, adjacency);
-                if (delta > 0.0) {
-                    partition[vertex] ^= 1;
-                    current += delta;
-                    changed = true;
-                }
-            }
-            if (!changed) break;
-        }
-        best = std::max(best, current);
-    }
-    return best;
+double greedy(const sbm::maxcut::Graph& graph, int runs, int sweeps, std::uint64_t seed) {
+    return sbm::maxcut::PreparedSearch(graph).greedy(runs, sweeps, seed).cut;
 }
 
-double anneal(
-    const sbm::maxcut::Graph& graph, int runs, int sweeps, std::uint64_t seed) {
-    auto adjacency = sbm::maxcut::make_adjacency(graph);
-    std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> probability(0.0, 1.0);
-    std::uniform_int_distribution<std::uint32_t> vertex(
-        0, static_cast<std::uint32_t>(graph.vertices - 1));
-    const double total_weight = std::accumulate(
-        graph.edges.begin(), graph.edges.end(), 0.0,
-        [](double sum, const auto& edge) { return sum + edge.weight; });
-    const double t0 = std::max(1.0, 4.0 * total_weight / graph.vertices);
-    const double t1 = 0.01 * t0;
-    double best = 0.0;
-    for (int run = 0; run < runs; ++run) {
-        std::vector<std::uint8_t> partition(graph.vertices);
-        for (auto& bit : partition) bit = rng() & 1U;
-        double current = graph.cut_value(partition);
-        best = std::max(best, current);
-        for (int sweep = 0; sweep < sweeps; ++sweep) {
-            const double fraction = sweeps == 1 ? 1.0 : static_cast<double>(sweep) / (sweeps - 1);
-            const double temperature = t0 * std::pow(t1 / t0, fraction);
-            for (std::size_t proposal = 0; proposal < graph.vertices; ++proposal) {
-                const auto candidate = vertex(rng);
-                const double delta = gain(candidate, partition, adjacency);
-                if (delta >= 0.0 || probability(rng) < std::exp(delta / temperature)) {
-                    partition[candidate] ^= 1;
-                    current += delta;
-                    best = std::max(best, current);
-                }
-            }
-        }
-    }
-    return best;
+double anneal(const sbm::maxcut::Graph& graph, int runs, int sweeps, std::uint64_t seed) {
+    return sbm::maxcut::PreparedSearch(graph).anneal(runs, sweeps, seed).cut;
 }
 
 template <class Function>
@@ -205,14 +125,14 @@ int main(int argc, char** argv) {
             methods.push_back(parallel_measure(
                 "greedy_local_search", graphs,
                 "runs=" + std::to_string(work.greedy_runs) +
-                    ";max_sweeps=" + std::to_string(work.greedy_sweeps),
+                    ";max_sweeps=" + std::to_string(work.greedy_sweeps) + ";preparation=included",
                 [&](const auto& graph, std::size_t i) {
                     return greedy(graph, work.greedy_runs, work.greedy_sweeps, base_seed + i);
                 }));
             methods.push_back(parallel_measure(
                 "simulated_annealing", graphs,
                 "runs=" + std::to_string(work.sa_runs) +
-                    ";sweeps=" + std::to_string(work.sa_sweeps),
+                    ";sweeps=" + std::to_string(work.sa_sweeps) + ";preparation=included",
                 [&](const auto& graph, std::size_t i) {
                     return anneal(graph, work.sa_runs, work.sa_sweeps, base_seed + 100'000 + i);
                 }));

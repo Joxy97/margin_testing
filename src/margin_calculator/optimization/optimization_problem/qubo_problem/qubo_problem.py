@@ -9,11 +9,10 @@ from typing import Any
 
 import numpy
 
-from ..optimization_problem import OptimizationProblem
 
 
 @dataclass(frozen=True, init=False)
-class QUBOProblem(OptimizationProblem):
+class QUBOProblem:
     """Store sparse QUBO coefficients without a solver-library dependency."""
 
     linear: numpy.ndarray

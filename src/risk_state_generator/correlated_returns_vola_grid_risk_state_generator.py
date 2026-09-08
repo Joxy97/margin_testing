@@ -4,6 +4,7 @@ from numbers import Integral
 from typing import Any
 
 import numpy
+from numerics.neighbor_selection import numpyStrongestNeighbors
 
 from .pca_grid import ReturnsPCAGrid
 from .returns_vola_grid_risk_state_generator import (
@@ -121,7 +122,7 @@ class CorrelatedReturnsVolaGridRiskStateGenerator(
         normalized = centered / standard_deviation
         rows_per_block = max(
             1,
-            min(assets, self.correlationBlockBytes // (16 * assets)),
+            min(assets, self.correlationBlockBytes // (64 * assets)),
         )
         for start in range(0, assets, rows_per_block):
             stop = min(start + rows_per_block, assets)
@@ -144,21 +145,7 @@ class CorrelatedReturnsVolaGridRiskStateGenerator(
             local_rows = numpy.arange(stop - start)
             absolute[local_rows, numpy.arange(start, stop)] = -numpy.inf
 
-            if assets <= 512:
-                chosen = numpy.argsort(absolute, axis=1)[:, -neighbor_count:]
-            else:
-                chosen = numpy.argpartition(
-                    absolute,
-                    kth=assets - neighbor_count,
-                    axis=1,
-                )[:, -neighbor_count:]
-                chosen_values = numpy.take_along_axis(
-                    absolute,
-                    chosen,
-                    axis=1,
-                )
-                order = numpy.argsort(chosen_values, axis=1)
-                chosen = numpy.take_along_axis(chosen, order, axis=1)
+            chosen = numpyStrongestNeighbors(absolute, neighbor_count)
             neighbor_indices[start:stop] = chosen
             neighbor_correlations[start:stop] = numpy.take_along_axis(
                 correlations,

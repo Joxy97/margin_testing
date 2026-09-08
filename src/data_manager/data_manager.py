@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from typing import TYPE_CHECKING
 
 from cache import Cache, CacheFactory
 from download_unit import DataRequest, Period
 
 from .backing_store import DataBackingStore
+from .interval_coverage import IntervalCoverage
+
+PartitionKey = tuple[str, Period] | tuple[str, str, Period]
 
 if TYPE_CHECKING:
     import pandas
@@ -20,7 +23,7 @@ class MarketDataPartition:
     """Store indexed data and downloaded coverage for each instrument."""
 
     data: pandas.DataFrame
-    coverage: dict[str, list[tuple[date, date]]] = field(default_factory=dict)
+    coverage: IntervalCoverage = field(default_factory=IntervalCoverage)
 
 
 class DataManager:
@@ -28,12 +31,12 @@ class DataManager:
 
     def __init__(
         self,
-        cache: Cache[tuple[str, Period], MarketDataPartition] | None = None,
+        cache: Cache[PartitionKey, MarketDataPartition] | None = None,
         cacheType: str = "lru",
         memorySize: int = 16,
         maxMemoryBytes: int | None = None,
         backingStore: DataBackingStore[
-            tuple[str, Period], MarketDataPartition
+            PartitionKey, MarketDataPartition
         ] | None = None,
     ) -> None:
         self.cache = cache or CacheFactory.createCache(cacheType, memorySize)
@@ -60,22 +63,14 @@ class DataManager:
         entry = self._getEntry(self._cacheKey(command))
         if entry is None:
             return [command]
-        grouped: dict[tuple[date, date], list[str]] = {}
-        for instrument in command.instruments:
-            for interval in self._missingIntervals(
-                command.start_date,
-                command.end_date,
-                entry.coverage.get(instrument, []),
-            ):
-                grouped.setdefault(interval, []).append(instrument)
-        return [
-            command.withChanges(
-                instruments=tuple(instruments),
-                start_date=start,
-                end_date=end,
-            )
-            for (start, end), instruments in grouped.items()
-        ]
+        return IntervalCoverage(entry.coverage).missingRequests(command)
+
+    def getAvailableData(self, command: DataRequest):
+        """Copy retained observations before active acquisition can evict them."""
+        entry = self._getEntry(self._cacheKey(command))
+        if entry is None:
+            return None
+        return self._selectData(entry.data.reindex(columns=command.instruments), command)
 
     def storeData(
         self,
@@ -98,13 +93,8 @@ class DataManager:
         else:
             entry.data = normalized.combine_first(entry.data).sort_index()
 
-        start = command.start_date
-        end = command.end_date
-        for instrument in instruments:
-            intervals = entry.coverage.setdefault(instrument, [])
-            entry.coverage[instrument] = self._mergeIntervals(
-                [*intervals, (start, end)]
-            )
+        entry.coverage = IntervalCoverage(entry.coverage)
+        entry.coverage.add(command)
         self.cache.insert(cache_key, entry)
         if self.backingStore is not None:
             self.backingStore.put(cache_key, entry)
@@ -113,7 +103,7 @@ class DataManager:
 
     def _getEntry(
         self,
-        key: tuple[str, Period],
+        key: PartitionKey,
     ) -> MarketDataPartition | None:
         entry = self.cache.get(key)
         if entry is not None or self.backingStore is None:
@@ -125,7 +115,9 @@ class DataManager:
         return entry
 
     @staticmethod
-    def _cacheKey(command: DataRequest) -> tuple[str, Period]:
+    def _cacheKey(command: DataRequest) -> PartitionKey:
+        if command.datasetIdentity:
+            return command.datasetIdentity, command.data_type, command.period
         return command.data_type, command.period
 
     @staticmethod
@@ -171,57 +163,5 @@ class DataManager:
         return normalized.sort_index()
 
     @staticmethod
-    def _covers(
-        entry: MarketDataPartition,
-        command: DataRequest,
-    ) -> bool:
-        start = command.start_date
-        end = command.end_date
-        return all(
-            any(
-                covered_start <= start and covered_end >= end
-                for covered_start, covered_end in entry.coverage.get(
-                    instrument, []
-                )
-            )
-            for instrument in command.instruments
-        )
-
-    @staticmethod
-    def _mergeIntervals(
-        intervals: list[tuple[date, date]],
-    ) -> list[tuple[date, date]]:
-        merged: list[tuple[date, date]] = []
-        for start, end in sorted(intervals):
-            if not merged or start > merged[-1][1] + timedelta(days=1):
-                merged.append((start, end))
-            else:
-                previous_start, previous_end = merged[-1]
-                merged[-1] = (previous_start, max(previous_end, end))
-        return merged
-
-    @staticmethod
-    def _missingIntervals(
-        start: date,
-        end: date,
-        coveredIntervals: list[tuple[date, date]],
-    ) -> list[tuple[date, date]]:
-        missing = []
-        cursor = start
-        for covered_start, covered_end in DataManager._mergeIntervals(
-            coveredIntervals
-        ):
-            if covered_end < cursor:
-                continue
-            if covered_start > end:
-                break
-            if covered_start > cursor:
-                missing.append(
-                    (cursor, min(end, covered_start - timedelta(days=1)))
-                )
-            cursor = max(cursor, covered_end + timedelta(days=1))
-            if cursor > end:
-                break
-        if cursor <= end:
-            missing.append((cursor, end))
-        return missing
+    def _covers(entry: MarketDataPartition, command: DataRequest) -> bool:
+        return not IntervalCoverage(entry.coverage).missingRequests(command)

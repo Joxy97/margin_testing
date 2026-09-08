@@ -41,6 +41,23 @@ struct IsingModel {
     [[nodiscard]] double energy(const std::vector<std::int8_t>& spins) const;
 };
 
+class QUBOPreparation {
+public:
+    explicit QUBOPreparation(std::size_t maximum_bytes = 0);
+    ~QUBOPreparation();
+    QUBOPreparation(const QUBOPreparation&) = delete;
+    QUBOPreparation& operator=(const QUBOPreparation&) = delete;
+    void set_memory_budget(std::size_t maximum_bytes);
+    [[nodiscard]] IsingModel prepare(const BinaryQuadraticModel& bqm);
+    [[nodiscard]] IsingModel prepare(
+        std::size_t variables, const float* linear, std::size_t edges,
+        const std::uint32_t* heads, const std::uint32_t* tails,
+        const float* biases, float offset);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 [[nodiscard]] IsingModel to_ising(const BinaryQuadraticModel& bqm);
 [[nodiscard]] BinaryQuadraticModel load_qubo(const std::string& path);
 void save_qubo(const BinaryQuadraticModel& bqm, const std::string& path);

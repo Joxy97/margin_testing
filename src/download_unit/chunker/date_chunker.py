@@ -23,13 +23,16 @@ class DateChunker(Chunker):
         chunk_start = command.start_date
         end_date = command.end_date
 
-        while chunk_start < end_date:
+        while chunk_start <= end_date:
             chunk_end = min(
-                chunk_start + timedelta(days=self.batchSize),
+                chunk_start + timedelta(days=min(self.batchSize - 1,
+                                                  (end_date - chunk_start).days)),
                 end_date,
             )
             yield command.withChanges(
                 start_date=chunk_start,
                 end_date=chunk_end,
             )
-            chunk_start = chunk_end
+            if chunk_end == end_date:
+                return
+            chunk_start = chunk_end + timedelta(days=1)

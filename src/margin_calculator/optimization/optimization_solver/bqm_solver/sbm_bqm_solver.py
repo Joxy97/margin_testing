@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ctypes
+from functools import partial
+import weakref
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -335,7 +337,11 @@ class SBMBQMSolver(BQMSolver):
         error = ctypes.create_string_buffer(1024)
         library = self._loadLibrary()
 
-        status = library.sbm_solve_qubo_cpu_candidates_seeded_batch(
+        solve_batch = library.sbm_solve_qubo_cpu_candidates_seeded_batch
+        if hasattr(library, "sbm_solve_qubo_cpu_candidates_seeded_batch_prepared"):
+            solve_batch = partial(library.sbm_solve_qubo_cpu_candidates_seeded_batch_prepared,
+                                  self._preparationHandle)
+        status = solve_batch(
             problem_count,
             self._pointer(variable_offsets, ctypes.c_size_t),
             self._pointer(linear, ctypes.c_float),
@@ -584,6 +590,19 @@ class SBMBQMSolver(BQMSolver):
             ctypes.c_size_t,
         ]
         solve_batch.restype = ctypes.c_int
+        if hasattr(library, "sbm_solve_qubo_cpu_candidates_seeded_batch_prepared"):
+            prepared = library.sbm_solve_qubo_cpu_candidates_seeded_batch_prepared
+            prepared.argtypes = [ctypes.c_void_p, *solve_batch.argtypes]
+            prepared.restype = ctypes.c_int
+            library.sbm_create_preparation.argtypes = []
+            library.sbm_create_preparation.restype = ctypes.c_void_p
+            library.sbm_destroy_preparation.argtypes = [ctypes.c_void_p]
+            library.sbm_destroy_preparation.restype = None
+            self._preparationHandle = library.sbm_create_preparation()
+            if not self._preparationHandle:
+                raise MemoryError("Unable to create native QUBO preparation")
+            self._preparationFinalizer = weakref.finalize(
+                self, library.sbm_destroy_preparation, self._preparationHandle)
         return library
 
     @staticmethod

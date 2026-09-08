@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from option_pricing import FuturesForwardCurve, VolatilitySmile
+from option_pricing.prepared_market import PreparedOptionMarket
 
 from .risk_state import RiskState
 
@@ -34,7 +35,10 @@ class OptionScenarioRiskState(RiskState):
     minimumVolatility: float
     maximumVolatility: float
     americanOptionSteps: int
+    preparedMarket: PreparedOptionMarket | None = None
 
     def __post_init__(self) -> None:
         for name in ("forwardCurves", "spotPrices", "smiles", "marketPrices"):
-            object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
+            value = (MappingProxyType(dict(getattr(self, name))) if self.preparedMarket is None
+                     else getattr(self.preparedMarket, name))
+            object.__setattr__(self, name, value)

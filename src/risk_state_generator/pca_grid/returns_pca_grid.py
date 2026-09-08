@@ -1,5 +1,7 @@
 """Returns-based PCA grid."""
 
+from __future__ import annotations
+
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
@@ -10,11 +12,76 @@ import pandas
 from download_unit import Instrument
 
 from ..pca_key import ReturnsPCAKey
+from ..pca_backend import PCABackend, NumpyPCABackend
 from .pca_grid import PCAGrid
 
 
-@dataclass
+@dataclass(frozen=True)
+class ReturnsPCAInput:
+    """Aligned host input shared by host and resident numerical execution."""
+
+    key: ReturnsPCAKey
+    values: numpy.ndarray
+    weights: numpy.ndarray
+    logReturnMean: numpy.ndarray
+    logReturnScale: numpy.ndarray
+    calibrationStartDate: date
+    calibrationEndDate: date
+
+
+@dataclass(frozen=True)
 class ReturnsPCAGrid(PCAGrid):
+    """A complete fitted PCA result with defensively owned immutable arrays."""
+
+    instruments: tuple[Instrument, ...]
+    ew_window: int
+    current_date: date
+    ew_lambda: float
+    components: int
+    lambdas: numpy.ndarray
+    explained: numpy.ndarray
+    loadings: numpy.ndarray
+    factors: numpy.ndarray
+    pcaMean: numpy.ndarray
+    residuals: numpy.ndarray
+    residualScale: numpy.ndarray
+    maxAbsoluteZ: numpy.ndarray
+    logReturnMean: numpy.ndarray
+    logReturnScale: numpy.ndarray
+    calibrationStartDate: date
+    calibrationEndDate: date
+
+    def __post_init__(self):
+        object.__setattr__(self, "instruments", tuple(self.instruments))
+        for name, value in vars(self).items():
+            if isinstance(value, numpy.ndarray):
+                owned = numpy.frombuffer(value.tobytes(), dtype=value.dtype).reshape(value.shape)
+                object.__setattr__(self, name, owned)
+
+    @property
+    def numericMemoryBytes(self) -> int:
+        return sum(value.nbytes for value in vars(self).values() if isinstance(value, numpy.ndarray))
+
+    @staticmethod
+    def prepareInput(key: ReturnsPCAKey, data: pandas.DataFrame) -> ReturnsPCAInput:
+        """Validate and standardize the same historical window for every backend."""
+        grid = _ReturnsGridBuilder(key.instruments, key.ew_window, key.start_date,
+                                   key.ew_lambda, key.components)
+        prices = grid._extract_price_window(data)
+        returns = grid._compute_log_returns(prices)
+        weights = grid._getExponentialWeights(len(returns))
+        values = grid._standardize(returns, weights)
+        return ReturnsPCAInput(key, values, weights, grid.logReturnMean, grid.logReturnScale,
+                               grid.calibrationStartDate, grid.calibrationEndDate)
+
+    @classmethod
+    def construct(cls, key: ReturnsPCAKey, data: pandas.DataFrame,
+                  backend: PCABackend | None = None) -> ReturnsPCAGrid:
+        return _ReturnsGridBuilder.construct(key, data, backend)
+
+
+@dataclass
+class _ReturnsGridBuilder:
     """Store configuration and calculated values for a returns PCA grid."""
 
     instruments: Iterable[Instrument]
@@ -40,21 +107,17 @@ class ReturnsPCAGrid(PCAGrid):
         cls,
         key: ReturnsPCAKey,
         data: pandas.DataFrame,
+        backend: PCABackend | None = None,
     ) -> "ReturnsPCAGrid":
         """Construct and fit a returns PCA grid from ``key`` and price data."""
-        grid = cls(
-            instruments=key.instruments,
-            ew_window=key.ew_window,
-            current_date=key.start_date,
-            ew_lambda=key.ew_lambda,
-            components=key.components,
-        )
-        prices = grid._extract_price_window(data)
-        log_returns = grid._compute_log_returns(prices)
-        weights = grid._getExponentialWeights(len(log_returns))
-        standardized_returns = grid._standardize(log_returns, weights)
-        grid._fit_pca(standardized_returns, weights)
-        return grid
+        prepared = ReturnsPCAGrid.prepareInput(key, data)
+        result = (backend or NumpyPCABackend()).fit(prepared.values, prepared.weights, key.components)
+        return ReturnsPCAGrid(
+            instruments=key.instruments, ew_window=key.ew_window, current_date=key.start_date,
+            ew_lambda=key.ew_lambda, components=key.components,
+            logReturnMean=prepared.logReturnMean, logReturnScale=prepared.logReturnScale,
+            calibrationStartDate=prepared.calibrationStartDate,
+            calibrationEndDate=prepared.calibrationEndDate, **vars(result))
 
     def _extract_price_window(
         self,
@@ -138,96 +201,3 @@ class ReturnsPCAGrid(PCAGrid):
             dtype=float,
         )
         return weights / weights.sum()
-
-    def _fit_pca(
-        self,
-        standardizedReturns: numpy.ndarray,
-        weights: numpy.ndarray,
-    ) -> None:
-        """Fit MarginLab's weighted covariance eigendecomposition."""
-        if len(standardizedReturns) < 2:
-            raise ValueError("PCA requires at least two return observations")
-        maximum_components = min(standardizedReturns.shape)
-        if not 1 <= self.components <= maximum_components:
-            raise ValueError(
-                "components must be between 1 and "
-                f"{maximum_components}, inclusive"
-            )
-
-        self.pcaMean = numpy.sum(
-            weights[:, None] * standardizedReturns,
-            axis=0,
-        )
-        centered_returns = standardizedReturns - self.pcaMean
-        observations, assets = centered_returns.shape
-        if assets <= observations:
-            covariance = centered_returns.T @ (
-                weights[:, None] * centered_returns
-            )
-            eigenvalues, eigenvectors = numpy.linalg.eigh(covariance)
-            order = numpy.argsort(eigenvalues)[::-1]
-            eigenvalues = numpy.maximum(eigenvalues[order], 0.0)
-            loadings = eigenvectors[:, order[: self.components]].T
-        else:
-            eigenvalues, loadings = self._fitObservationSpacePCA(
-                centered_returns,
-                weights,
-            )
-
-        total_variance = float(eigenvalues.sum())
-        if total_variance <= 0.0:
-            raise ValueError("PCA requires positive return variance")
-        self.lambdas = eigenvalues[: self.components]
-        self.explained = self.lambdas / total_variance
-        self.loadings = self._canonicalizeLoadingSigns(loadings)
-        self.factors = centered_returns @ self.loadings.T
-        reconstructed_returns = self.pcaMean + self.factors @ self.loadings
-        self.residuals = standardizedReturns - reconstructed_returns
-        residual_mean = numpy.sum(weights[:, None] * self.residuals, axis=0)
-        self.residualScale = numpy.sqrt(
-            numpy.sum(
-                weights[:, None] * (self.residuals - residual_mean) ** 2,
-                axis=0,
-            )
-        )
-        self.maxAbsoluteZ = numpy.nanmax(
-            numpy.abs(standardizedReturns),
-            axis=0,
-        )
-
-    @staticmethod
-    def _canonicalizeLoadingSigns(loadings: numpy.ndarray) -> numpy.ndarray:
-        """Choose deterministic eigenvector signs without changing the PCA."""
-        canonical = numpy.asarray(loadings, dtype=numpy.float64).copy()
-        pivots = numpy.argmax(numpy.abs(canonical), axis=1)
-        signs = numpy.sign(canonical[numpy.arange(len(canonical)), pivots])
-        signs[signs == 0.0] = 1.0
-        canonical *= signs[:, None]
-        return canonical
-
-    def _fitObservationSpacePCA(
-        self,
-        centeredReturns: numpy.ndarray,
-        weights: numpy.ndarray,
-    ) -> tuple[numpy.ndarray, numpy.ndarray]:
-        """Fit wide data through the equivalent observation-space problem."""
-        weighted_centered = numpy.sqrt(weights[:, None]) * centeredReturns
-        gram = weighted_centered @ weighted_centered.T
-        eigenvalues, left_eigenvectors = numpy.linalg.eigh(gram)
-        order = numpy.argsort(eigenvalues)[::-1]
-        eigenvalues = numpy.maximum(eigenvalues[order], 0.0)
-        selected_eigenvalues = eigenvalues[: self.components]
-        if numpy.any(selected_eigenvalues <= numpy.finfo(float).eps):
-            raise ValueError(
-                "requested PCA components include a zero-variance mode"
-            )
-
-        selected_left_eigenvectors = left_eigenvectors[
-            :,
-            order[: self.components],
-        ]
-        right_eigenvectors = (
-            weighted_centered.T @ selected_left_eigenvectors
-        )
-        right_eigenvectors /= numpy.sqrt(selected_eigenvalues)[None, :]
-        return eigenvalues, right_eigenvectors.T

@@ -73,13 +73,14 @@ class AdaptiveTorchSBMBQMSolver(TorchSBMBQMSolver):
             default=0,
         )
 
-    def _solveBatch(
+    def _solvePrepared(
         self,
         problems: Sequence[QUBOProblem],
         parameters: Mapping[str, Any],
+        matrix, field, c0_rows, variableOffsets, candidates,
     ) -> list[BQMOptimizationResult]:
         self._stepCounts = []
-        results = super()._solveBatch(problems, parameters)
+        results = super()._solvePrepared(problems, parameters, matrix, field, c0_rows, variableOffsets, candidates)
         self.lastStepCount = max(self._stepCounts, default=0)
         sweeps = parameters["local_search_sweeps"]
         if not sweeps:
@@ -107,7 +108,7 @@ class AdaptiveTorchSBMBQMSolver(TorchSBMBQMSolver):
         parameters: Mapping[str, Any],
         torchDtype: Any,
         device: Any,
-    ) -> numpy.ndarray:
+    ) -> Any:
         shape = (int(variableOffsets[-1]), width)
         positions = torch.empty(shape, dtype=torchDtype, device=device)
         momenta = torch.empty_like(positions)
@@ -272,7 +273,7 @@ class AdaptiveTorchSBMBQMSolver(TorchSBMBQMSolver):
         self._stepCounts.append(completed_steps)
         return ((torch.sign(activation) + 1.0) * 0.5).to(
             torch.uint8
-        ).cpu().numpy()
+        )
 
     @staticmethod
     def _activate(

@@ -42,51 +42,8 @@ double IsingModel::energy(const std::vector<std::int8_t>& spins) const {
 }
 
 IsingModel to_ising(const BinaryQuadraticModel& bqm) {
-    const auto n = bqm.size();
-    IsingModel model;
-    auto topology = std::make_shared<IsingTopology>();
-    model.topology = topology;
-    model.fields.resize(n);
-    model.offset = static_cast<float>(bqm.offset);
-
-    std::vector<std::size_t> degrees(n, 0);
-    for (std::size_t i = 0; i < n; ++i) {
-        model.offset += 0.5F * static_cast<float>(bqm.linear[i]);
-        model.fields[i] = -0.5F * static_cast<float>(bqm.linear[i]);
-    }
-    for (const auto& term : bqm.quadratic) {
-        if (term.u >= n || term.v >= n || term.u == term.v) {
-            throw std::invalid_argument("invalid off-diagonal quadratic bias");
-        }
-        const float bias = static_cast<float>(term.bias);
-        const float j = -0.25F * bias;
-        model.offset += 0.25F * bias;
-        model.fields[term.u] -= 0.25F * bias;
-        model.fields[term.v] -= 0.25F * bias;
-        if (j != 0.0F) {
-            ++degrees[term.u];
-            ++degrees[term.v];
-        }
-    }
-
-    topology->row_offsets.resize(n + 1);
-    for (std::size_t i = 0; i < n; ++i) {
-        topology->row_offsets[i + 1] = topology->row_offsets[i] + degrees[i];
-    }
-    topology->columns.resize(topology->row_offsets.back());
-    model.couplings.resize(topology->row_offsets.back());
-    auto cursor = topology->row_offsets;
-    for (const auto& term : bqm.quadratic) {
-        const float j = -0.25F * static_cast<float>(term.bias);
-        if (j == 0.0F) continue;
-        const auto uv = cursor[term.u]++;
-        const auto vu = cursor[term.v]++;
-        topology->columns[uv] = term.v;
-        model.couplings[uv] = j;
-        topology->columns[vu] = term.u;
-        model.couplings[vu] = j;
-    }
-    return model;
+    QUBOPreparation preparation;
+    return preparation.prepare(bqm);
 }
 
 BinaryQuadraticModel load_qubo(const std::string& path) {

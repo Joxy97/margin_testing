@@ -17,6 +17,7 @@ from margin_calculator import (
 )
 from margin_calculator.optimization.optimization_solver.bqm_solver import (
     TorchSBMBQMSolver,
+    TorchSVLBQMSolver,
 )
 from margin_engine import MarginApplicationConfig, MarginReport
 from risk_state_generator import (
@@ -26,6 +27,71 @@ from risk_state_generator import (
 
 
 class YamlConfigurationTest(unittest.TestCase):
+    def test_invalid_declarative_cache_limits_fail_during_parsing(self) -> None:
+        for setting in (
+            {"riskStateGenerator": {"pcaGridProvider": {"memorySize": 0}}},
+            {"riskStateGenerator": {"pcaGridProvider": {"maxMemoryBytes": -1}}},
+            {"marginCalculator": {"type": "bqm", "structuralCacheMemorySize": 0}},
+        ):
+            with self.subTest(setting=setting), self.assertRaises(ValueError):
+                MarginApplicationConfig.fromYamlText(yaml.safe_dump({
+                    "marginDate": "2024-01-11", "portfolio": {"weights": {"A": 1}},
+                    "engine": setting,
+                }), ".")
+
+
+    def test_structural_cache_settings_are_declarative(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(yaml.safe_dump({
+                "marginDate": "2024-01-11", "portfolio": {"weights": {"A": 1}},
+                "engine": {"marginCalculator": {"type": "bqm", "structuralCacheMemorySize": 3}},
+            }))
+            config = MarginApplicationConfig.fromYaml(path).engine.marginCalculator
+        self.assertIsNone(config.bqmVisitor)
+        self.assertEqual(config.structuralCacheMemorySize, 3)
+
+    def test_engines_from_one_config_do_not_reuse_fitted_market_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prices = root / "prices.csv"
+            rows = [f"2024-01-{day:02d},{100 + day}" for day in range(1, 12)]
+            prices.write_text("date,A\n" + "\n".join(rows))
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump({
+                "marginDate": "2024-01-11", "portfolio": {"weights": {"A": 1}},
+                "engine": {
+                    "downloadManager": {"providers": {"local": "local_csv"},
+                        "requestParameters": {"location": "prices.csv"}},
+                    "riskStateGenerator": {"ew_window": 5, "nZBins": 1,
+                        "scenariosPerComponents": [3], "allowEmptyBinFallback": True,
+                        "pcaGridProvider": {"memorySize": 2}},
+                    "marginCalculator": {"type": "greedy"},
+                },
+            }))
+            application = MarginApplicationConfig.fromYaml(path)
+            first = application.generateReport().margin
+            rows[-2] = "2024-01-10,60"
+            prices.write_text("date,A\n" + "\n".join(rows))
+            second = application.generateReport().margin
+            fresh = MarginApplicationConfig.fromYaml(path).generateReport().margin
+        self.assertNotAlmostEqual(first, fresh)
+        self.assertAlmostEqual(second, fresh)
+
+    def test_rejects_unknown_download_retry_parameters_while_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(yaml.safe_dump({
+                "marginDate": "2024-01-11", "portfolio": {"weights": {"A": 1}},
+                "engine": {"marginCalculator": {"type": "greedy"}, "downloadManager": {
+                    "downloadAlgorithm": "exponential_backoff",
+                    "downloadParameters": {"time": 0, "maxAttempt": 3,
+                        "chunker": {"type": "date", "batchSize": 1}},
+                }},
+            }))
+            with self.assertRaisesRegex(ValueError, "maxAttempt"):
+                MarginApplicationConfig.fromYaml(path)
+
     def test_loads_a_wide_portfolio_and_capitalized_csv_dates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -171,12 +237,16 @@ class YamlConfigurationTest(unittest.TestCase):
         calculator = application.engine.marginCalculator
         generator = application.engine.riskStateGenerator
         self.assertIsInstance(calculator, BQMMarginCalculatorConfig)
-        self.assertEqual(calculator.solver.solverType, "torch_sbm")
+        self.assertEqual(calculator.solver.solverType, "torch_svl")
         self.assertEqual(
             calculator.solver.constructorParameters,
             {"device": "auto"},
         )
-        self.assertEqual(calculator.solver.solverParameters["runs"], 16)
+        self.assertEqual(calculator.solver.solverParameters["runs"], 64)
+        self.assertEqual(
+            calculator.solver.solverParameters["integrator"],
+            "weak_order_2",
+        )
         self.assertEqual(calculator.comparisonPnlAnchor, "market")
         self.assertEqual(
             calculator.solver.solverParameters["dtype"],
@@ -313,6 +383,46 @@ class YamlConfigurationTest(unittest.TestCase):
         solver = calculator.solver.createBQMSolver()
         self.assertIsInstance(solver, TorchSBMBQMSolver)
         self.assertEqual(solver.requestedDevices, ("cuda:0", "cuda:1"))
+
+    def test_constructs_multi_device_torch_svl_from_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "torch_svl.yaml"
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        "marginDate": "2024-01-11",
+                        "portfolio": {"weights": {"AAPL": 1}},
+                        "engine": {
+                            "marginCalculator": {
+                                "type": "bqm",
+                                "solver": {
+                                    "type": "torch_svl",
+                                    "constructorParameters": {
+                                        "devices": ["cuda:0", "cuda:1"]
+                                    },
+                                    "solverParameters": {
+                                        "steps": 25,
+                                        "runs": 4,
+                                        "integrator": "weak_order_2",
+                                    },
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            application = MarginApplicationConfig.fromYaml(path)
+
+        calculator = application.engine.marginCalculator
+        self.assertIsInstance(calculator, BQMMarginCalculatorConfig)
+        solver = calculator.solver.createBQMSolver()
+        self.assertIsInstance(solver, TorchSVLBQMSolver)
+        self.assertEqual(solver.requestedDevices, ("cuda:0", "cuda:1"))
+        self.assertEqual(
+            calculator.solver.solverParameters["integrator"], "weak_order_2"
+        )
 
     def test_rejects_unknown_yaml_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

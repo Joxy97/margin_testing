@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from portfolio import Portfolio
+from .coverage_evaluation import CoverageEvaluation, DailyComparison, evaluateCoverage
 
 
 class BaselColor(str, Enum):
@@ -68,6 +69,10 @@ class DailyBacktestResult:
     def shortfall(self) -> float:
         return max(0.0, -self.marginError)
 
+    def comparison(self, name: str) -> DailyComparison | None:
+        margin = self.comparisonMargins.get(name)
+        return None if margin is None else DailyComparison(margin, self.margin, self.realizedLoss)
+
 
 @dataclass(frozen=True)
 class BacktestResults:
@@ -85,6 +90,9 @@ class BacktestResults:
     @property
     def days(self) -> int:
         return len(self.dailyResults)
+
+    def evaluate(self, name: str | None = None) -> CoverageEvaluation:
+        return evaluateCoverage(self.dailyResults, self.confidenceLevel, name)
 
 
 @dataclass(frozen=True)

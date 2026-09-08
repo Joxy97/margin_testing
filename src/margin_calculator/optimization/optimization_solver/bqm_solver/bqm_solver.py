@@ -1,27 +1,29 @@
 """Base interface for QUBO solvers."""
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
-
-import numpy
-from scipy.sparse import coo_matrix
 
 from margin_calculator.optimization.optimization_result import (
     BQMOptimizationResult,
 )
-from margin_calculator.optimization.optimization_solver import OptimizationSolver
 
 from ...optimization_problem.qubo_problem import QUBOProblem
+from .resource_plan import BQMResourcePlan
 
 
-class BQMSolver(OptimizationSolver):
+class BQMSolver(ABC):
     """Solve an application-level QUBO problem."""
 
     @property
     def batchParallelism(self) -> int:
         """Return the number of independent workers available to a batch."""
         return 1
+
+    def estimatedWorkingMemoryBytes(self, problem: QUBOProblem,
+                                    solverParameters: Mapping[str, Any] | None = None) -> int:
+        """Estimate per-problem working storage without loading an accelerator."""
+        return problem.numericMemoryBytes
 
     @abstractmethod
     def solve(
@@ -42,6 +44,11 @@ class BQMSolver(OptimizationSolver):
 
     def beginSeries(self) -> None:
         """Begin an ordered problem series; stateful solvers may warm-start it."""
+
+    def solvePlanned(self, problems: Sequence[QUBOProblem], plan: BQMResourcePlan,
+                     solverParameters: Mapping[str, Any] | None = None) -> list[BQMOptimizationResult]:
+        """Execute admitted work; device adapters honor the supplied assignment."""
+        return self.solveMany(problems, solverParameters)
 
     def endSeries(self) -> None:
         """End the current ordered problem series."""
@@ -77,94 +84,11 @@ class BQMSolver(OptimizationSolver):
         problem: QUBOProblem,
     ) -> tuple[tuple[int, ...], float]:
         """Choose the best feasible candidate or repair every infeasible one."""
-        groups = tuple(tuple(group) for group in problem.iterOneHotGroups())
-        evaluated: list[tuple[tuple[int, ...], float]] = []
-        for sample, solver_energy in candidates:
-            binary = tuple(int(value) for value in sample)
-            problem.energy(binary)
-            evaluated.append((binary, float(solver_energy)))
-        if not evaluated:
-            raise ValueError("BQM solver returned no samples")
-        valid = [
-            candidate
-            for candidate in evaluated
-            if cls._isValidOneHotSample(candidate[0], groups)
-        ]
-        if valid:
-            return min(valid, key=lambda candidate: (candidate[1], candidate[0]))
-        if not groups:
-            return min(evaluated, key=lambda candidate: (candidate[1], candidate[0]))
+        from .candidate_selection import CandidateSelection
 
-        adjacency, linear = cls._repairModel(problem)
-        repaired = [
-            cls._repairCandidate(sample, problem, groups, adjacency, linear)
-            for sample, _energy in evaluated
-        ]
-        return min(repaired, key=lambda candidate: (candidate[1], candidate[0]))
-
-    @staticmethod
-    def _repairModel(problem: QUBOProblem) -> tuple[Any, numpy.ndarray]:
-        """Build the local-field representation used by categorical repair."""
-        diagonal = problem.quadraticHeads == problem.quadraticTails
-        linear = problem.linear.copy()
-        if numpy.any(diagonal):
-            numpy.add.at(
-                linear,
-                problem.quadraticHeads[diagonal],
-                problem.quadraticBiases[diagonal],
-            )
-        heads = problem.quadraticHeads[~diagonal].astype(numpy.int64, copy=False)
-        tails = problem.quadraticTails[~diagonal].astype(numpy.int64, copy=False)
-        biases = problem.quadraticBiases[~diagonal]
-        adjacency = coo_matrix(
-            (
-                numpy.concatenate((biases, biases)),
-                (
-                    numpy.concatenate((heads, tails)),
-                    numpy.concatenate((tails, heads)),
-                ),
-            ),
-            shape=(problem.variableCount, problem.variableCount),
-        ).tocsc()
-        return adjacency, linear
-
-    @staticmethod
-    def _repairCandidate(
-        sample: Sequence[int],
-        problem: QUBOProblem,
-        groups: tuple[tuple[int, ...], ...],
-        adjacency: Any,
-        linear: numpy.ndarray,
-    ) -> tuple[tuple[int, ...], float]:
-        """Project and improve one sample by deterministic categorical descent."""
-        repaired = numpy.asarray(sample, dtype=numpy.uint8).copy()
-        maximum_sweeps = min(100, max(3, 2 * len(groups) + 1))
-        for _sweep in range(maximum_sweeps):
-            changed = False
-            local_fields = linear + adjacency @ repaired
-            for group in groups:
-                variables = numpy.asarray(group, dtype=numpy.int64)
-                selected = variables[repaired[variables] == 1]
-                previous = int(selected[0]) if len(selected) == 1 else None
-                for variable in selected:
-                    repaired[variable] = 0
-                    local_fields -= adjacency.getcol(int(variable)).toarray().ravel()
-                costs = local_fields[variables]
-                best_position = int(numpy.argmin(costs))
-                chosen = int(variables[best_position])
-                if previous is not None:
-                    previous_position = int(
-                        numpy.flatnonzero(variables == previous)[0]
-                    )
-                    if costs[best_position] >= costs[previous_position] - 1e-12:
-                        chosen = previous
-                repaired[chosen] = 1
-                local_fields += adjacency.getcol(chosen).toarray().ravel()
-                changed |= previous != chosen
-            if not changed:
-                break
-        result = tuple(int(value) for value in repaired)
-        return result, problem.energy(result)
+        selection = CandidateSelection(problem)
+        selection.add(candidates)
+        return selection.result()
 
     @staticmethod
     def _isValidOneHotSample(

@@ -130,27 +130,12 @@ class BacktestCSVReporter:
                     "covered": daily.covered,
                 }
                 for name in comparison_names:
-                    comparison = daily.comparisonMargins.get(name)
-                    row[f"{name}_margin"] = comparison
-                    row[f"margin_minus_{name}"] = (
-                        None if comparison is None else daily.margin - comparison
-                    )
-                    comparison_error = (
-                        None
-                        if comparison is None
-                        else comparison - daily.realizedLoss
-                    )
-                    row[f"{name}_margin_error"] = comparison_error
-                    row[f"{name}_shortfall"] = (
-                        None
-                        if comparison_error is None
-                        else max(0.0, -comparison_error)
-                    )
-                    row[f"{name}_breach"] = (
-                        None
-                        if comparison is None
-                        else daily.realizedLoss > comparison
-                    )
+                    comparison = daily.comparison(name)
+                    row[f"{name}_margin"] = None if comparison is None else comparison.margin
+                    row[f"margin_minus_{name}"] = None if comparison is None else comparison.marginDifference
+                    row[f"{name}_margin_error"] = None if comparison is None else comparison.marginError
+                    row[f"{name}_shortfall"] = None if comparison is None else comparison.shortfall
+                    row[f"{name}_breach"] = None if comparison is None else comparison.breach
                 writer.writerow(row)
 
     def _writePerformance(
@@ -241,28 +226,11 @@ class BacktestCSVReporter:
         results: BacktestResults,
         comparisonNames: list[str],
     ) -> dict[str, float | int]:
-        primary_average = sum(
-            daily.margin for daily in results.dailyResults
-        ) / results.days
-        summary: dict[str, float | int] = {
-            "average_margin": primary_average,
-        }
+        summary: dict[str, float | int] = {"average_margin": results.evaluate().averageMargin}
         for name in comparisonNames:
-            margins = [
-                daily.comparisonMargins[name]
-                for daily in results.dailyResults
-                if name in daily.comparisonMargins
-            ]
-            violations = sum(
-                daily.realizedLoss > daily.comparisonMargins[name]
-                for daily in results.dailyResults
-                if name in daily.comparisonMargins
-            )
-            average = sum(margins) / len(margins)
-            summary[f"{name}_violations"] = violations
-            summary[f"{name}_breach_rate"] = violations / len(margins)
-            summary[f"{name}_average_margin"] = average
-            summary[f"average_margin_minus_{name}"] = (
-                primary_average - average
-            )
+            evaluation = results.evaluate(name)
+            summary[f"{name}_violations"] = evaluation.violations
+            summary[f"{name}_breach_rate"] = evaluation.breachRate
+            summary[f"{name}_average_margin"] = evaluation.averageMargin
+            summary[f"average_margin_minus_{name}"] = evaluation.averageMarginDifference
         return summary

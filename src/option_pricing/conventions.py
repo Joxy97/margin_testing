@@ -6,8 +6,13 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from datetime import date
 from math import exp
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pandas import Series
 
 import numpy
+from portfolio.derivatives import DerivativeQuoteIdentity
 
 from .models import (
     AmericanEquityBinomialPricingModel,
@@ -19,7 +24,7 @@ from .models import (
 from .market import FuturesForwardCurve
 
 
-ContractKey = tuple[str, str, date, str, str, str]
+ContractKey = DerivativeQuoteIdentity
 
 
 class OptionMarketConvention(ABC):
@@ -34,6 +39,10 @@ class OptionMarketConvention(ABC):
     def pricingModel(self, exerciseStyle: str) -> OptionPricingModel:
         return self.models[exerciseStyle]
 
+    def forwardPrice(self, underlying: float, time: float, riskFreeRate: float, dividendYield: float = 0.) -> float:
+        """Carry an underlying quote to expiry under this market convention."""
+        return underlying
+
     def forwardCurves(self, quotes, valuationDate: date) -> dict:
         return {}
 
@@ -41,11 +50,11 @@ class OptionMarketConvention(ABC):
         return {}
 
     def optionMarketPriceKey(self, row) -> ContractKey:
-        return (
+        return DerivativeQuoteIdentity.create(
             self.optionInstrumentType,
             str(row.symbol),
             row.expiration_date.date(),
-            f"{float(row.strike):.12g}",
+            row.strike,
             str(row.option_type),
             str(row.exercise_style),
         )
@@ -62,16 +71,27 @@ class OptionMarketConvention(ABC):
         raise NotImplementedError
 
     def underlyingPrices(self, quotes, symbol: str) -> numpy.ndarray:
+        """Compatibility array view; dated consumers use underlyingPriceHistory."""
+        return numpy.asarray(list(self.underlyingPriceHistory(quotes, symbol).values()))
+
+    def underlyingPriceHistory(self, quotes, symbol: str) -> dict[date, float]:
+        """Return date-owned observations under this market's expiry convention."""
         rows = quotes.loc[
             (quotes["symbol"].astype(str) == symbol)
             & (quotes["instrument_type"] == self.underlyingInstrumentType)
         ].copy()
         if rows.empty:
-            return numpy.array([])
-        return self._orderedPrices(rows)
+            return {}
+        seen = {}
+        for row in rows.itertuples(index=False):
+            key = (row.date, self.underlyingMarketPriceKey(row))
+            if key in seen and seen[key] != float(row.price):
+                raise ValueError(f"Conflicting observations for underlying quote {key}")
+            seen[key] = float(row.price)
+        return {day.date(): float(value) for day, value in self._orderedPrices(rows).items()}
 
     @abstractmethod
-    def _orderedPrices(self, rows) -> numpy.ndarray:
+    def _orderedPrices(self, rows) -> Series:
         raise NotImplementedError
 
 
@@ -114,7 +134,7 @@ class FuturesOptionMarketConvention(OptionMarketConvention):
         return curves
 
     def underlyingMarketPriceKey(self, row) -> ContractKey:
-        return (
+        return DerivativeQuoteIdentity.create(
             self.underlyingInstrumentType,
             str(row.symbol),
             row.expiration_date.date(),
@@ -123,11 +143,11 @@ class FuturesOptionMarketConvention(OptionMarketConvention):
             "",
         )
 
-    def _orderedPrices(self, rows) -> numpy.ndarray:
+    def _orderedPrices(self, rows) -> Series:
         first_expiry = (
             rows.sort_values("expiration_date").groupby("date").first()
         )
-        return first_expiry.sort_index()["price"].to_numpy(dtype=float)
+        return first_expiry.sort_index()["price"]
 
 
 class EquityOptionMarketConvention(OptionMarketConvention):
@@ -140,12 +160,15 @@ class EquityOptionMarketConvention(OptionMarketConvention):
             "A": AmericanEquityBinomialPricingModel(americanOptionSteps),
         })
 
+    def forwardPrice(self, underlying: float, time: float, riskFreeRate: float, dividendYield: float = 0.) -> float:
+        return underlying * exp((riskFreeRate - dividendYield) * time)
+
     def calibrationPrices(
         self, row, time, riskFreeRate, forwardCurves, spotPrices
     ) -> tuple[float, float, float]:
         spot = spotPrices[str(row.symbol)]
         dividend = float(row.dividend_yield)
-        forward = spot * exp((riskFreeRate - dividend) * time)
+        forward = self.forwardPrice(spot, time, riskFreeRate, dividend)
         return spot, forward, dividend
 
     def spotPrices(self, quotes) -> dict[str, float]:
@@ -158,7 +181,7 @@ class EquityOptionMarketConvention(OptionMarketConvention):
         }
 
     def underlyingMarketPriceKey(self, row) -> ContractKey:
-        return (
+        return DerivativeQuoteIdentity.create(
             self.underlyingInstrumentType,
             str(row.symbol),
             date.min,
@@ -167,12 +190,11 @@ class EquityOptionMarketConvention(OptionMarketConvention):
             "",
         )
 
-    def _orderedPrices(self, rows) -> numpy.ndarray:
+    def _orderedPrices(self, rows) -> Series:
         return (
             rows.groupby("date")
             .last()
             .sort_index()["price"]
-            .to_numpy(dtype=float)
         )
 
 

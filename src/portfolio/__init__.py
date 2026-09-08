@@ -13,7 +13,11 @@ from .derivatives import (
 )
 from .portfolio import Portfolio
 
+from .derivatives import DerivativeQuoteIdentity
+
 __all__ = [
+    "DerivativeQuoteIdentity",
+
     "DerivativePosition",
     "DerivativesPortfolio",
     "EquityContract",

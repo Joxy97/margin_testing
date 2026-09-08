@@ -1,0 +1,37 @@
+{
+  "source_results_dir": "results/cpu_full",
+  "output_dir": "results/torch_svl_parameter_sweep",
+  "sizes": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
+  "trials": 3,
+  "graph_seed": 314159,
+  "device": "cpu",
+  "dtype": "float32",
+  "run_batch_size": 4,
+  "memory_limit_gb": 5,
+  "baseline": {
+    "steps": 1000,
+    "runs": 4,
+    "dt": 0.01,
+    "mass": 1.0,
+    "damping": 0.1,
+    "temperature": 0.01,
+    "integrator": "euler_maruyama",
+    "transverse_field_initial": 1.0,
+    "transverse_field_final": 0.0,
+    "problem_scale_initial": 0.0,
+    "problem_scale_final": 1.0
+  },
+  "sweep": {
+    "steps": [500, 1000, 2000],
+    "runs": [2, 4, 8],
+    "dt": [0.005, 0.01, 0.02],
+    "mass": [0.5, 1.0, 2.0],
+    "damping": [0.05, 0.1, 0.2],
+    "temperature": [0.0, 0.01, 0.05],
+    "integrator": ["euler_maruyama", "weak_order_2"],
+    "transverse_field_initial": [0.5, 1.0, 2.0],
+    "transverse_field_final": [0.0, 0.1],
+    "problem_scale_initial": [0.0, 0.1],
+    "problem_scale_final": [0.5, 1.0, 2.0]
+  }
+}

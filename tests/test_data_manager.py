@@ -8,6 +8,7 @@ import pandas
 
 from data_manager import DataManager, PartitionedPickleDataStore
 from download_unit import DataRequest
+from data_manager.derivative_data_manager import DerivativeQuoteDataManager
 
 
 def command(
@@ -24,6 +25,26 @@ def command(
 
 
 class DataManagerTest(unittest.TestCase):
+    def test_empty_derivative_acquisition_records_calendar_coverage(self) -> None:
+        manager = DerivativeQuoteDataManager()
+        request = command(["ES"]).withChanges(data_type="derivativeQuotes")
+        quotes = pandas.DataFrame(columns=["date", "symbol", "instrument_type", "expiration_date", "price"])
+        manager.storeData(request, quotes)
+        self.assertEqual(manager.getMissingRequests(request), [])
+        self.assertTrue(manager.getData(request).empty)
+
+
+    def test_derivative_datasets_have_independent_coverage(self) -> None:
+        manager = DerivativeQuoteDataManager()
+        first = command(["ES"]).withChanges(data_type="derivativeQuotes", datasetIdentity="first")
+        second = first.withChanges(datasetIdentity="second")
+        quotes = pandas.DataFrame({"date": [pandas.Timestamp("2024-01-01")], "symbol": ["ES"],
+            "instrument_type": ["future"], "expiration_date": [pandas.Timestamp("2024-06-01")],
+            "price": [100.]})
+        manager.storeData(first, quotes)
+        self.assertIsNone(manager.getData(second))
+        self.assertEqual(manager.getMissingRequests(second), [second])
+
     def test_restores_an_evicted_partition_from_disk(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manager = DataManager(

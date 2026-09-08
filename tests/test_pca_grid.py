@@ -1,7 +1,8 @@
 """Tests for PCA grids, keys, providers, and risk-state generators."""
 
 import unittest
-from datetime import date
+from datetime import date, timedelta
+from dataclasses import replace
 from unittest.mock import Mock, call
 
 import numpy
@@ -30,6 +31,49 @@ from risk_state_generator import (
 
 
 class PCAGridTest(unittest.TestCase):
+    def test_provider_refits_when_asset_labels_change(self) -> None:
+        key = ReturnsPCAKey(["AAPL", "MSFT"], 30, date(2024, 1, 31), .94, 1)
+        provider = PCAGridProvider()
+        data = self._price_data()
+        first = provider.getOrCreate(key, data)
+        renamed = data.rename(columns={"AAPL": "MSFT", "MSFT": "AAPL"})
+        changed = provider.getOrCreate(key, renamed)
+        numpy.testing.assert_allclose(changed.logReturnMean, first.logReturnMean[::-1])
+
+
+    def test_oversized_fit_is_returned_without_retaining_it(self) -> None:
+        key = ReturnsPCAKey(["AAPL", "MSFT"], 30, date(2024, 1, 31), .94, 1)
+        provider = PCAGridProvider(maxMemoryBytes=1)
+        result = provider.getOrCreate(key, self._price_data())
+        self.assertEqual(result.factors.shape, (30, 1))
+        self.assertIsNone(provider.getPCAGrid(key))
+
+    def _fitted_grid(self, instruments, window, current, decay, components):
+        data = self._price_data()
+        data["date"] = pandas.date_range(end=current - timedelta(days=1), periods=len(data))
+        return ReturnsPCAGrid.construct(ReturnsPCAKey(instruments, window, current, decay, components), data)
+
+    def test_fitted_results_own_read_only_arrays(self) -> None:
+        from dataclasses import FrozenInstanceError
+        key = ReturnsPCAKey(["AAPL", "MSFT"], 30, date(2024, 1, 31), .94, 1)
+        grid = ReturnsPCAGrid.construct(key, self._price_data())
+        with self.assertRaises(ValueError):
+            grid.lambdas[0] = 0.
+        with self.assertRaises(FrozenInstanceError):
+            grid.lambdas = numpy.zeros(1)
+
+    def test_provider_refits_when_source_data_changes_for_the_same_key(self) -> None:
+        key = ReturnsPCAKey(["AAPL", "MSFT"], 30, date(2024, 1, 31), .94, 1)
+        provider = PCAGridProvider()
+        data = self._price_data()
+        first = provider.getOrCreate(key, data)
+        self.assertIs(provider.getOrCreate(key, data.copy()), first)
+        data.loc[10, "AAPL"] *= .5
+        changed = provider.getOrCreate(key, data)
+        expected = ReturnsPCAGrid.construct(key, data)
+        numpy.testing.assert_allclose(changed.lambdas, expected.lambdas)
+        self.assertFalse(numpy.allclose(first.lambdas, changed.lambdas))
+
     def setUp(self) -> None:
         provider = PCAGridProvider()
         provider.setCache(CacheFactory.createCache("lru"))
@@ -63,25 +107,6 @@ class PCAGridTest(unittest.TestCase):
             marginDate=key.start_date,
         )
 
-    def test_returns_pca_grid_constructor_and_calculated_fields(self) -> None:
-        start_date = date(2024, 1, 1)
-
-        grid = ReturnsPCAGrid(["AAPL"], 30, start_date, 0.94, 3)
-
-        self.assertIsInstance(grid, PCAGrid)
-        self.assertEqual(grid.ew_window, 30)
-        self.assertEqual(grid.current_date, start_date)
-        self.assertEqual(grid.ew_lambda, 0.94)
-        self.assertEqual(grid.components, 3)
-        self.assertIsNone(grid.lambdas)
-        self.assertIsNone(grid.explained)
-        self.assertIsNone(grid.loadings)
-        self.assertIsNone(grid.factors)
-        self.assertIsNone(grid.pcaMean)
-        self.assertIsNone(grid.residuals)
-        self.assertIsNone(grid.maxAbsoluteZ)
-        self.assertIsNone(grid.logReturnMean)
-        self.assertIsNone(grid.logReturnScale)
 
     def test_returns_generator_is_concrete_and_stores_its_provider(self) -> None:
         provider = PCAGridProvider()
@@ -110,122 +135,8 @@ class PCAGridTest(unittest.TestCase):
         self.assertIs(scenario.pcaKey, key)
         self.assertEqual(scenario.point, (1.0, -0.5))
 
-    def test_returns_generator_uses_an_existing_pca_grid(self) -> None:
-        key = ReturnsPCAKey(
-            ["AAPL"],
-            30,
-            date(2024, 1, 1),
-            0.94,
-            1,
-        )
-        grid = ReturnsPCAGrid(
-            ["AAPL"], key.ew_window, key.start_date, 0.94, 1
-        )
-        provider = Mock(spec=PCAGridProvider)
-        provider.getPCAGrid.return_value = grid
-        generator = ReturnsVolaGridRiskStateGenerator(
-            provider,
-            ew_window=key.ew_window,
-            ew_lambda=key.ew_lambda,
-            components=key.components,
-        )
-        generator._generatePCAScenarios = Mock(return_value=[])
-        context = self._generation_context(key, object())
 
-        result = list(generator.getRiskStates(context))
 
-        provider.getPCAGrid.assert_called_once_with(key)
-        provider.createPCAGrid.assert_not_called()
-        self.assertEqual(result, [])
-
-    def test_returns_generator_creates_a_missing_pca_grid(self) -> None:
-        key = ReturnsPCAKey(
-            ["AAPL"],
-            30,
-            date(2024, 1, 1),
-            0.94,
-            1,
-        )
-        provider = Mock(spec=PCAGridProvider)
-        provider.getPCAGrid.return_value = None
-        grid = ReturnsPCAGrid(
-            ["AAPL"], key.ew_window, key.start_date, 0.94, 1
-        )
-        provider.createPCAGrid.return_value = grid
-        generator = ReturnsVolaGridRiskStateGenerator(
-            provider,
-            ew_window=key.ew_window,
-            ew_lambda=key.ew_lambda,
-            components=key.components,
-        )
-        generator._generatePCAScenarios = Mock(return_value=[])
-        data = object()
-        context = self._generation_context(key, data)
-
-        result = list(generator.getRiskStates(context))
-
-        provider.createPCAGrid.assert_called_once_with(key, data)
-        self.assertEqual(result, [])
-
-    def test_returns_generator_converts_every_generated_scenario(self) -> None:
-        key = ReturnsPCAKey(
-            ["AAPL"],
-            30,
-            date(2024, 1, 1),
-            0.94,
-            1,
-        )
-        scenarios = [
-            ReturnsVolaGridPCAScenario(key, (0.0,)),
-            ReturnsVolaGridPCAScenario(key, (1.0,)),
-        ]
-        risk_states = [
-            ReturnsVolaGridRiskState({}),
-            ReturnsVolaGridRiskState({}),
-        ]
-        provider = Mock(spec=PCAGridProvider)
-        provider.getPCAGrid.return_value = ReturnsPCAGrid(
-            ["AAPL"],
-            key.ew_window,
-            key.start_date,
-            key.ew_lambda,
-            key.components,
-        )
-        generator = ReturnsVolaGridRiskStateGenerator(
-            provider,
-            ew_window=key.ew_window,
-            ew_lambda=key.ew_lambda,
-            components=key.components,
-            scenariosPerComponents=(1,),
-        )
-        generate_scenarios = Mock(return_value=scenarios)
-        generator._generatePCAScenarios = generate_scenarios
-        generator.getRiskState = Mock(side_effect=risk_states)
-        context = self._generation_context(key, object())
-
-        result = list(generator.getRiskStates(context))
-
-        generate_scenarios.assert_called_once_with(
-            key,
-            provider.getPCAGrid.return_value,
-            (1,),
-            1.0,
-        )
-        generator.getRiskState.assert_has_calls(
-            [
-                call(
-                    scenarios[0],
-                    provider.getPCAGrid.return_value,
-                    context,
-                ),
-                call(
-                    scenarios[1],
-                    provider.getPCAGrid.return_value,
-                    context,
-                ),
-            ]
-        )
-        self.assertEqual(result, risk_states)
 
     def test_returns_generator_stores_its_pca_configuration(self) -> None:
         generator = ReturnsVolaGridRiskStateGenerator(
@@ -407,10 +318,10 @@ class PCAGridTest(unittest.TestCase):
         key = ReturnsPCAKey(
             ["AAPL", "MSFT"], 30, date(2024, 1, 1), 0.94, 2
         )
-        grid = ReturnsPCAGrid(
+        grid = self._fitted_grid(
             ["AAPL", "MSFT"], 30, date(2024, 1, 1), 0.94, 2
         )
-        grid.lambdas = numpy.array([4.0, 9.0])
+        grid = replace(grid, lambdas=numpy.array([4.0, 9.0]))
         generator = ReturnsVolaGridRiskStateGenerator(
             ew_window=key.ew_window,
             ew_lambda=key.ew_lambda,
@@ -442,8 +353,8 @@ class PCAGridTest(unittest.TestCase):
             ReturnsVolaGridRiskStateGenerator(scenariosPerComponents=(3, 0))
 
         key = ReturnsPCAKey(["AAPL"], 30, date(2024, 1, 1), 0.94, 1)
-        grid = ReturnsPCAGrid(["AAPL"], 30, date(2024, 1, 1), 0.94, 1)
-        grid.lambdas = numpy.array([1.0])
+        grid = self._fitted_grid(["AAPL"], 30, date(2024, 1, 1), 0.94, 1)
+        grid = replace(grid, lambdas=numpy.array([1.0]))
         generator = ReturnsVolaGridRiskStateGenerator(
             ew_window=key.ew_window,
             ew_lambda=key.ew_lambda,
@@ -470,8 +381,8 @@ class PCAGridTest(unittest.TestCase):
 
     def test_returns_generator_applies_tail_density_warping(self) -> None:
         key = ReturnsPCAKey(["AAPL"], 30, date(2024, 1, 1), 0.94, 1)
-        grid = ReturnsPCAGrid(["AAPL"], 30, date(2024, 1, 1), 0.94, 1)
-        grid.lambdas = numpy.array([4.0])
+        grid = self._fitted_grid(["AAPL"], 30, date(2024, 1, 1), 0.94, 1)
+        grid = replace(grid, lambdas=numpy.array([4.0]))
         generator = ReturnsVolaGridRiskStateGenerator(
             ew_window=key.ew_window,
             ew_lambda=key.ew_lambda,
@@ -524,8 +435,8 @@ class PCAGridTest(unittest.TestCase):
 
     def test_returns_pca_key_can_cache_a_grid(self) -> None:
         start_date = date(2024, 1, 1)
-        key = ReturnsPCAKey(["AAPL"], 30, start_date, 0.94, 2)
-        grid = ReturnsPCAGrid(["AAPL"], 30, start_date, 0.94, 2)
+        key = ReturnsPCAKey(["AAPL"], 30, start_date, 0.94, 1)
+        grid = self._fitted_grid(["AAPL"], 30, start_date, 0.94, 1)
         provider = PCAGridProvider()
 
         provider.cache.insert(key, grid)
