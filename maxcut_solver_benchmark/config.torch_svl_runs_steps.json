@@ -1,0 +1,24 @@
+{
+  "source_results_dir": "results/cpu_full",
+  "output_dir": "results/torch_svl_runs_steps",
+  "sizes": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
+  "trials": 3,
+  "graph_seed": 314159,
+  "device": "cpu",
+  "dtype": "float32",
+  "run_batch_size": 32,
+  "memory_limit_gb": 5,
+  "runs_values": [1, 2, 4, 8, 16, 32],
+  "steps_values": [1000, 2000, 3000, 4000, 5000],
+  "fixed_parameters": {
+    "dt": 0.02,
+    "mass": 0.5,
+    "damping": 0.2,
+    "temperature": 0.01,
+    "integrator": "weak_order_2",
+    "transverse_field_initial": 0.5,
+    "transverse_field_final": 0.0,
+    "problem_scale_initial": 0.1,
+    "problem_scale_final": 2.0
+  }
+}

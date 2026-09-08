@@ -46,74 +46,16 @@ double peak_rss_mib() {
     return 0.0;
 }
 
-double gain(
-    std::size_t vertex, const std::vector<std::uint8_t>& partition,
-    const sbm::maxcut::Adjacency& adjacency) {
-    double value = 0.0;
-    for (std::size_t p = adjacency.row_offsets[vertex];
-         p < adjacency.row_offsets[vertex + 1]; ++p) {
-        value += partition[vertex] == partition[adjacency.neighbors[p]]
-                     ? adjacency.weights[p]
-                     : -adjacency.weights[p];
-    }
-    return value;
-}
-
 Result greedy(const sbm::maxcut::Graph& graph, int sweeps, std::uint64_t seed) {
     const auto start = Clock::now();
-    auto adjacency = sbm::maxcut::make_adjacency(graph);
-    std::mt19937_64 rng(seed);
-    std::vector<std::uint8_t> partition(graph.vertices);
-    for (auto& bit : partition) bit = rng() & 1U;
-    std::vector<std::uint32_t> order(graph.vertices);
-    std::iota(order.begin(), order.end(), 0);
-    double cut = graph.cut_value(partition);
-    for (int sweep = 0; sweep < sweeps; ++sweep) {
-        std::shuffle(order.begin(), order.end(), rng);
-        bool changed = false;
-        for (auto vertex : order) {
-            const double delta = gain(vertex, partition, adjacency);
-            if (delta > 0.0) {
-                partition[vertex] ^= 1;
-                cut += delta;
-                changed = true;
-            }
-        }
-        if (!changed) break;
-    }
-    return {cut, std::chrono::duration<double, std::milli>(Clock::now() - start).count()};
+    const auto result = sbm::maxcut::PreparedSearch(graph).greedy(1, sweeps, seed);
+    return {result.cut, std::chrono::duration<double, std::milli>(Clock::now() - start).count()};
 }
 
 Result anneal(const sbm::maxcut::Graph& graph, int sweeps, std::uint64_t seed) {
     const auto start = Clock::now();
-    auto adjacency = sbm::maxcut::make_adjacency(graph);
-    std::mt19937_64 rng(seed);
-    std::vector<std::uint8_t> partition(graph.vertices);
-    for (auto& bit : partition) bit = rng() & 1U;
-    std::uniform_real_distribution<double> probability(0.0, 1.0);
-    std::uniform_int_distribution<std::uint32_t> vertex(
-        0, static_cast<std::uint32_t>(graph.vertices - 1));
-    const double total_weight = std::accumulate(
-        graph.edges.begin(), graph.edges.end(), 0.0,
-        [](double sum, const auto& edge) { return sum + edge.weight; });
-    const double t0 = std::max(1.0, 4.0 * total_weight / graph.vertices);
-    const double t1 = 0.01 * t0;
-    double cut = graph.cut_value(partition);
-    double best = cut;
-    for (int sweep = 0; sweep < sweeps; ++sweep) {
-        const double fraction = sweeps == 1 ? 1.0 : static_cast<double>(sweep) / (sweeps - 1);
-        const double temperature = t0 * std::pow(t1 / t0, fraction);
-        for (std::size_t proposal = 0; proposal < graph.vertices; ++proposal) {
-            const auto candidate = vertex(rng);
-            const double delta = gain(candidate, partition, adjacency);
-            if (delta >= 0.0 || probability(rng) < std::exp(delta / temperature)) {
-                partition[candidate] ^= 1;
-                cut += delta;
-                best = std::max(best, cut);
-            }
-        }
-    }
-    return {best, std::chrono::duration<double, std::milli>(Clock::now() - start).count()};
+    const auto result = sbm::maxcut::PreparedSearch(graph).anneal(1, sweeps, seed);
+    return {result.cut, std::chrono::duration<double, std::milli>(Clock::now() - start).count()};
 }
 
 int main(int argc, char** argv) {
@@ -173,9 +115,9 @@ int main(int argc, char** argv) {
                            << '"' << configuration << '"' << '\n';
                 };
                 write("greedy_local_search", greedy_result,
-                      "runs=1;max_sweeps=" + std::to_string(greedy_sweeps));
+                      "runs=1;max_sweeps=" + std::to_string(greedy_sweeps) + ";preparation=included");
                 write("simulated_annealing", sa_result,
-                      "runs=1;sweeps=" + std::to_string(sa_sweeps));
+                      "runs=1;sweeps=" + std::to_string(sa_sweeps) + ";preparation=included");
                 write("simulated_bifurcation", {dsb_cut, dsb_ms},
                       "runs=1;steps=" + std::to_string(dsb_steps) +
                           ";openmp_rows=on;simd=on");

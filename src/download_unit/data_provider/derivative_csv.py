@@ -11,6 +11,10 @@ from .data_provider import DataProvider
 class DerivativeCSVDataProvider(DataProvider):
     """Read normalized derivative quotes from one or more CSV files."""
 
+    def sourceRevision(self, command: DataRequest):
+        from .source_identity import localSourceRevision
+        return localSourceRevision(command.provider_parameters)
+
     requiredColumns = {
         "date", "symbol", "instrument_type", "expiration_date", "price"
     }

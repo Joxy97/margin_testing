@@ -8,6 +8,7 @@ import math
 from numbers import Integral
 
 import numpy
+from numerics.neighbor_selection import numpyStrongestNeighbors
 from download_unit import DataRequest, Period
 from portfolio import Portfolio
 
@@ -152,12 +153,7 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
     ) -> Iterator[ReturnsVolaGridRiskState]:
         """Lazily create returns-volatility-grid risk states."""
         pca_key = self._createPCAKey(context)
-        pca_grid = self.__pcaGridProvider.getPCAGrid(pca_key)
-        if pca_grid is None:
-            pca_grid = self.__pcaGridProvider.createPCAGrid(
-                pca_key,
-                context.marketData,
-            )
+        pca_grid = self.__pcaGridProvider.getOrCreate(pca_key, context.marketData)
         for pca_scenario in self._generatePCAScenarios(
             pca_key,
             pca_grid,
@@ -407,10 +403,7 @@ class ReturnsVolaGridRiskStateGenerator(RiskStateGenerator):
         if nearest_count == len(distances):
             nearest_indices = numpy.arange(len(distances))
         else:
-            nearest_indices = numpy.argpartition(
-                distances,
-                nearest_count - 1,
-            )[:nearest_count]
+            nearest_indices = numpy.sort(numpyStrongestNeighbors(-distances[None, :], nearest_count)[0])
         nearest_residuals = context.residualsRecent[nearest_indices]
         scenario_distance = float(distances[nearest_indices].mean())
         return nearest_residuals, scenario_distance

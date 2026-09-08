@@ -6,9 +6,9 @@ from collections.abc import Iterable
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from data_manager import DataManager, DataManagerConfig
+from data_manager import DataManager, DataManagerConfig, PartitionedPickleDataStore
 from download_manager import DownloadManager, DownloadManagerConfig
 from download_unit import DataProvider, LocalCSVDataProvider
 from margin_calculator import (
@@ -44,6 +44,63 @@ class RecordingMarginCalculator(MarginCalculator):
 
 
 class MarginEngineTest(unittest.TestCase):
+    def test_backing_storage_distinguishes_datasets_and_local_revisions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / "a.csv", root / "b.csv"
+            first.write_text("date,A\n2024-01-01,100\n")
+            second.write_text("date,A\n2024-01-01,200\n")
+            def engine(path):
+                return MarginEngine(MarginEngineConfig(
+                    downloadManager=DownloadManagerConfig(providers={"local": LocalCSVDataProvider()},
+                        requestParameters={"location": str(path)}),
+                    dataManager=DataManagerConfig(backingStore=PartitionedPickleDataStore(root / "store")),
+                    marginCalculator=GreedyMarginCalculatorConfig(),
+                ))
+            portfolio = Portfolio(weights={"A": Decimal(1)})
+            original = engine(first)
+            original.getPortfolioMarketData(portfolio, date(2024, 1, 1))
+            other = engine(second).getPortfolioMarketData(portfolio, date(2024, 1, 1))
+            first.write_text("date,A\n2024-01-01,300\n")
+            revised = original.getPortfolioMarketData(portfolio, date(2024, 1, 1))
+        self.assertEqual((other["A"].tolist(), revised["A"].tolist()), ([200], [300]))
+
+    def test_calculation_latency_includes_generation_instead_of_subtracting_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prices.csv"
+            path.write_text("date,A\n2024-01-01,100\n2024-01-02,101\n2024-01-03,99\n")
+            engine = MarginEngine(MarginEngineConfig(
+                downloadManager=DownloadManagerConfig(providers={"local": LocalCSVDataProvider()},
+                    requestParameters={"location": str(path)}),
+                riskStateGenerator=ReturnsVolaGridRiskStateGeneratorConfig(
+                    ew_window=2, scenariosPerComponents=(1,), nZBins=1, allowEmptyBinFallback=True),
+                marginCalculator=GreedyMarginCalculatorConfig(),
+            ))
+            with patch("margin_engine.margin_engine.perf_counter",
+                       side_effect=[0, 0, 1, 1, 1, 4, 4, 5, 6, 6]):
+                result = engine.generateReport(Portfolio(weights={"A": Decimal(1)}), date(2024, 1, 4))
+        self.assertEqual(result.timings.marginCalculationSeconds, 5)
+        self.assertEqual(result.timings.riskStateGenerationSeconds, 4)
+        self.assertEqual(result.timings.totalSeconds, 6)
+
+    def test_acquisition_survives_eviction_while_filling_multiple_fragments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prices.csv"
+            path.write_text("date,A,B\n" + "\n".join(
+                f"2024-01-{day:02d},{99 + day},{199 + day}" for day in range(1, 8)))
+            engine = MarginEngine(MarginEngineConfig(
+                downloadManager=DownloadManagerConfig(providers={"local": LocalCSVDataProvider()},
+                    requestParameters={"location": str(path)}),
+                dataManager=DataManagerConfig(maxMemoryBytes=90),
+                riskStateGenerator=ReturnsVolaGridRiskStateGeneratorConfig(ew_window=2),
+                marginCalculator=GreedyMarginCalculatorConfig(),
+            ))
+            engine.getPortfolioMarketData(Portfolio(weights={"A": Decimal(1)}), date(2024, 1, 5))
+            result = engine.getPortfolioMarketData(
+                Portfolio(weights={"A": Decimal(1), "B": Decimal(1)}), date(2024, 1, 7))
+        self.assertEqual(result["A"].tolist(), [102, 103, 104, 105, 106])
+        self.assertEqual(result["B"].tolist(), [202, 203, 204, 205, 206])
+
     def test_prepares_the_complete_backtest_range_with_one_download(self) -> None:
         portfolio = Portfolio(weights={"AAPL": Decimal("1")})
         generator_config = ReturnsVolaGridRiskStateGeneratorConfig(

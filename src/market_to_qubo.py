@@ -354,37 +354,11 @@ def exponentially_weighted_pca(
 
     weights = decay ** np.arange(observations - 1, -1, -1, dtype=float)
     weights /= weights.sum()
-    weighted_mean = np.sum(weights[:, None] * z_ew, axis=0)
-    centered = z_ew - weighted_mean
-
-    # This is the notebook's eigendecomposition. For wide markets, use its
-    # mathematically equivalent observation-space dual to avoid an N x N matrix.
-    if assets <= 512:
-        covariance = centered.T @ (weights[:, None] * centered)
-        all_eigenvalues, all_eigenvectors = np.linalg.eigh(covariance)
-        order = np.argsort(all_eigenvalues)[::-1]
-        eigenvalues = np.maximum(all_eigenvalues[order[:components]], 0.0)
-        loadings = all_eigenvectors[:, order[:components]].T
-        total_variance = float(np.maximum(all_eigenvalues, 0.0).sum())
-        solver = "asset-space symmetric eigendecomposition"
-    else:
-        weighted_centered = np.sqrt(weights[:, None]) * centered
-        gram = weighted_centered @ weighted_centered.T
-        all_eigenvalues, left_vectors = np.linalg.eigh(gram)
-        order = np.argsort(all_eigenvalues)[::-1]
-        eigenvalues = np.maximum(all_eigenvalues[order[:components]], 0.0)
-        if np.any(eigenvalues <= np.finfo(float).eps):
-            raise ValueError("Requested PCA components include a zero-variance mode")
-        chosen_left = left_vectors[:, order[:components]]
-        right_vectors = weighted_centered.T @ chosen_left
-        right_vectors /= np.sqrt(eigenvalues)[None, :]
-        loadings = right_vectors.T
-        total_variance = float(np.maximum(all_eigenvalues, 0.0).sum())
-        solver = "observation-space dual eigendecomposition"
-
-    if total_variance <= 0.0:
-        raise ValueError("EW PCA has no positive variance")
-    explained = eigenvalues / total_variance
+    from numerics.weighted_pca import weightedEigensystem
+    weighted_mean, _, eigenvalues, explained, loadings = weightedEigensystem(
+        z_ew, weights, components, observationSpace=assets > 512, canonicalSigns=False)
+    solver = ("observation-space dual eigendecomposition" if assets > 512
+              else "asset-space symmetric eigendecomposition")
     factors = (historical_z - weighted_mean) @ loadings.T
     backtest_factors = (backtest_z - weighted_mean) @ loadings.T
     return PCAResult(

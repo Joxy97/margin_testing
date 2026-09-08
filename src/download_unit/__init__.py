@@ -19,7 +19,11 @@ from .download_unit_factory import DownloadUnitFactory
 from .exponential_backoff_download_unit import ExponentialBackoffDownloadUnit
 from .single_request_download_unit import SingleRequestDownloadUnit
 
+from .retry_policy import DownloadRetryPolicy
+
 __all__ = [
+    "DownloadRetryPolicy",
+
     "Command",
     "Chunker",
     "DataProvider",

@@ -3,17 +3,11 @@
 from __future__ import annotations
 
 from functools import singledispatchmethod
-from math import exp, log
+from math import log
 
 import numpy
 
-from option_pricing import (
-    AmericanEquityBinomialPricingModel,
-    AmericanFuturesBinomialPricingModel,
-    Black76PricingModel,
-    EquityBlackScholesPricingModel,
-    yearFraction,
-)
+from option_pricing import yearFraction, defaultOptionMarketConventions
 from portfolio import (
     EquityContract,
     EquityOptionContract,
@@ -25,6 +19,9 @@ from risk_state_generator import OptionScenarioRiskState
 
 class OptionScenarioValuator:
     """Return base and stressed prices without coupling contracts to models."""
+
+    def __init__(self, marketConventions=None) -> None:
+        self.marketConventions = None if marketConventions is None else dict(marketConventions)
 
     @singledispatchmethod
     def prices(
@@ -53,7 +50,6 @@ class OptionScenarioValuator:
             contract,
             state,
             underlying,
-            underlying,
             "futures_option",
             0.0,
         )
@@ -61,15 +57,10 @@ class OptionScenarioValuator:
     @prices.register
     def _(self, contract: EquityOptionContract, state: OptionScenarioRiskState):
         underlying = state.spotPrices[contract.symbol]
-        time = self._timeToExpiry(contract, state)
-        forward = underlying * exp(
-            (state.riskFreeRate - contract.dividendYield) * time
-        )
         return self._optionPrices(
             contract,
             state,
             underlying,
-            forward,
             "equity_option",
             contract.dividendYield,
         )
@@ -79,11 +70,13 @@ class OptionScenarioValuator:
         contract,
         state: OptionScenarioRiskState,
         underlying: float,
-        forward: float,
         instrumentType: str,
         dividendYield: float,
     ) -> tuple[float, float]:
         time = self._timeToExpiry(contract, state)
+        conventions = self.marketConventions or defaultOptionMarketConventions(state.americanOptionSteps)
+        convention = conventions[instrumentType]
+        forward = convention.forwardPrice(underlying, time, state.riskFreeRate, dividendYield)
         projected_time = max(
             0.0,
             time - state.projectionHorizonDays / state.tradingDaysPerYear,
@@ -93,19 +86,15 @@ class OptionScenarioValuator:
         ]
         base_volatility = smile.volatility(log(float(contract.strike) / forward))
         stressed_underlying = underlying * (1.0 + state.priceShock)
-        stressed_forward = (
-            stressed_underlying
-            if instrumentType == "futures_option"
-            else stressed_underlying
-            * exp((state.riskFreeRate - dividendYield) * projected_time)
-        )
+        stressed_forward = convention.forwardPrice(
+            stressed_underlying, projected_time, state.riskFreeRate, dividendYield)
         stressed_volatility = float(numpy.clip(
             smile.volatility(log(float(contract.strike) / stressed_forward))
             + state.volatilityShift,
             state.minimumVolatility,
             state.maximumVolatility,
         ))
-        model = self._model(instrumentType, contract.exerciseStyle, state)
+        model = convention.pricingModel(contract.exerciseStyle)
         base_price = self._price(
             model,
             contract,
@@ -145,20 +134,6 @@ class OptionScenarioValuator:
             contract.optionType,
             dividendYield,
         )
-
-    @staticmethod
-    def _model(instrumentType, exerciseStyle, state):
-        factories = {
-            ("futures_option", "E"): Black76PricingModel,
-            ("futures_option", "A"): lambda: AmericanFuturesBinomialPricingModel(
-                state.americanOptionSteps
-            ),
-            ("equity_option", "E"): EquityBlackScholesPricingModel,
-            ("equity_option", "A"): lambda: AmericanEquityBinomialPricingModel(
-                state.americanOptionSteps
-            ),
-        }
-        return factories[(instrumentType, exerciseStyle)]()
 
     @staticmethod
     def _timeToExpiry(contract, state) -> float:

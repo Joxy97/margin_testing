@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
+from .calculation_outcome import CalculationOutcome
 
 if TYPE_CHECKING:
     from portfolio import Portfolio
@@ -13,6 +14,10 @@ if TYPE_CHECKING:
 
 class MarginCalculator(ABC):
     """Calculate portfolio margin across a collection of risk states."""
+
+    def calculateOutcome(self, riskStates: Iterable[RiskState], portfolio: Portfolio) -> CalculationOutcome:
+        """Return results without retaining diagnostics on the calculator."""
+        return CalculationOutcome(self.calculateMargin(riskStates, portfolio))
 
     @abstractmethod
     def calculateMargin(

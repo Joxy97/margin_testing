@@ -8,11 +8,13 @@ from time import perf_counter
 from typing import TYPE_CHECKING
 
 from download_unit import DataRequest
+from data_manager.acquisition import MarketDataAcquisition
 from portfolio import Portfolio
 from risk_state_generator import RiskStateGenerationContext
 
 from .config import MarginEngineConfig
-from .margin_report import MarginEngineTimings, MarginReport
+from .margin_report import MarginReport
+from .calculation_measurements import CalculationMeasurements
 
 if TYPE_CHECKING:
     import pandas
@@ -27,10 +29,13 @@ class MarginEngine:
         self.configs = configs
         self.downloadManager = configs.downloadManager.createDownloadManager()
         self.dataManager = configs.dataManager.createDataManager()
+        self.acquisition = MarketDataAcquisition(self.dataManager, self.downloadManager)
         self.riskStateGenerator = (
             configs.riskStateGenerator.createRiskStateGenerator()
         )
         self.marginCalculator = configs.marginCalculator.createMarginCalculator()
+        self.numericalExecution = None if configs.numericalExecution is None else configs.numericalExecution.createExecution(
+            self.riskStateGenerator, self.marginCalculator)
 
     def generateReport(
         self,
@@ -38,53 +43,25 @@ class MarginEngine:
         marginDate: date,
     ) -> MarginReport:
         """Acquire required data and calculate portfolio margin."""
-        total_started = perf_counter()
-        acquisition_started = perf_counter()
-        request, data = self._acquireMarketData(portfolio, marginDate)
-        acquisition_seconds = perf_counter() - acquisition_started
+        measurements = CalculationMeasurements(perf_counter)
+        request, data = measurements.measure("dataAcquisitionSeconds", lambda: self._acquireMarketData(portfolio, marginDate))
         generation_context = RiskStateGenerationContext(
-            marketData=data,
-            dataRequest=request,
-            marginDate=marginDate,
-        )
-        risk_states = self.riskStateGenerator.getRiskStates(generation_context)
-        generation_seconds = [0.0]
-
-        def timedRiskStates():
-            iterator = iter(risk_states)
-            while True:
-                generation_started = perf_counter()
-                try:
-                    risk_state = next(iterator)
-                except StopIteration:
-                    generation_seconds[0] += perf_counter() - generation_started
-                    return
-                generation_seconds[0] += perf_counter() - generation_started
-                yield risk_state
-
-        calculation_started = perf_counter()
-        margin = self.marginCalculator.calculateMargin(
-            timedRiskStates(),
-            portfolio,
-        )
-        combined_seconds = perf_counter() - calculation_started
-        total_seconds = perf_counter() - total_started
+            marketData=data, dataRequest=request, marginDate=marginDate)
+        if self.numericalExecution is not None:
+            outcome = measurements.measure("marginCalculationSeconds", lambda:
+                self.numericalExecution.calculate(generation_context, portfolio, measurements))
+        else:
+            risk_states = measurements.iterate(self.riskStateGenerator.getRiskStates(generation_context))
+            try:
+                outcome = measurements.measure("marginCalculationSeconds", lambda:
+                    self.marginCalculator.calculateOutcome(risk_states, portfolio))
+            finally:
+                risk_states.close()
         return MarginReport(
-            margin=float(margin),
-            timings=MarginEngineTimings(
-                dataAcquisitionSeconds=acquisition_seconds,
-                riskStateGenerationSeconds=generation_seconds[0],
-                marginCalculationSeconds=max(
-                    0.0,
-                    combined_seconds - generation_seconds[0],
-                ),
-                totalSeconds=total_seconds,
-            ),
-            comparisonMargins=getattr(
-                self.marginCalculator,
-                "lastComparisonMargins",
-                {},
-            ),
+            margin=float(outcome.margin),
+            timings=measurements.timings(),
+            comparisonMargins=outcome.comparisonMargins,
+            numericalDiagnostics=outcome.numericalDiagnostics,
         )
 
     def prepareBacktest(
@@ -122,7 +99,7 @@ class MarginEngine:
         ).withProviderParameters(
             self.configs.downloadManager.requestParameters
         )
-        self._acquireRequest(request)
+        self.acquisition.acquire(request)
 
     def getPortfolioMarketData(
         self,
@@ -145,28 +122,4 @@ class MarginEngine:
         ).withProviderParameters(
             self.configs.downloadManager.requestParameters
         )
-        return request, self._acquireRequest(request)
-
-    def _acquireRequest(self, request: DataRequest) -> pandas.DataFrame:
-        """Acquire one exact request through cache and configured providers."""
-        data = self.dataManager.getData(request)
-        if data is None:
-            missing_requests = self.dataManager.getMissingRequests(request)
-            for missing_request in missing_requests:
-                downloaded_data = self.downloadManager.downloadDataType(
-                    missing_request.data_type,
-                    missing_request,
-                )
-                stored_data = self.dataManager.storeData(
-                    missing_request,
-                    downloaded_data,
-                )
-                if len(missing_requests) == 1 and missing_request == request:
-                    data = stored_data
-            if data is None:
-                data = self.dataManager.getData(request)
-        if data is None:
-            raise RuntimeError(
-                f"Unable to store downloaded {request.data_type}"
-            )
-        return data
+        return request, self.acquisition.acquire(request)

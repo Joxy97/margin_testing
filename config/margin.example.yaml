@@ -14,12 +14,24 @@ backtest:
   dates: [2024-01-29, 2024-01-30, 2024-01-31]
 
 engine:
+  # Opt-in resident returns numerics (ordinary or correlated returns grids).
+  # Requires greedy calculation or one Torch SBM/adaptive/SVL solver on the same device.
+  # numericalExecution: {type: torch, device: auto}
+  # Omit this block for the existing host pipeline, including multi-GPU batching.
   downloadManager:
     providers:
       yahoo:
         type: yfinance
     providerSelection: local_first
     downloadAlgorithm: single_request
+    # exponential_backoff retries transient failures per chunk. Example parameters:
+    # downloadParameters:
+    #   chunker: {type: date, batchSize: 30} # inclusive, nonoverlapping days
+    #   time: 1.0       # initial retry delay
+    #   maxAttempts: 3  # includes the initial attempt
+    #   maxDelay: 60.0  # cap including provider hints and jitter
+    #   jitter: 0.0     # additional uniform delay up to jitter * retry delay
+    #   requestInterval: 0.0 # constant pause between chunks; no trailing sleep
     downloadParameters: {}
     requestParameters: {}
 
@@ -36,6 +48,9 @@ engine:
     pcaGridProvider:
       cacheType: lru
       memorySize: 128
+      backend:
+        type: numpy # Use torch for optional GPU PCA.
+        device: auto # Torch accepts cpu, cuda, or cuda:<index> as well.
     ew_window: 60
     ew_lambda: 0.94
     components: 2
@@ -66,16 +81,27 @@ engine:
       batchSize: 105
       maxBatchBytes: 536870912
       memoryMultiplier: 3.0
+      prefetch: true # Prepare one additional host batch during GPU execution.
     solver:
-      type: torch_sbm
+      type: torch_svl
       constructorParameters:
         device: auto
         # For multi-GPU execution, remove device and configure, for example:
         # devices: [cuda:0, cuda:1, cuda:2, cuda:3, cuda:4, cuda:5, cuda:6, cuda:7]
       solverParameters:
-        steps: 10000
-        runs: 16
+        steps: 4000
+        runs: 64
         seed: 1
         dtype: float32
-        run_batch_size: null
+        run_batch_size: 16
         energy_chunk_size: 1000000
+        noise_chunk_size: 16
+        integrator: weak_order_2
+        dt: 0.01
+        mass: 1.0
+        damping: 0.1
+        temperature: 0.001
+        transverse_field_initial: 1.0
+        transverse_field_final: 0.0
+        problem_scale_initial: 0.0
+        problem_scale_final: 1.0

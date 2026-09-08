@@ -55,108 +55,27 @@ double peak_rss_mib() {
     return 0.0;
 }
 
-double gain_if_flipped(
-    std::size_t vertex, const std::vector<std::uint8_t>& partition,
-    const sbm::maxcut::Adjacency& adjacency) {
-    double gain = 0.0;
-    for (std::size_t p = adjacency.row_offsets[vertex];
-         p < adjacency.row_offsets[vertex + 1]; ++p) {
-        gain += partition[vertex] == partition[adjacency.neighbors[p]]
-                    ? adjacency.weights[p]
-                    : -adjacency.weights[p];
-    }
-    return gain;
-}
-
-MethodResult exact_maxcut(
-    const sbm::maxcut::Graph& graph, const sbm::maxcut::Adjacency& adjacency) {
+MethodResult exact_maxcut(const sbm::maxcut::PreparedSearch& search) {
     const auto start = Clock::now();
-    if (graph.vertices > 63) throw std::invalid_argument("exact enumeration supports at most 63 vertices");
-    std::vector<std::uint8_t> partition(graph.vertices, 0);
-    double current = 0.0;
-    double best = 0.0;
-    const std::uint64_t states = 1ULL << (graph.vertices - 1);  // fix vertex zero by symmetry.
-    for (std::uint64_t state = 1; state < states; ++state) {
-        const std::size_t vertex = 1 + static_cast<std::size_t>(__builtin_ctzll(state));
-        current += gain_if_flipped(vertex, partition, adjacency);
-        partition[vertex] ^= 1;
-        best = std::max(best, current);
-    }
-    const auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
-    return {"exact", best, elapsed, "gray-code enumeration"};
+    const auto result = search.exact();
+    return {"exact", result.cut, std::chrono::duration<double, std::milli>(Clock::now() - start).count(),
+            "gray-code enumeration;preparation=excluded"};
 }
 
-MethodResult greedy_maxcut(
-    const sbm::maxcut::Graph& graph, const sbm::maxcut::Adjacency& adjacency,
-    int runs, int max_sweeps, std::uint64_t seed) {
-    const auto start = Clock::now();
-    std::mt19937_64 rng(seed);
-    std::vector<std::uint32_t> order(graph.vertices);
-    std::iota(order.begin(), order.end(), 0);
-    double best = 0.0;
-
-    for (int run = 0; run < runs; ++run) {
-        std::vector<std::uint8_t> partition(graph.vertices);
-        for (auto& bit : partition) bit = rng() & 1U;
-        double current = graph.cut_value(partition);
-        for (int sweep = 0; sweep < max_sweeps; ++sweep) {
-            std::shuffle(order.begin(), order.end(), rng);
-            bool improved = false;
-            for (auto vertex : order) {
-                const double gain = gain_if_flipped(vertex, partition, adjacency);
-                if (gain > 0.0) {
-                    partition[vertex] ^= 1;
-                    current += gain;
-                    improved = true;
-                }
-            }
-            if (!improved) break;
-        }
-        best = std::max(best, current);
-    }
-    const auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
-    return {"greedy_local_search", best, elapsed,
-            "runs=" + std::to_string(runs) + ";max_sweeps=" + std::to_string(max_sweeps)};
-}
-
-MethodResult simulated_annealing(
-    const sbm::maxcut::Graph& graph, const sbm::maxcut::Adjacency& adjacency,
+MethodResult greedy_maxcut(const sbm::maxcut::PreparedSearch& search,
     int runs, int sweeps, std::uint64_t seed) {
     const auto start = Clock::now();
-    std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> probability(0.0, 1.0);
-    std::uniform_int_distribution<std::uint32_t> vertex(
-        0, static_cast<std::uint32_t>(graph.vertices - 1));
-    const double total_weight = std::accumulate(
-        graph.edges.begin(), graph.edges.end(), 0.0,
-        [](double sum, const auto& edge) { return sum + edge.weight; });
-    const double initial_temperature = std::max(1.0, 4.0 * total_weight / graph.vertices);
-    const double final_temperature = 0.01 * initial_temperature;
-    double best = 0.0;
+    const auto result = search.greedy(runs, sweeps, seed);
+    return {"greedy_local_search", result.cut, std::chrono::duration<double, std::milli>(Clock::now() - start).count(),
+            "runs=" + std::to_string(runs) + ";max_sweeps=" + std::to_string(sweeps) + ";preparation=excluded"};
+}
 
-    for (int run = 0; run < runs; ++run) {
-        std::vector<std::uint8_t> partition(graph.vertices);
-        for (auto& bit : partition) bit = rng() & 1U;
-        double current = graph.cut_value(partition);
-        best = std::max(best, current);
-        for (int sweep = 0; sweep < sweeps; ++sweep) {
-            const double fraction = sweeps == 1 ? 1.0 : static_cast<double>(sweep) / (sweeps - 1);
-            const double temperature = initial_temperature *
-                                       std::pow(final_temperature / initial_temperature, fraction);
-            for (std::size_t proposal = 0; proposal < graph.vertices; ++proposal) {
-                const auto candidate = vertex(rng);
-                const double gain = gain_if_flipped(candidate, partition, adjacency);
-                if (gain >= 0.0 || probability(rng) < std::exp(gain / temperature)) {
-                    partition[candidate] ^= 1;
-                    current += gain;
-                    best = std::max(best, current);
-                }
-            }
-        }
-    }
-    const auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
-    return {"simulated_annealing", best, elapsed,
-            "runs=" + std::to_string(runs) + ";sweeps=" + std::to_string(sweeps)};
+MethodResult simulated_annealing(const sbm::maxcut::PreparedSearch& search,
+    int runs, int sweeps, std::uint64_t seed) {
+    const auto start = Clock::now();
+    const auto result = search.anneal(runs, sweeps, seed);
+    return {"simulated_annealing", result.cut, std::chrono::duration<double, std::milli>(Clock::now() - start).count(),
+            "runs=" + std::to_string(runs) + ";sweeps=" + std::to_string(sweeps) + ";preparation=excluded"};
 }
 
 MethodResult simulated_bifurcation(
@@ -202,7 +121,7 @@ int main(int argc, char** argv) {
             const auto load_start = Clock::now();
             auto graph = sbm::maxcut::load_csv(path.string());
             if (graph.vertices > maximum_vertices) continue;
-            auto adjacency = sbm::maxcut::make_adjacency(graph);
+            sbm::maxcut::PreparedSearch search(graph);
             const double load_ms =
                 std::chrono::duration<double, std::milli>(Clock::now() - load_start).count();
             const auto scale = scale_for(graph.vertices);
@@ -211,11 +130,11 @@ int main(int argc, char** argv) {
                       << graph.vertices << ", m=" << graph.edges.size() << ")\n";
 
             std::vector<MethodResult> methods;
-            if (graph.vertices <= 24) methods.push_back(exact_maxcut(graph, adjacency));
+            if (graph.vertices <= 24) methods.push_back(exact_maxcut(search));
             methods.push_back(greedy_maxcut(
-                graph, adjacency, scale.greedy_runs, scale.greedy_sweeps, seed));
+                search, scale.greedy_runs, scale.greedy_sweeps, seed));
             methods.push_back(simulated_annealing(
-                graph, adjacency, scale.sa_runs, scale.sa_sweeps, seed + 1));
+                search, scale.sa_runs, scale.sa_sweeps, seed + 1));
             methods.push_back(simulated_bifurcation(
                 graph, scale.sbm_runs, scale.sbm_steps, seed + 2));
 

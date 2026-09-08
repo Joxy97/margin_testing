@@ -4,10 +4,8 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from portfolio import Portfolio
-from risk_state_generator import (
-    PortfolioRiskStateBQMVisitor,
-    RiskState,
-)
+from risk_state_generator.risk_state import RiskState
+from .optimization.portfolio_risk_state_bqm_visitor import PortfolioRiskStateBQMVisitor
 
 from .optimization.optimization_problem.qubo_problem import QUBOProblem
 from .optimization.optimization_result import BQMOptimizationResult
@@ -16,13 +14,14 @@ from .optimization.optimization_solver.bqm_solver.bqm_execution_policy import (
     BQMExecutionPolicy,
     SequentialBQMExecutionPolicy,
 )
-from .optimization_margin_calculator import OptimizationMarginCalculator
+from .margin_calculator import MarginCalculator
+from .calculation_outcome import CalculationOutcome
 from .state_aware_greedy_risk_state_visitor import (
     StateAwareGreedyRiskStateVisitor,
 )
 
 
-class BQMMarginCalculator(OptimizationMarginCalculator):
+class BQMMarginCalculator(MarginCalculator):
     """Build, solve, and decode one QUBO for every risk state."""
 
     def __init__(
@@ -34,7 +33,7 @@ class BQMMarginCalculator(OptimizationMarginCalculator):
         executionPolicy: BQMExecutionPolicy[RiskState] | None = None,
         comparisonPnlAnchor: str | None = None,
     ) -> None:
-        super().__init__(solverParameters)
+        self.solverParameters = dict(solverParameters or {})
         self.modelParameters: dict[str, Any] = dict(modelParameters or {})
         self.bqmSolver = bqmSolver
         self.bqmVisitor = bqmVisitor or PortfolioRiskStateBQMVisitor()
@@ -44,13 +43,15 @@ class BQMMarginCalculator(OptimizationMarginCalculator):
             if comparisonPnlAnchor is None
             else StateAwareGreedyRiskStateVisitor(comparisonPnlAnchor)
         )
-        self.lastComparisonMargins: dict[str, float] = {}
 
     def calculateMargin(
         self,
         riskStates: Iterable[RiskState],
         portfolio: Portfolio,
     ) -> float:
+        return self.calculateOutcome(riskStates, portfolio).margin
+
+    def calculateOutcome(self, riskStates: Iterable[RiskState], portfolio: Portfolio) -> CalculationOutcome:
         """Return the greatest decoded loss across all risk states."""
         maximum_margin = 0.0
         comparison_lowest_pnl = 0.0
@@ -68,23 +69,26 @@ class BQMMarginCalculator(OptimizationMarginCalculator):
                     )
                 yield self._encodeRiskState(risk_state, portfolio)
 
-        for risk_state, result in self.executionPolicy.execute(
-            self.bqmSolver,
-            encodedStates(),
-            self.solverParameters,
-        ):
-            if not isinstance(result, BQMOptimizationResult):
-                raise TypeError("BQMSolver must return a BQMOptimizationResult")
-            maximum_margin = max(
-                maximum_margin,
-                self.bqmVisitor.decodeMargin(risk_state, portfolio, result),
-            )
-        self.lastComparisonMargins = (
+        execution = self.executionPolicy.execute(
+            self.bqmSolver, encodedStates(), self.solverParameters)
+        try:
+            for risk_state, result in execution:
+                if not isinstance(result, BQMOptimizationResult):
+                    raise TypeError("BQMSolver must return a BQMOptimizationResult")
+                maximum_margin = max(
+                    maximum_margin,
+                    self.bqmVisitor.decodeMargin(risk_state, portfolio, result),
+                )
+        finally:
+            close = getattr(execution, "close", None)
+            if close is not None:
+                close()
+        comparison_margins = (
             {}
             if self.comparisonVisitor is None
             else {"greedy": -comparison_lowest_pnl}
         )
-        return maximum_margin
+        return CalculationOutcome(maximum_margin, comparison_margins)
 
     def _encodeRiskState(
         self,

@@ -29,6 +29,24 @@ struct Adjacency {
     std::vector<double> weights;
 };
 
+struct SearchResult {
+    std::vector<std::uint8_t> partition;
+    double cut = 0.0;
+};
+
+// The immutable graph must outlive its prepared search.
+class PreparedSearch {
+public:
+    explicit PreparedSearch(const Graph& graph);
+    [[nodiscard]] SearchResult exact() const;
+    [[nodiscard]] SearchResult greedy(int runs, int sweeps, std::uint64_t seed) const;
+    [[nodiscard]] SearchResult anneal(int runs, int sweeps, std::uint64_t seed) const;
+private:
+    const Graph& graph_;
+    Adjacency adjacency_;
+    [[nodiscard]] double gain(std::size_t vertex, const std::vector<std::uint8_t>& partition) const;
+};
+
 [[nodiscard]] Graph generate(
     std::size_t vertices, std::size_t edges, std::uint64_t seed,
     int minimum_weight = 1, int maximum_weight = 10);

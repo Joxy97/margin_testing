@@ -38,6 +38,7 @@ class DataRequest:
     data_type: str
     period: Period = Period.ONE_DAY
     provider_parameters: Mapping[str, Any] = field(default_factory=dict)
+    datasetIdentity: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instruments", tuple(self.instruments))

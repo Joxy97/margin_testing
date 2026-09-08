@@ -10,7 +10,7 @@ from typing import Callable, Protocol
 
 import numpy
 import pandas
-from scipy.stats import binom
+from .coverage_evaluation import evaluateCoverage
 
 from margin_engine import MarginReport
 from portfolio import Portfolio
@@ -50,6 +50,12 @@ class BacktestMarginEngine(Protocol):
 class MarginBacktester:
     """Evaluate daily margin coverage through the MarginEngine public API."""
 
+    @staticmethod
+    def _baselColor(probability: float):
+        """Compatibility for callers of the former coverage helper."""
+        from .coverage_evaluation import CoverageEvaluation
+        return CoverageEvaluation(1, 0, 0., 0., probability, 0.).baselColor
+
     def backtest(
         self,
         marginEngine: BacktestMarginEngine,
@@ -59,6 +65,7 @@ class MarginBacktester:
         completedResults: Sequence[DailyBacktestResult] = (),
         onDayCompleted: Callable[[tuple[DailyBacktestResult, ...]], None]
         | None = None,
+        onNewDay: Callable[[DailyBacktestResult], None] | None = None,
     ) -> BacktestResults:
         """Backtest one portfolio over the supplied trade dates."""
         if not isinstance(portfolio, Portfolio):
@@ -103,29 +110,17 @@ class MarginBacktester:
             )
             if onDayCompleted is not None:
                 onDayCompleted(tuple(daily_list))
+            if onNewDay is not None and backtest_date not in completed:
+                onNewDay(daily_list[-1])
         daily_results = tuple(daily_list)
-        violations = sum(result.breach for result in daily_results)
-        basel_probability = float(
-            binom.cdf(
-                violations - 1,
-                len(daily_results),
-                1.0 - confidenceLevel,
-            )
-        )
-        coverage_p_value = float(
-            binom.sf(
-                violations - 1,
-                len(daily_results),
-                1.0 - confidenceLevel,
-            )
-        )
+        evaluation = evaluateCoverage(daily_results, confidenceLevel)
         return BacktestResults(
             portfolio=portfolio,
             dailyResults=daily_results,
-            violations=violations,
-            baselProbability=basel_probability,
-            coveragePValue=coverage_p_value,
-            baselColor=self._baselColor(basel_probability),
+            violations=evaluation.violations,
+            baselProbability=evaluation.baselProbability,
+            coveragePValue=evaluation.coveragePValue,
+            baselColor=evaluation.baselColor,
             confidenceLevel=float(confidenceLevel),
             preparationSeconds=preparation_seconds,
         )
@@ -140,6 +135,7 @@ class MarginBacktester:
             [str, tuple[DailyBacktestResult, ...]], None
         ]
         | None = None,
+        onNewDay: Callable[[str, DailyBacktestResult], None] | None = None,
     ) -> BacktestBatchResults:
         """Backtest several named portfolios and their respective dates."""
         if not requests:
@@ -167,6 +163,7 @@ class MarginBacktester:
                         days,
                     )
                 ),
+                None if onNewDay is None else lambda day, item=normalized_name: onNewDay(item, day),
             )
         return BacktestBatchResults(results)
 
@@ -266,11 +263,3 @@ class MarginBacktester:
             dtype=float,
         )
         return float(((current / previous) - 1.0) @ weights)
-
-    @staticmethod
-    def _baselColor(probability: float) -> BaselColor:
-        if probability >= 0.9999:
-            return BaselColor.RED
-        if probability > 0.95:
-            return BaselColor.YELLOW
-        return BaselColor.GREEN

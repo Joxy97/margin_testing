@@ -1,0 +1,21 @@
+{
+  "source_results_dir": "results/cpu_full",
+  "output_dir": "results/torch_sbm_parameter_sweep",
+  "sizes": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
+  "trials": 3,
+  "graph_seed": 314159,
+  "device": "cpu",
+  "dtype": "float32",
+  "run_batch_size": 4,
+  "memory_limit_gb": 5,
+  "steps": 1000,
+  "runs": 4,
+  "baseline": {"dt": 1.0, "a0": 1.0, "c0": 0.0, "gamma": 0.0, "initial_scale": 0.05},
+  "sweep": {
+    "dt": [0.1, 0.5, 1.0, 2.0],
+    "a0": [0.5, 1.0, 2.0],
+    "c0": [0.0, 0.1, 0.5, 1.0],
+    "gamma": [0.0, 0.05, 0.1, 0.2],
+    "initial_scale": [0.01, 0.05, 0.1, 0.5]
+  }
+}

@@ -75,24 +75,42 @@ YAML / typed configs
         v
 MarginEngine
   -> RiskStateGenerator.createDataRequest(portfolio, date)
-  -> DataManager cache/backing store
-  -> DownloadManager + selected DataProvider for missing intervals
+  -> MarketDataAcquisition owns coverage and active fragments
+       -> DataManager cache/backing store
+       -> DownloadManager + selected DataProvider for missing intervals
   -> RiskStateGenerator.getRiskStates(context), lazily
   -> MarginCalculator
        |-> StateAwareGreedyMarginCalculator
        |    -> StateAwareGreedyRiskStateVisitor dispatches by risk-state type
        `-> BQMMarginCalculator
             |-> optional paired greedy comparison on the same state iterator
-            -> PortfolioRiskStateBQMVisitor encodes QUBO
-            -> BQMExecutionPolicy schedules one or many QUBOs
-            -> BQMSolver solves them
+            -> optimization.PortfolioRiskStateBQMVisitor encodes QUBO
+            -> BQMExecutionPolicy admits a BQMResourcePlan
+            -> BQMSolver consumes the same ordered shard plan
             -> manager decodes the greatest loss
-  -> MarginReport (margin, paired comparison margins, and stage timings)
+  -> CalculationOutcome (margin and immutable paired comparisons)
+  -> MarginReport (outcome and calculation-local stage timings)
 ```
+
+An optional `engine.numericalExecution: {type: torch, device: cuda:0}` selects
+`TorchReturnsExecution` after acquisition. It owns resident PCA, conditioning,
+correlation penalties, QUBO preparation, and same-device solving for one calculation.
+It supports returns grids and greedy/Torch calculators on one device. Host snapshots
+remain for seeds/scoring/repair; host caches, other risk families, and multi-GPU
+scheduling use the existing path when this block is omitted. When changing or
+benchmarking this path, read the resident-execution section of
+`SIMULATED_BIFURCATION.md` for lifetime, memory, and numerical parity limits.
 
 `MarginApplicationConfig` in `src/margin_engine/yaml_application.py` is the public YAML composition boundary. It converts primitive, safely loaded YAML into typed configs and runtime collaborators. `MarginEngineConfig` then constructs an independent pipeline; avoid hidden global runtime state.
 
-Backtesting calls only the public `MarginEngine` methods. It prefetches the union of required dates, calculates a daily margin, obtains realized prices, computes close-to-close realized P&L for each configured date, classifies breaches, and reports exact binomial coverage statistics. `run_backtest.py` snapshots the YAML, writes an experiment manifest, and stores atomic per-day checkpoints beneath `.checkpoints`; pass `--resume` to reuse checkpoints whose canonical request and configured-local-input fingerprint matches. Preparation time is reported separately from per-day acquisition time. `plot_backtest.py` renders a non-interactive PNG.
+`BacktestExperiment` owns YAML capture, input fingerprinting, checkpoints, and CSV publication; `run_backtest.py` is its CLI adapter. Backtesting calls only the public `MarginEngine` methods. It prefetches the union of required dates, calculates a daily margin, obtains realized prices, computes close-to-close realized P&L for each configured date, classifies breaches, and reports exact binomial coverage statistics. `run_backtest.py` snapshots the YAML, writes an experiment manifest, and stores atomic per-day checkpoints beneath `.checkpoints`; pass `--resume` to reuse checkpoints whose canonical request and configured-local-input fingerprint matches. Preparation time is reported separately from per-day acquisition time.
+Checkpoint schema 2 stores atomic files per day under an experiment fingerprint;
+the fingerprint includes timing version 2, so old CLI runs are recomputed. Starting
+without `--resume` clears matching prior completions. `BacktestResults.evaluate`
+owns exact coverage statistics for primary and matched-date comparison series.
+Timing version 2 reports inclusive calculation wall time and producer generation
+work separately; these overlap and must not be added. The manifest records the
+version while CSV column names remain compatible. `plot_backtest.py` renders a non-interactive PNG.
 
 ## Repository Map
 
@@ -124,11 +142,34 @@ Core services communicate with application types rather than third-party types. 
 
 ### Lazy and memory-aware processing
 
+Batch execution consults `BQMSolver.estimatedWorkingMemoryBytes` in addition to
+the configured numeric-memory multiplier. Torch estimates include trajectory,
+noise, packing and scoring workspace. `executionPolicy.prefetch: true` enables
+one CPU producer batch ahead of the active solve; allow extra host memory for
+that batch. The per-worker budget is an estimate, and one oversized problem
+per worker is still admitted to guarantee progress. The optional Python
+`BatchBQMExecutionPolicy.memoryObserver` reports active and producer-retained
+coefficient bytes, including the pending item, and peak combined retention.
+It does not measure Python contexts, allocator overhead, or device workspace.
+Use `tools/profile_margin_pipeline.py` for whole-process RSS and optional
+Torch transfer traces; see `SIMULATED_BIFURCATION.md` before interpreting timings.
+
+PCA numerical backends implement `PCABackend.fit` and return `PCAFit` host arrays.
+Configure `pcaGridProvider.backend: {type: torch, device: cuda:0}` for float64 GPU
+PCA, or use the default `numpy` backend. Date alignment and EW standardization
+remain in the grid construction layer; covariance, eigendecomposition, factor
+projection and residual calculations run on the selected backend. Torch uses
+observation-space PCA when assets outnumber observations. Torch imports are lazy. YAML stores `PCAGridProviderConfig`; each engine builds
+its own provider/backend/cache. The provider owns complete immutable fitted grids
+and validates cache entries against input values, dates, and ordered columns.
+Its optional `maxMemoryBytes` bounds retained numeric arrays; an oversized fit
+is returned without caching.
+
 Risk states and encoded problems are iterators so large scenario spaces need not be fully materialized. Preserve streaming behavior. Use `BatchBQMExecutionPolicy` and its `batchSize`, `maxBatchBytes`, and `memoryMultiplier` controls for bounded batching. Compact QUBOs use contiguous numeric arrays and one-hot `groupOffsets`; the tuple-based `oneHotGroups` view is a compatibility boundary. Reusable one-hot topology is cached by state shape and penalty.
 
 ### Explicit constraints and deterministic decoding
 
-Each asset contributes one one-hot group to a QUBO. Candidate selection first chooses the lowest-energy feasible sample. If no feasible sample exists, every returned candidate is projected and improved by deterministic categorical descent using the full QUBO, then rescored in float64. Decoding retains a deterministic defensive fallback for results supplied outside the solver path. Stable QUBO identity seeds make results independent of execution-policy batch boundaries and Torch device shards.
+Each asset contributes one one-hot group to a QUBO. Candidate selection first chooses the lowest-energy feasible sample. If no feasible sample exists, every returned candidate is projected and improved by deterministic categorical descent using the full QUBO, then rescored in float64. Decoding retains a deterministic defensive fallback for results supplied outside the solver path. `CandidateSelection` owns source-energy ranking and one lazy repair model per problem across candidate chunks. Stable QUBO identity seeds make results independent of execution-policy batch boundaries and Torch device shards.
 
 ### Numerical and temporal correctness
 
@@ -136,7 +177,8 @@ Each asset contributes one one-hot group to a QUBO. Candidate selection first ch
 - Market-data ranges are inclusive, dates must be unique where consumed, and instrument ordering must remain stable across requests, arrays, QUBO variables, samples, and decoding.
 - Portfolio instruments use canonical lexical order, and repeated long-form CSV positions are summed before risk generation.
 - Returns are standardized by exponentially weighted mean and variance under the same normalized weights used for PCA covariance. Eigenvector signs are canonicalized.
-- Correlation compatibility uses the undirected union of directed top-k nominations and a symmetric bivariate-Gaussian/Mahalanobis penalty.
+- Correlation compatibility uses the undirected union of directed top-k nominations and a symmetric bivariate-Gaussian/Mahalanobis penalty. Equal-strength nominations choose the lowest canonical asset index; nearest-residual distance ties choose the earliest observation, in both NumPy and Torch.
+- Experiment fingerprints include numerical model version 3 for this tie policy, so CLI resume recomputes checkpoints created under earlier model identities.
 - Empty return-bin fallback is opt-in; generated dense grids expose `fallbackAssetMask` so fallback use is auditable.
 - Validate shapes, finite values, binary samples, one-hot group indices, date bounds, and nonzero price denominators at public boundaries.
 - Preserve exact QUBO energy semantics: `offset + linear @ x + sum(bias * x[head] * x[tail])`.
@@ -152,7 +194,11 @@ Configuration and request dataclasses are generally frozen. Mapping inputs are c
 
 ### Option-market conventions
 
-`OptionMarketConvention` implementations own market-specific calibration behavior: pricing-model selection, spot/forward inputs, and historical underlying-price extraction. `VolatilitySmileCalibrator` and `VolatilityShockEstimator` select conventions at the dataframe boundary; derivative contracts remain independent of smiles and pricing models. Add a convention and register it with those services when supporting another option market. Implied volatility uses bounded, damped Newton-Raphson iterations; analytical vegas are used for European models and the pricing-model base class supplies a numerical vega for other models.
+`OptionMarketConvention` implementations own market-specific calibration behavior: pricing-model selection, spot/forward inputs, and historical underlying-price extraction. `VolatilitySmileCalibrator` and `VolatilityShockEstimator` select conventions at the dataframe boundary; derivative contracts remain independent of smiles and pricing models. `OptionMarketPreparer` validates canonical quote identities and creates one
+immutable `PreparedOptionMarket` shared by lazy scenarios. Dated shock estimation
+matches both interval endpoints and reports overlap/fallback diagnostics.
+`OptionScenarioValuator` uses the same pricing and carry conventions as calibration.
+Add a convention and register it with those services when supporting another option market. Implied volatility uses bounded, damped Newton-Raphson iterations; analytical vegas are used for European models and the pricing-model base class supplies a numerical vega for other models.
 
 ### Optional native acceleration
 
@@ -165,14 +211,15 @@ The root YAML contains `marginDate`, `portfolio`, `engine`, and optionally `back
 - Portfolio input is either inline `weights` or `csv`, optionally with `clientId`; CSV supports long `client_id,ticker,weight` and wide `client_id,<ticker>...` forms.
 - Providers are `local_csv`, `derivative_csv`, or `yfinance`; current provider selection is `local_first`.
 - Long-form option-chain input uses provider `derivative_csv` with data manager type `derivative_quotes`; see `config/options.example.csv`.
-- Download algorithms are `single_request` and `exponential_backoff`; chunkers are `date`, `instrument`, or nested `product` chunkers.
+- Download algorithms are `single_request` and `exponential_backoff`; chunkers are `date`, `instrument`, or nested `product` chunkers. Date batch sizes count inclusive, nonoverlapping days. Retry parameters are `time`, `maxAttempts`, `maxDelay`, and `jitter`; `requestInterval` independently paces successive chunks. Providers classify transient errors; permanent errors propagate. DownloadManager composes the configured strategy once.
+- `MarketDataAcquisition` preserves active fragments across cache eviction. Both storage schemas use `IntervalCoverage`, including successfully acquired empty intervals. Storage keys include provider/parameter/source-revision identity. Local CSV content digests are cached against path, size, mtime, and ctime (256 entries); URL sources require an explicit `revision` to invalidate unchanged requests. Legacy unscoped partitions remain readable directly but are not reused by newly scoped engine requests.
 - The data backing store type is `partitioned_pickle`.
 - Risk generators are `returns_vola_grid` and `correlated_returns_vola_grid`.
 - Risk generator `option_scenarios` creates shared underlying-price/volatility stresses for one-symbol derivative portfolios.
 - Margin calculators are `greedy`, `state_aware_greedy`, and `bqm`.
 - A `bqm` calculator may define `comparison: {type: state_aware_greedy, pnlAnchor: market}` to compute a paired greedy margin from the exact same lazy risk-state stream.
 - BQM execution policies are `sequential` and `batch`.
-- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, and `adaptive_torch_sbm`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
+- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, `adaptive_torch_sbm`, and `torch_svl`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
 
 Constructor options belong under `solver.constructorParameters`; per-call solve options belong under `solver.solverParameters`. Do not blur those lifecycles. When adding or renaming YAML options, update the strict parser, typed config, `config/margin.example.yaml`, and parser tests together.
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .correlated_returns_vola_grid_risk_state_generator import (
     CorrelatedReturnsVolaGridRiskStateGenerator,
 )
-from .pca_grid_provider import PCAGridProvider
+from .pca_grid_provider import PCAGridProvider, PCAGridProviderConfig
 from .returns_vola_grid_risk_state_generator import (
     ReturnsVolaGridRiskStateGenerator,
 )
@@ -16,7 +16,7 @@ from .option_scenario_risk_state_generator import OptionScenarioRiskStateGenerat
 class ReturnsVolaGridRiskStateGeneratorConfig:
     """Configuration for returns-volatility-grid generation."""
 
-    pcaGridProvider: PCAGridProvider | None = None
+    pcaGridProvider: PCAGridProvider | PCAGridProviderConfig | None = None
     ew_window: int = 30
     ew_lambda: float = 0.94
     components: int = 1
@@ -31,11 +31,14 @@ class ReturnsVolaGridRiskStateGeneratorConfig:
     maxInflationFactor: float = 5.0
 
     def _parameters(self) -> dict[str, object]:
-        return {
+        parameters = {
             name: value
             for name, value in vars(self).items()
             if name not in {"topKNeighbors", "correlationBlockBytes"}
         }
+        if isinstance(self.pcaGridProvider, PCAGridProviderConfig):
+            parameters["pcaGridProvider"] = self.pcaGridProvider.createProvider()
+        return parameters
 
     def createRiskStateGenerator(self) -> ReturnsVolaGridRiskStateGenerator:
         return ReturnsVolaGridRiskStateGenerator(**self._parameters())

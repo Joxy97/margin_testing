@@ -112,6 +112,8 @@ class VolatilityShockParameters:
     spotVolatility: float
     volOfVolatility: float
     rho: float
+    matchedIntervals: int = 0
+    correlationFallback: bool = True
 
     def predictedShift(self, priceShock: float) -> float:
         return self.rho * log(
@@ -148,36 +150,50 @@ class VolatilityShockEstimator:
         atmVolatilityHistory: dict[date, float],
         fallbackSpotVolatility: float,
     ) -> VolatilityShockParameters:
-        prices = self.marketConventions[optionInstrumentType].underlyingPrices(
+        prices = self.marketConventions[optionInstrumentType].underlyingPriceHistory(
             quotes, symbol
         )
-        returns = numpy.diff(numpy.log(prices)) if len(prices) > 1 else numpy.array([])
+        price_changes = self._datedChanges(prices)
+        returns = numpy.asarray(list(price_changes.values()))
         spot = self._ewma(returns)
         if not numpy.isfinite(spot) or spot <= 0.0:
             spot = fallbackSpotVolatility
 
-        ordered = sorted(atmVolatilityHistory.items())
-        atm = numpy.asarray([value for _, value in ordered], dtype=float)
-        vol_changes = numpy.diff(numpy.log(atm)) if len(atm) > 1 else numpy.array([])
+        volatility_changes = self._datedChanges(atmVolatilityHistory)
+        vol_changes = numpy.asarray(list(volatility_changes.values()))
         vol_of_vol = (
             float(numpy.std(vol_changes, ddof=1) * sqrt(self.tradingDaysPerYear))
             if len(vol_changes) >= self.minimumObservations
             else self.fallbackVolOfVolatility
         )
         rho = self.fallbackRho
-        if (
-            len(returns) >= self.minimumObservations
-            and len(vol_changes) >= self.minimumObservations
-        ):
-            count = min(len(returns), len(vol_changes))
-            correlation = numpy.corrcoef(returns[-count:], vol_changes[-count:])[0, 1]
+        correlation_fallback = True
+        matched = sorted(price_changes.keys() & volatility_changes.keys())
+        if len(matched) >= max(2, self.minimumObservations):
+            correlation = numpy.corrcoef(
+                [price_changes[key] for key in matched],
+                [volatility_changes[key] for key in matched],
+            )[0, 1]
             if numpy.isfinite(correlation):
                 rho = float(correlation)
+                correlation_fallback = False
         return VolatilityShockParameters(
             spotVolatility=max(float(spot), 1e-12),
             volOfVolatility=max(float(vol_of_vol), 1e-12),
             rho=rho,
+            matchedIntervals=len(matched),
+            correlationFallback=correlation_fallback,
         )
+
+    @staticmethod
+    def _datedChanges(history):
+        ordered = sorted(history.items())
+        values = numpy.asarray([value for _, value in ordered], dtype=float)
+        if not numpy.isfinite(values).all() or numpy.any(values <= 0):
+            raise ValueError("Dated price and volatility observations must be finite and positive")
+        changes = numpy.diff(numpy.log(values))
+        return {(start[0], end[0]): float(change)
+                for start, end, change in zip(ordered, ordered[1:], changes)}
 
     def _ewma(self, values) -> float:
         variance = None

@@ -23,7 +23,11 @@ from .optimization.optimization_solver.bqm_solver import (
     SequentialBQMExecutionPolicy,
 )
 
+from .calculation_outcome import CalculationOutcome
+
 __all__ = [
+    "CalculationOutcome",
+
     "BQMMarginCalculator",
     "BQMMarginCalculatorConfig",
     "BQMExecutionPolicy",

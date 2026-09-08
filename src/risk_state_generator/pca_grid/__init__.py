@@ -1,6 +1,6 @@
 """PCA-grid types."""
 
 from .pca_grid import PCAGrid
-from .returns_pca_grid import ReturnsPCAGrid
+from .returns_pca_grid import ReturnsPCAGrid, ReturnsPCAInput
 
-__all__ = ["PCAGrid", "ReturnsPCAGrid"]
+__all__ = ["ReturnsPCAInput", "PCAGrid", "ReturnsPCAGrid"]

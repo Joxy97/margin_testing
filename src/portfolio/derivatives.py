@@ -6,7 +6,24 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, NamedTuple
+
+
+class DerivativeQuoteIdentity(NamedTuple):
+    """Canonical quote fields, tuple-compatible with existing persisted keys."""
+
+    instrumentType: str
+    symbol: str
+    expirationDate: date
+    strike: str
+    optionType: str
+    exerciseStyle: str
+
+    @classmethod
+    def create(cls, instrumentType, symbol, expirationDate=date.min, strike=0,
+               optionType="", exerciseStyle=""):
+        return cls(str(instrumentType), str(symbol), expirationDate,
+                   f"{float(strike):.12g}", str(optionType), str(exerciseStyle))
 
 
 def _positive(name: str, value: Decimal) -> None:
@@ -121,14 +138,14 @@ DerivativeContract = (
 )
 
 
-def contractKey(contract: DerivativeContract) -> tuple[str, str, date, str, str, str]:
+def contractKey(contract: DerivativeContract) -> DerivativeQuoteIdentity:
     """Return the stable fields used to match a contract to a market quote."""
 
-    return (
+    return DerivativeQuoteIdentity.create(
         contract.instrumentType,
         contract.symbol,
         getattr(contract, "expirationDate", date.min),
-        f"{float(getattr(contract, 'strike', 0)):.12g}",
+        getattr(contract, "strike", 0),
         getattr(contract, "optionType", ""),
         getattr(contract, "exerciseStyle", ""),
     )

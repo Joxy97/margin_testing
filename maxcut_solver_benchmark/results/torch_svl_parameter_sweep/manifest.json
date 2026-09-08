@@ -1,0 +1,122 @@
+{
+  "baseline": {
+    "damping": 0.1,
+    "dt": 0.01,
+    "integrator": "euler_maruyama",
+    "mass": 1.0,
+    "problem_scale_final": 1.0,
+    "problem_scale_initial": 0.0,
+    "runs": 4,
+    "steps": 1000,
+    "temperature": 0.01,
+    "transverse_field_final": 0.0,
+    "transverse_field_initial": 1.0
+  },
+  "configuration_count": 20,
+  "csv_schema": [
+    "timestamp_utc",
+    "configuration_id",
+    "parameter",
+    "parameter_value",
+    "instance_id",
+    "vertices",
+    "edges",
+    "trial",
+    "solver_seed",
+    "steps",
+    "runs",
+    "dt",
+    "mass",
+    "damping",
+    "temperature",
+    "integrator",
+    "transverse_field_initial",
+    "transverse_field_final",
+    "problem_scale_initial",
+    "problem_scale_final",
+    "solve_seconds",
+    "energy",
+    "cut",
+    "reference_cut",
+    "quality",
+    "success",
+    "estimated_bytes"
+  ],
+  "design": "one_parameter_at_a_time",
+  "device": "cpu",
+  "dtype": "float32",
+  "graph_seed": 314159,
+  "memory_limit_gb": 5.0,
+  "output_dir": "results/torch_svl_parameter_sweep",
+  "run_batch_size": 4,
+  "sizes": [
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768
+  ],
+  "source_results_dir": "results/cpu_full",
+  "started_utc": "2026-08-31T18:47:32.740018+00:00",
+  "sweep": {
+    "damping": [
+      0.05,
+      0.1,
+      0.2
+    ],
+    "dt": [
+      0.005,
+      0.01,
+      0.02
+    ],
+    "integrator": [
+      "euler_maruyama",
+      "weak_order_2"
+    ],
+    "mass": [
+      0.5,
+      1.0,
+      2.0
+    ],
+    "problem_scale_final": [
+      0.5,
+      1.0,
+      2.0
+    ],
+    "problem_scale_initial": [
+      0.0,
+      0.1
+    ],
+    "runs": [
+      2,
+      4,
+      8
+    ],
+    "steps": [
+      500,
+      1000,
+      2000
+    ],
+    "temperature": [
+      0.0,
+      0.01,
+      0.05
+    ],
+    "transverse_field_final": [
+      0.0,
+      0.1
+    ],
+    "transverse_field_initial": [
+      0.5,
+      1.0,
+      2.0
+    ]
+  },
+  "trials": 3
+}

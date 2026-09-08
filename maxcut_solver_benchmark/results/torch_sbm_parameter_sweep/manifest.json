@@ -1,0 +1,93 @@
+{
+  "baseline": {
+    "a0": 1.0,
+    "c0": 0.0,
+    "dt": 1.0,
+    "gamma": 0.0,
+    "initial_scale": 0.05
+  },
+  "configuration_count": 15,
+  "csv_schema": [
+    "timestamp_utc",
+    "configuration_id",
+    "parameter",
+    "parameter_value",
+    "instance_id",
+    "vertices",
+    "edges",
+    "trial",
+    "solver_seed",
+    "runs",
+    "steps",
+    "dt",
+    "a0",
+    "c0",
+    "gamma",
+    "initial_scale",
+    "solve_seconds",
+    "energy",
+    "cut",
+    "reference_cut",
+    "quality",
+    "success",
+    "estimated_bytes"
+  ],
+  "design": "one_parameter_at_a_time",
+  "device": "cpu",
+  "dtype": "float32",
+  "expected_records": 495,
+  "graph_seed": 314159,
+  "memory_limit_gb": 5.0,
+  "output_dir": "results/torch_sbm_parameter_sweep",
+  "run_batch_size": 4,
+  "runs": 4,
+  "sizes": [
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768
+  ],
+  "solver": "torch_sbm",
+  "source_results_dir": "results/cpu_full",
+  "started_utc": "2026-08-31T20:46:11.445738+00:00",
+  "steps": 1000,
+  "sweep": {
+    "a0": [
+      0.5,
+      1.0,
+      2.0
+    ],
+    "c0": [
+      0.0,
+      0.1,
+      0.5,
+      1.0
+    ],
+    "dt": [
+      0.1,
+      0.5,
+      1.0,
+      2.0
+    ],
+    "gamma": [
+      0.0,
+      0.05,
+      0.1,
+      0.2
+    ],
+    "initial_scale": [
+      0.01,
+      0.05,
+      0.1,
+      0.5
+    ]
+  },
+  "trials": 3
+}

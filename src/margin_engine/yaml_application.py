@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from risk_state_generator.pca_backend import PCABackendConfig
+
 from data_manager import (
     DataManagerConfig,
     DerivativeQuoteDataManagerConfig,
@@ -87,9 +89,12 @@ class MarginApplicationConfig:
     def fromYaml(cls, path: str | Path) -> MarginApplicationConfig:
         """Load a complete application configuration from a safe YAML file."""
         config_path = Path(path).expanduser().resolve()
-        with config_path.open("r", encoding="utf-8") as stream:
-            document = yaml.safe_load(stream)
-        return _YamlConfigParser(config_path.parent).parse(document)
+        return cls.fromYamlText(config_path.read_text(encoding="utf-8"), config_path.parent)
+
+    @classmethod
+    def fromYamlText(cls, text: str, baseDirectory: str | Path) -> MarginApplicationConfig:
+        """Parse a captured document with paths relative to its source directory."""
+        return _YamlConfigParser(Path(baseDirectory).expanduser().resolve()).parse(yaml.safe_load(text))
 
     def createEngine(self) -> MarginEngine:
         return MarginEngine(self.engine)
@@ -104,30 +109,9 @@ class MarginApplicationConfig:
         resume: bool = False,
     ) -> BacktestBatchResults:
         """Run every named portfolio request from the YAML backtest block."""
-        from backtesting import MarginBacktester
+        from backtesting.experiment import BacktestExperiment
 
-        if not self.backtestRequests:
-            raise ValueError("YAML configuration does not contain a backtest block")
-        if resume and checkpointStore is None:
-            raise ValueError("resume requires a checkpointStore")
-        return MarginBacktester().backtestMany(
-            self.createEngine(),
-            self.backtestRequests,
-            self.backtestConfidenceLevel,
-            (
-                {
-                    name: checkpointStore.load(name)
-                    for name in self.backtestRequests
-                }
-                if resume and checkpointStore is not None
-                else None
-            ),
-            (
-                checkpointStore.save
-                if checkpointStore is not None
-                else None
-            ),
-        )
+        return BacktestExperiment(self, checkpointStore=checkpointStore).run(resume).results
 
 
 class _YamlConfigParser:
@@ -256,10 +240,20 @@ class _YamlConfigParser:
                 "dataManager",
                 "riskStateGenerator",
                 "marginCalculator",
+                "numericalExecution",
             },
             "engine",
         )
+        numerical_execution = None
+        if "numericalExecution" in config:
+            from .numerical_execution_config import TorchNumericalExecutionConfig
+            numerical = self._mapping(config["numericalExecution"], "engine.numericalExecution")
+            self._only(numerical, {"type", "device"}, "engine.numericalExecution")
+            if numerical.get("type") != "torch":
+                raise ValueError("engine.numericalExecution.type must be torch")
+            numerical_execution = TorchNumericalExecutionConfig(device=numerical.get("device", "auto"))
         return MarginEngineConfig(
+            numericalExecution=numerical_execution,
             downloadManager=self._downloadManager(
                 config.get("downloadManager", {})
             ),
@@ -300,6 +294,15 @@ class _YamlConfigParser:
                 config.get("downloadParameters", {}),
                 "engine.downloadManager.downloadParameters",
             )
+        )
+        algorithm = str(config.get("downloadAlgorithm", "single_request"))
+        if algorithm not in {"single_request", "exponential_backoff"}:
+            raise ValueError(f"Unknown download algorithm: {algorithm!r}")
+        self._only(
+            download_parameters,
+            {"chunker", "time", "maxAttempts", "maxDelay", "jitter", "requestInterval"}
+            if algorithm == "exponential_backoff" else set(),
+            "engine.downloadManager.downloadParameters",
         )
         if "chunker" in download_parameters:
             download_parameters["chunker"] = self._chunker(
@@ -430,12 +433,19 @@ class _YamlConfigParser:
             provider_config = self._mapping(pca_provider, f"{path}.pcaGridProvider")
             self._only(
                 provider_config,
-                {"cacheType", "memorySize"},
+                {"cacheType", "memorySize", "maxMemoryBytes", "backend"},
                 f"{path}.pcaGridProvider",
             )
-            config["pcaGridProvider"] = PCAGridProvider(
+            backend_path = f"{path}.pcaGridProvider.backend"
+            backend_config = self._mapping(provider_config.get("backend", {}), backend_path)
+            self._only(backend_config, {"type", "device"}, backend_path)
+            from risk_state_generator.pca_grid_provider import PCAGridProviderConfig
+
+            config["pcaGridProvider"] = PCAGridProviderConfig(
                 cacheType=str(provider_config.get("cacheType", "lru")),
                 memorySize=int(provider_config.get("memorySize", 128)),
+                maxMemoryBytes=provider_config.get("maxMemoryBytes"),
+                backend=PCABackendConfig(**backend_config),
             )
         if "scenariosPerComponents" in config:
             config["scenariosPerComponents"] = tuple(
@@ -525,13 +535,7 @@ class _YamlConfigParser:
             config.pop("executionPolicy", {"type": "sequential"}),
             f"{path}.executionPolicy",
         )
-        visitor = None
-        if "structuralCacheMemorySize" in config:
-            visitor = PortfolioRiskStateBQMVisitor(
-                StructuralQUBOTemplateCache(
-                    int(config.pop("structuralCacheMemorySize"))
-                )
-            )
+        structural_cache_size = int(config.pop("structuralCacheMemorySize", 16))
         self._only(config, {"modelParameters"}, path)
         return BQMMarginCalculatorConfig(
             solver=solver_config,
@@ -541,7 +545,7 @@ class _YamlConfigParser:
                     f"{path}.modelParameters",
                 )
             ),
-            bqmVisitor=visitor,
+            structuralCacheMemorySize=structural_cache_size,
             executionPolicy=policy,
             comparisonPnlAnchor=comparison_pnl_anchor,
         )
@@ -560,7 +564,7 @@ class _YamlConfigParser:
         if policy_type == "batch":
             self._only(
                 config,
-                {"batchSize", "maxBatchBytes", "memoryMultiplier"},
+                {"batchSize", "maxBatchBytes", "memoryMultiplier", "prefetch"},
                 path,
             )
             return BatchBQMExecutionPolicy(
@@ -571,6 +575,7 @@ class _YamlConfigParser:
                     else int(config["maxBatchBytes"])
                 ),
                 memoryMultiplier=float(config.get("memoryMultiplier", 3.0)),
+                prefetch=config.get("prefetch", False),
             )
         raise ValueError(f"Unknown BQM execution policy: {policy_type!r}")
 

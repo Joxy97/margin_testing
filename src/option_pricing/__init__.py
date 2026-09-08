@@ -21,7 +21,12 @@ from .models import (
     impliedVolatility,
 )
 
+from .prepared_market import PreparedOptionMarket, OptionMarketPreparer
+
 __all__ = [
+    "PreparedOptionMarket",
+    "OptionMarketPreparer",
+
     "AmericanEquityBinomialPricingModel",
     "AmericanFuturesBinomialPricingModel",
     "Black76PricingModel",

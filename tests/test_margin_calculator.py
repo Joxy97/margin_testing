@@ -267,14 +267,17 @@ class MarginCalculatorTest(unittest.TestCase):
             comparisonPnlAnchor="market",
         )
 
-        margin = calculator.calculateMargin(
+        outcome = calculator.calculateOutcome(
             risk_states(),
             Portfolio(weights={"AAPL": Decimal("10")}),
         )
 
         self.assertEqual(consumed, [-0.05, -0.10])
-        self.assertAlmostEqual(margin, 1.0)
-        self.assertEqual(calculator.lastComparisonMargins, {"greedy": 1.0})
+        self.assertAlmostEqual(outcome.margin, 1.0)
+        self.assertEqual(outcome.comparisonMargins, {"greedy": 1.0})
+        empty = calculator.calculateOutcome([], Portfolio(weights={"AAPL": Decimal("10")}))
+        self.assertEqual(empty.comparisonMargins, {"greedy": 0.0})
+        self.assertEqual(outcome.comparisonMargins, {"greedy": 1.0})
 
     def test_margin_is_never_negative(self) -> None:
         risk_state = ReturnsVolaGridRiskState(

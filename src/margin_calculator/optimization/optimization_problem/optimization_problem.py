@@ -1,7 +1,3 @@
-"""Base type for problems accepted by optimization solvers."""
+"""Compatibility name for the implemented optimization problem family."""
 
-
-class OptimizationProblem:
-    """Represent a problem that can be passed to an optimization solver."""
-
-    pass
+from .qubo_problem import QUBOProblem as OptimizationProblem

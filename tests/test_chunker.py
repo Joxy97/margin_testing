@@ -24,6 +24,11 @@ def data_request() -> DataRequest:
 
 
 class ChunkerTest(unittest.TestCase):
+    def test_single_day_is_downloaded(self) -> None:
+        command = data_request().withChanges(end_date=date(2024, 1, 1))
+
+        self.assertEqual(list(DateChunker(2).createChunks(command)), [command])
+
     def test_instrument_chunker_preserves_other_command_values(self) -> None:
         command = data_request()
 
@@ -50,8 +55,9 @@ class ChunkerTest(unittest.TestCase):
                 for chunk in chunks
             ],
             [
-                (date(2024, 1, 1), date(2024, 1, 3)),
-                (date(2024, 1, 3), date(2024, 1, 5)),
+                (date(2024, 1, 1), date(2024, 1, 2)),
+                (date(2024, 1, 3), date(2024, 1, 4)),
+                (date(2024, 1, 5), date(2024, 1, 5)),
             ],
         )
 
@@ -60,12 +66,14 @@ class ChunkerTest(unittest.TestCase):
 
         chunks = list(chunker.createChunks(data_request()))
 
-        self.assertEqual(len(chunks), 4)
+        self.assertEqual(len(chunks), 6)
         self.assertEqual(
             [chunk.instruments for chunk in chunks],
             [
                 ("AAPL", "MSFT"),
                 ("AAPL", "MSFT"),
+                ("AAPL", "MSFT"),
+                ("NVDA",),
                 ("NVDA",),
                 ("NVDA",),
             ],

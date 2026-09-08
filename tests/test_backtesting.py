@@ -24,6 +24,60 @@ from portfolio import Portfolio
 
 
 class MarginBacktesterTest(unittest.TestCase):
+    def test_starting_fresh_clears_only_the_selected_experiment(self) -> None:
+        from backtesting.backtest_results import DailyBacktestResult
+        day = DailyBacktestResult(date(2024, 1, 1), 1, -.5, 1, 100, False)
+        with tempfile.TemporaryDirectory() as directory:
+            store = BacktestCheckpointStore(directory, "a")
+            other = BacktestCheckpointStore(directory, "b")
+            store.saveDay("client", day)
+            other.saveDay("client", day)
+            store.startFresh("client")
+            self.assertEqual(store.load("client"), ())
+            self.assertEqual(other.load("client"), (day,))
+
+
+    def test_incremental_checkpoints_restore_order_and_ignore_other_experiments(self) -> None:
+        from backtesting.backtest_results import DailyBacktestResult
+        first = DailyBacktestResult(date(2024, 1, 1), 1, -.5, 1, 100, False,
+                                    comparisonMargins={"greedy": .8})
+        second = DailyBacktestResult(date(2024, 1, 2), 2, -.5, 1, 200, False)
+        with tempfile.TemporaryDirectory() as directory:
+            store = BacktestCheckpointStore(directory, "experiment-a")
+            store.saveDay("client", second)
+            store.saveDay("client", first)
+            restored = BacktestCheckpointStore(directory, "experiment-a").load("client")
+            self.assertEqual(restored, (first, second))
+            self.assertEqual(BacktestCheckpointStore(directory, "experiment-b").load("client"), ())
+
+    def test_incremental_completion_emits_only_new_days(self) -> None:
+        first, second = date(2024, 1, 2), date(2024, 1, 3)
+        portfolio = Portfolio(weights={"A": Decimal(10)})
+        engine = self._engine({first: MarginReport(1), second: MarginReport(1)},
+                              {first: -.5, second: -.5})
+        completed = MarginBacktester().backtest(engine, portfolio, [first]).dailyResults
+        emitted = []
+        result = MarginBacktester().backtest(engine, portfolio, [first, second],
+            completedResults=completed, onNewDay=emitted.append)
+        self.assertEqual([day.date for day in emitted], [second])
+        self.assertEqual(result.days, 2)
+
+    def test_comparison_averages_use_only_matched_dates(self) -> None:
+        from backtesting.backtest_results import BacktestResults, DailyBacktestResult
+        result = BacktestResults(
+            portfolio=Portfolio(weights={"A": Decimal(1)}),
+            dailyResults=(
+                DailyBacktestResult(date(2024, 1, 1), 1., -2., 1., 100., True,
+                                    comparisonMargins={"greedy": 2.}),
+                DailyBacktestResult(date(2024, 1, 2), 100., 1., 1., 10000., False),
+            ), violations=1, baselProbability=.81, coveragePValue=.19,
+            baselColor=BaselColor.GREEN, confidenceLevel=.9,
+        )
+        comparison = result.evaluate("greedy")
+        self.assertEqual((comparison.days, comparison.violations,
+                          comparison.averageMarginDifference), (1, 0, -1.))
+        self.assertAlmostEqual(comparison.coveragePValue, 1.)
+
     @staticmethod
     def _engine(
         reports: dict[date, MarginReport],

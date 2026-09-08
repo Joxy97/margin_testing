@@ -7,7 +7,9 @@ option(SBM_NATIVE_OPTIMIZATION "Enable native CPU SIMD instructions" OFF)
 
 add_library(sbm
     src/sbm/model.cpp
+    src/sbm/preparation.cpp
     src/sbm/maxcut.cpp
+    src/sbm/maxcut_search.cpp
     src/sbm/cpu_solver.cpp
 )
 set_target_properties(sbm PROPERTIES POSITION_INDEPENDENT_CODE ON)

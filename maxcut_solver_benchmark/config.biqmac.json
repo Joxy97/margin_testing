@@ -1,0 +1,23 @@
+{
+  "data_dir": "biqmac_data",
+  "output_dir": "results/biqmac_30s",
+  "instances": [
+    "rudy/g05_60.0", "rudy/g05_80.0", "rudy/g05_100.0",
+    "rudy/pm1s_80.0", "rudy/pm1s_100.0",
+    "rudy/pm1d_80.0", "rudy/pm1d_100.0",
+    "rudy/w01_100.0", "rudy/w05_100.0", "rudy/w09_100.0",
+    "rudy/pw01_100.0", "rudy/pw09_100.0"
+  ],
+  "references": {
+    "g05_60.0": 536, "g05_80.0": 929, "g05_100.0": 1430,
+    "pm1s_80.0": 79, "pm1s_100.0": 127,
+    "pm1d_80.0": 227, "pm1d_100.0": 340,
+    "w01_100.0": 651, "w05_100.0": 1646, "w09_100.0": 2121,
+    "pw01_100.0": 2019, "pw09_100.0": 13585
+  },
+  "solvers": ["torch_svl", "ortools_cpsat", "scip", "highs", "cplex"],
+  "time_limit_seconds": 30,
+  "memory_limit_gb": 6,
+  "torch_trials": 3,
+  "seed": 314159
+}

@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 class LocalCSVDataProvider(DataProvider):
     """Load instrument data from a CSV file or URL."""
 
+    def sourceRevision(self, command: DataRequest):
+        from .source_identity import localSourceRevision
+        return localSourceRevision(command.provider_parameters)
+
     def getDataTypes(self) -> set[str]:
         """Return the data types available in a local price file."""
         return {"closePrices"}
@@ -53,15 +57,12 @@ class LocalCSVDataProvider(DataProvider):
         ]
         if not frames:
             raise ValueError("at least one CSV location must be supplied")
-        data = pandas.concat(frames, ignore_index=True)
-        data["date"] = pandas.to_datetime(data["date"], errors="raise")
-        data = data.drop_duplicates(subset="date", keep="last").sort_values("date")
-        data = self._extractInstruments(data, list(command.instruments))
-        return self._extractDates(
-            data,
-            command.start_date,
-            command.end_date,
-        )
+        from ..data_assembly import assembleData
+        columns = set().union(*(frame.columns for frame in frames))
+        missing = set(command.instruments) - columns
+        if missing:
+            raise ValueError(f"CSV data is missing instruments: {sorted(missing)}")
+        return assembleData(command, frames)
 
     @staticmethod
     def _normalizeDateColumn(data: pandas.DataFrame) -> pandas.DataFrame:
