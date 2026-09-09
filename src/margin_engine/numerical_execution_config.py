@@ -7,9 +7,10 @@ from risk_state_generator.pca_backend import PCABackendConfig
 @dataclass(frozen=True)
 class TorchNumericalExecutionConfig:
     device: str = "auto"
+    dtype: str = "auto"
 
     def __post_init__(self):
-        PCABackendConfig(type="torch", device=self.device)
+        PCABackendConfig(type="torch", device=self.device, dtype=self.dtype)
 
     def createExecution(self, generator, calculator):
         from .torch_returns_execution import TorchReturnsExecution

@@ -89,7 +89,11 @@ class CandidateSelection:
                 previous = int(selected[0]) if len(selected) == 1 else None
                 for variable in selected:
                     repaired[variable] = 0
-                    local_fields -= adjacency.getcol(int(variable)).toarray().ravel()
+                    # The repair model is canonical CSC: each column has
+                    # unique row indices, including after duplicate QUBO terms
+                    # are summed. Update only its nonzero local fields.
+                    start, stop = adjacency.indptr[variable : variable + 2]
+                    local_fields[adjacency.indices[start:stop]] -= adjacency.data[start:stop]
                 costs = local_fields[variables]
                 best_position = int(numpy.argmin(costs))
                 chosen = int(variables[best_position])
@@ -100,10 +104,10 @@ class CandidateSelection:
                     if costs[best_position] >= costs[previous_position] - 1e-12:
                         chosen = previous
                 repaired[chosen] = 1
-                local_fields += adjacency.getcol(chosen).toarray().ravel()
+                start, stop = adjacency.indptr[chosen : chosen + 2]
+                local_fields[adjacency.indices[start:stop]] += adjacency.data[start:stop]
                 changed |= previous != chosen
             if not changed:
                 break
         result = tuple(int(value) for value in repaired)
         return result, problem.energy(result)
-

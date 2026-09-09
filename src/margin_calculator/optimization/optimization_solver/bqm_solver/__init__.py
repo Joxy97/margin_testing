@@ -28,6 +28,7 @@ from .classical_dwave_bqm_solvers import (
 from .sbm_bqm_solver import SBMBQMSolver
 from .torch_sbm_bqm_solver import TorchSBMBQMSolver
 from .torch_svl_bqm_solver import TorchSVLBQMSolver
+from .torch_categorical_bqm_solver import TorchCategoricalBQMSolver
 from ...optimization_problem.qubo_problem import QUBOProblem
 
 from .resource_plan import BQMResourcePlan
@@ -63,6 +64,7 @@ __all__ = [
     "TabuBQMSolver",
     "TorchSBMBQMSolver",
     "TorchSVLBQMSolver",
+    "TorchCategoricalBQMSolver",
     "TreeDecompositionBQMSolver",
     "TreeDecompositionSamplerBQMSolver",
 ]

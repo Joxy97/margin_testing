@@ -143,10 +143,79 @@ class DeviceResidentPipelineTest(unittest.TestCase):
             config = self.configuration(directory, calculator)
             config["engine"]["numericalExecution"]["device"] = "cuda:0"
             report = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
-            self.assertAlmostEqual(report.margin, 0.1798027685847499, places=10)
-            self.assertAlmostEqual(report.comparisonMargins["greedy"], 0.1798027685847499, places=10)
+            self.assertAlmostEqual(report.margin, 0.1798027685847499, delta=2e-6)
+            self.assertAlmostEqual(report.comparisonMargins["greedy"], 0.1798027685847499, delta=2e-6)
+            self.assertEqual(report.numericalDiagnostics["dtype"], "float32")
             self.assertEqual(report.numericalDiagnostics["device"], "cuda:0")
             self.assertEqual(report.numericalDiagnostics["peakBatchProblems"], 2)
+
+    def test_float32_risk_pipeline_preserves_margin_and_halves_fit_storage(self):
+        import torch
+        import numpy
+        import pandas
+        from unittest.mock import patch
+        from margin_engine.torch_returns_execution import TorchReturnsExecution
+        encode = TorchReturnsExecution._encode
+        captured = []
+
+        def capture(execution, weighted, grid, *args):
+            for name in ("returns", "center", "nearest", "sigma", "means", "scales"):
+                self.assertEqual(getattr(grid, name).dtype, torch.float32)
+            result = encode(execution, weighted, grid, *args)
+            self.assertEqual(result[0].linear.dtype, torch.float32)
+            self.assertEqual(result[0].biases.dtype, torch.float32)
+            self.assertEqual(result[0].source.linear.dtype, numpy.float64)
+            captured.append(result[0])
+            return result
+
+        devices = ["cpu"] + (["cuda:0"] if torch.cuda.is_available() else [])
+        for device in devices:
+            for correlated in (False, True):
+                with self.subTest(device=device, correlated=correlated), tempfile.TemporaryDirectory() as directory:
+                    config = self.configuration(directory)
+                    rng = numpy.random.default_rng(512)
+                    names = [f"A{index:02d}" for index in range(16)]
+                    data = pandas.DataFrame(100 * numpy.exp(rng.normal(0, .02, (11, 16)).cumsum(axis=0)), columns=names)
+                    data.insert(0, "date", pandas.date_range("2024-01-01", periods=11))
+                    data.to_csv(Path(directory) / "prices.csv", index=False)
+                    config["portfolio"]["weights"] = {name: (-7 if index % 2 else 10) for index, name in enumerate(names)}
+                    config["engine"]["riskStateGenerator"].update(
+                        type="correlated_returns_vola_grid" if correlated else "returns_vola_grid",
+                        components=2, scenariosPerComponents=[3, 3], nZBins=5)
+                    reference = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
+                    config["engine"]["numericalExecution"].update(device=device, dtype="float32")
+                    single = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
+                    self.assertAlmostEqual(single.margin, reference.margin, delta=2e-5)
+                    self.assertEqual(single.numericalDiagnostics["residentFitBytes"] * 2,
+                                     reference.numericalDiagnostics["residentFitBytes"])
+                    for solver in ("torch_sbm", "adaptive_torch_sbm", "torch_svl"):
+                        config["engine"]["marginCalculator"] = {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
+                            "solver": {"type": solver, "constructorParameters": {"device": device},
+                                       "solverParameters": {"steps": 8, "runs": 3, "run_batch_size": 2}},
+                            "executionPolicy": {"type": "batch", "batchSize": 2}}
+                        with patch.object(TorchReturnsExecution, "_encode", capture):
+                            report = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
+                        self.assertAlmostEqual(report.comparisonMargins["greedy"], reference.margin, delta=2e-5)
+                        self.assertGreaterEqual(report.margin, 0.)
+                        self.assertLessEqual(report.margin, report.comparisonMargins["greedy"] + 2e-5)
+        self.assertTrue(captured)
+
+    def test_yaml_precision_is_strict_and_reaches_the_typed_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.configuration(directory)
+            for dtype in ("auto", "float32", "float64"):
+                config["engine"]["numericalExecution"]["dtype"] = dtype
+                config["engine"]["riskStateGenerator"]["pcaGridProvider"] = {
+                    "backend": {"type": "torch", "device": "cpu", "dtype": dtype}}
+                application = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory)
+                self.assertEqual(application.engine.numericalExecution.dtype, dtype)
+                self.assertEqual(application.engine.riskStateGenerator.pcaGridProvider.backend.dtype, dtype)
+            for section in (config["engine"]["numericalExecution"],
+                            config["engine"]["riskStateGenerator"]["pcaGridProvider"]["backend"]):
+                section["dtype"] = "float16"
+                with self.assertRaisesRegex(ValueError, "dtype"):
+                    MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory)
+                section["dtype"] = "auto"
 
     def test_fallback_bins_remain_auditable_in_resident_execution(self):
         with tempfile.TemporaryDirectory() as directory:

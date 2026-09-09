@@ -155,8 +155,10 @@ Use `tools/profile_margin_pipeline.py` for whole-process RSS and optional
 Torch transfer traces; see `SIMULATED_BIFURCATION.md` before interpreting timings.
 
 PCA numerical backends implement `PCABackend.fit` and return `PCAFit` host arrays.
-Configure `pcaGridProvider.backend: {type: torch, device: cuda:0}` for float64 GPU
-PCA, or use the default `numpy` backend. Date alignment and EW standardization
+Configure `pcaGridProvider.backend: {type: torch, device: cuda:0}` for float32 GPU
+PCA, or use the default `numpy` backend. Torch risk precision accepts `dtype: auto`
+(float32 on GPU, float64 on CPU), `float32`, or `float64`; this also applies to
+`engine.numericalExecution`. Original-QUBO scoring and repair remain float64. Date alignment and EW standardization
 remain in the grid construction layer; covariance, eigendecomposition, factor
 projection and residual calculations run on the selected backend. Torch uses
 observation-space PCA when assets outnumber observations. Torch imports are lazy. YAML stores `PCAGridProviderConfig`; each engine builds
@@ -178,7 +180,7 @@ Each asset contributes one one-hot group to a QUBO. Candidate selection first ch
 - Portfolio instruments use canonical lexical order, and repeated long-form CSV positions are summed before risk generation.
 - Returns are standardized by exponentially weighted mean and variance under the same normalized weights used for PCA covariance. Eigenvector signs are canonicalized.
 - Correlation compatibility uses the undirected union of directed top-k nominations and a symmetric bivariate-Gaussian/Mahalanobis penalty. Equal-strength nominations choose the lowest canonical asset index; nearest-residual distance ties choose the earliest observation, in both NumPy and Torch.
-- Experiment fingerprints include numerical model version 3 for this tie policy, so CLI resume recomputes checkpoints created under earlier model identities.
+- Experiment fingerprints include numerical model version 4 for the GPU float32 default and tie policy, so CLI resume recomputes checkpoints created under earlier model identities.
 - Empty return-bin fallback is opt-in; generated dense grids expose `fallbackAssetMask` so fallback use is auditable.
 - Validate shapes, finite values, binary samples, one-hot group indices, date bounds, and nonzero price denominators at public boundaries.
 - Preserve exact QUBO energy semantics: `offset + linear @ x + sum(bias * x[head] * x[tail])`.
@@ -219,7 +221,7 @@ The root YAML contains `marginDate`, `portfolio`, `engine`, and optionally `back
 - Margin calculators are `greedy`, `state_aware_greedy`, and `bqm`.
 - A `bqm` calculator may define `comparison: {type: state_aware_greedy, pnlAnchor: market}` to compute a paired greedy margin from the exact same lazy risk-state stream.
 - BQM execution policies are `sequential` and `batch`.
-- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, `adaptive_torch_sbm`, and `torch_svl`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
+- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, `adaptive_torch_sbm`, `torch_svl`, and `torch_categorical`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
 
 Constructor options belong under `solver.constructorParameters`; per-call solve options belong under `solver.solverParameters`. Do not blur those lifecycles. When adding or renaming YAML options, update the strict parser, typed config, `config/margin.example.yaml`, and parser tests together.
 
@@ -260,6 +262,20 @@ Keep contract identity in `portfolio.derivatives`, valuation formulas and market
 
 Subclass `BQMSolver`, return `BQMOptimizationResult`, and override `solveMany` only when real batching is supported. Respect variable ordering, original QUBO energy, binary output, `iterOneHotGroups()`, stable `seedOffset`, series lifecycle hooks, and the constructor/solve parameter split. Register a stable snake-case name with `BQMSolverFactory`, export the module so registration occurs, add factory and deterministic energy tests, and add YAML coverage. A solver must not mutate `QUBOProblem` arrays.
 
+### Categorical one-hot solver
+
+`torch_categorical` searches category selections directly with graph-colored
+heat-bath annealing. It requires disjoint one-hot groups covering every variable;
+uncovered variables are rejected. Each update remains feasible, so it uses no
+candidate repair. Within-group off-diagonal terms vanish and common linear group
+shifts are removed for dynamics; final ranking uses the original float64 QUBO.
+`steps` counts complete color sweeps, and temperatures use objective energy units.
+Problems execute sequentially per device shard; trajectories are batched. Resident
+execution rebuilds categorical topology from the authoritative host snapshot.
+When changing this solver, run `tests.test_torch_categorical` and compare with
+`tools/benchmark_one_hot_feasibility.py`; see
+`docs/benchmarks/one_hot_feasibility_20260909.md` for measurements and limits.
+
 ### Change native SBM code
 
 Keep public declarations in `include/sbm/` aligned with implementations and the C ABI in `src/sbm/python_api.cpp`. Test the native library with CTest and exercise the Python adapter when its ABI changes. Guard optional backends with existing CMake definitions. Changes shared with HLS must remain synthesizable in the HLS path; avoid unsupported dynamic allocation or library facilities there.
@@ -284,6 +300,15 @@ ctest --test-dir build --output-on-failure
 ```
 
 For configuration changes, also smoke-test a small local/synthetic YAML. For backtesting/reporting changes, validate both CSV schemas and plotting. For performance work, first prove numerical equivalence on a small fixed seed, then use the programs under `src/benchmark/` or `tools/`; do not weaken correctness tests to accommodate a faster result.
+
+For Torch SBM/SVL dynamics changes, run `tests.test_torch_dynamics` on CPU and
+the target GPU, then use `tools/benchmark_torch_solvers.py` with identical
+arguments on both revisions. It synchronizes complete solves and can export
+allocation/kernel traces. See `SIMULATED_BIFURCATION.md` for the command and
+`docs/benchmarks/torch_solver_gpu_20260909.md` for the buffer-reuse and sparse-repair
+measurements. For PCA/risk precision changes, run `tools/benchmark_risk_precision.py`
+and inspect `docs/benchmarks/gpu_risk_float32_20260909.md`. Repair's indexed field updates rely on the unique row indices
+of its canonical CSC model; preserve duplicate-term aggregation when changing it.
 
 Option benchmark generation and execution:
 

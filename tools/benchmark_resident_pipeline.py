@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--assets", type=positive_sizes, default=[16, 64])
     parser.add_argument("--windows", type=positive_sizes, default=[16, 60])
+    parser.add_argument("--risk-dtype", choices=["auto", "float32", "float64"], default="auto")
+    parser.add_argument("--solver-dtype", choices=["float32", "float64"], default="float32")
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--runs", type=int, default=8)
     parser.add_argument("--repeats", type=int, default=3)
@@ -73,7 +75,7 @@ def main():
                     "marginCalculator": {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
                         "solver": {"type": "torch_sbm", "constructorParameters": {"device": "cpu"},
                             "solverParameters": {"steps": args.steps, "runs": args.runs, "seed": 24,
-                                                 "dtype": "float64", "run_batch_size": min(8, args.runs)}},
+                                                 "dtype": args.solver_dtype, "run_batch_size": min(8, args.runs)}},
                         "executionPolicy": {"type": "batch", "batchSize": 2, "maxBatchBytes": 256 * 1024 * 1024}},
                 },
             }
@@ -85,7 +87,7 @@ def main():
                 device = "cpu" if mode == "cpu_reference" else args.device
                 config["engine"]["marginCalculator"]["solver"]["constructorParameters"]["device"] = device
                 if mode == "resident":
-                    config["engine"]["numericalExecution"] = {"type": "torch", "device": device}
+                    config["engine"]["numericalExecution"] = {"type": "torch", "device": device, "dtype": args.risk_dtype}
                 path = case / f"{mode}.yaml"
                 path.write_text(yaml.safe_dump(config))
                 values = []
@@ -101,7 +103,9 @@ def main():
             expected = measurements["cpu_reference"][0]["comparisonMargins"]["greedy"]
             for mode, values in measurements.items():
                 for value in values:
-                    if not math.isclose(value["comparisonMargins"]["greedy"], expected, rel_tol=1e-9, abs_tol=1e-10):
+                    single = value["numericalDiagnostics"].get("dtype") == "float32"
+                    if not math.isclose(value["comparisonMargins"]["greedy"], expected,
+                                        rel_tol=2e-5 if single else 1e-9, abs_tol=2e-5 if single else 1e-10):
                         raise RuntimeError(f"Greedy reference mismatch for {case.name}, {mode}")
             host_time = median(value["synchronizedWallSeconds"] for value in measurements["host"])
             resident_time = median(value["synchronizedWallSeconds"] for value in measurements["resident"])

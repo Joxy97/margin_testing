@@ -73,9 +73,13 @@ class TorchPCAFit:
 
 @dataclass(frozen=True)
 class TorchPCABackend(PCABackend):
-    """Float64 PCA; Torch is imported only when this backend is used."""
+    """Device-aware PCA precision; Torch is imported only when used."""
 
     device: str = "auto"
+    dtype: str = "auto"
+
+    def __post_init__(self):
+        PCABackendConfig(type="torch", device=self.device, dtype=self.dtype)
 
     def fit(self, values: numpy.ndarray, weights: numpy.ndarray, components: int) -> PCAFit:
         return self.fitResident(values, weights, components).toHost()
@@ -90,9 +94,12 @@ class TorchPCABackend(PCABackend):
         )
         if device.type not in {"cpu", "cuda"}:
             raise ValueError("Torch PCA supports CPU and CUDA/ROCm devices")
+        dtype = (torch.float32 if device.type == "cuda" else torch.float64) if self.dtype == "auto" else getattr(torch, self.dtype)
         with torch.inference_mode(), torch.profiler.record_function("margin.pca"):
-            x = torch.as_tensor(numpy.ascontiguousarray(values), dtype=torch.float64, device=device)
-            w = torch.as_tensor(numpy.ascontiguousarray(weights), dtype=torch.float64, device=device)[:, None]
+            x = torch.as_tensor(numpy.ascontiguousarray(values), dtype=dtype, device=device)
+            w = torch.as_tensor(numpy.ascontiguousarray(weights), dtype=dtype, device=device)[:, None]
+            if not bool(torch.isfinite(x).all()):
+                raise ValueError("PCA values must remain finite in the selected dtype")
             mean = (w * x).sum(dim=0)
             centered = x - mean
             wide = x.shape[1] > x.shape[0]
@@ -101,12 +108,14 @@ class TorchPCABackend(PCABackend):
                 matrix = weighted @ weighted.T
             else:
                 matrix = centered.T @ (w * centered)
+            if not bool(torch.isfinite(matrix).all()):
+                raise ValueError("PCA covariance must remain finite in the selected dtype")
             eigenvalues, vectors = torch.linalg.eigh(matrix)
             eigenvalues = eigenvalues.flip(0).clamp_min(0)
             selected = eigenvalues[:components]
             vectors = vectors.flip(1)[:, :components]
             if wide:
-                if bool((selected <= torch.finfo(torch.float64).eps).any()):
+                if bool((selected <= torch.finfo(dtype).eps).any()):
                     raise ValueError("requested PCA components include a zero-variance mode")
                 vectors = (weighted.T @ vectors) / selected.sqrt()[None, :]
             total = eigenvalues.sum()
@@ -130,10 +139,17 @@ class TorchPCABackend(PCABackend):
 class PCABackendConfig:
     type: str = "numpy"
     device: str = "auto"
+    dtype: str = "auto"
 
     def __post_init__(self) -> None:
         if not isinstance(self.type, str) or not isinstance(self.device, str):
             raise TypeError("PCA backend type and device must be strings")
+        if not isinstance(self.dtype, str):
+            raise TypeError("PCA backend dtype must be a string")
+        if self.dtype not in {"auto", "float32", "float64"}:
+            raise ValueError("PCA backend dtype must be auto, float32, or float64")
+        if self.type == "numpy" and self.dtype == "float32":
+            raise ValueError("NumPy PCA requires float64 or auto dtype")
         if self.type not in {"numpy", "torch"}:
             raise ValueError("PCA backend type must be numpy or torch")
         if self.device not in {"auto", "cpu", "cuda"} and not (
@@ -144,4 +160,4 @@ class PCABackendConfig:
             raise ValueError("NumPy PCA requires a CPU device")
 
     def createBackend(self) -> PCABackend:
-        return NumpyPCABackend() if self.type == "numpy" else TorchPCABackend(self.device)
+        return NumpyPCABackend() if self.type == "numpy" else TorchPCABackend(self.device, self.dtype)

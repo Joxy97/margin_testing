@@ -1,0 +1,43 @@
+# Single-date calculation using the repository's ten-asset synthetic fixture.
+marginDate: 2025-01-01
+portfolio:
+  csv: ../synthetic_market/assets_00010/portfolio.csv
+  clientId: synthetic_0000
+engine:
+  numericalExecution: {type: torch, device: auto, dtype: auto}
+  downloadManager:
+    providers: {synthetic_csv: local_csv}
+    requestParameters:
+      locations:
+        - ../synthetic_market/assets_00010/historical_close.csv
+        - ../synthetic_market/assets_00010/backtest_close.csv
+  riskStateGenerator:
+    type: correlated_returns_vola_grid
+    ew_window: 125
+    ew_lambda: 0.93
+    components: 2
+    scenariosPerComponents: [3, 3]
+    nZBins: 21
+    allowEmptyBinFallback: true
+    topKNeighbors: 5
+  marginCalculator:
+    type: bqm
+    comparison: {type: state_aware_greedy, pnlAnchor: market}
+    modelParameters:
+      lambdaOneHot: 0.0 # Categories are always feasible; no penalty is needed.
+      lambdaCompat: 0.1
+    executionPolicy: {type: batch, batchSize: 2, maxBatchBytes: 268435456}
+    solver:
+      type: torch_categorical
+      constructorParameters: {device: auto}
+      solverParameters:
+        steps: 64
+        runs: 16
+        seed: 1
+        dtype: float32
+        run_batch_size: 16
+        temperature_start: 1.0
+        temperature_end: 0.01
+        greedy_sweeps: 4
+        noise_chunk_size: 16
+        energy_chunk_size: 1000000

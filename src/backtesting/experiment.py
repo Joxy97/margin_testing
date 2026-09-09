@@ -18,7 +18,7 @@ from .margin_backtester import MarginBacktester
 if TYPE_CHECKING:
     from margin_engine import MarginApplicationConfig
 
-NUMERICAL_MODEL_VERSION = 3
+NUMERICAL_MODEL_VERSION = 4
 
 
 def experimentFingerprint(
@@ -85,7 +85,7 @@ class BacktestExperiment:
             raise ValueError("set backtest.outputDirectory or provide outputDirectory")
         return cls(application, outputDirectory=output, configPath=path, configBytes=config_bytes)
 
-    def run(self, resume: bool = False) -> ExperimentOutcome:
+    def run(self, resume: bool = False, onDayStarted=None) -> ExperimentOutcome:
         application = self.application
         if not application.backtestRequests:
             raise ValueError("YAML configuration does not contain a backtest block")
@@ -113,6 +113,7 @@ class BacktestExperiment:
             application.createEngine(), application.backtestRequests,
             application.backtestConfidenceLevel, completed,
             onNewDay=None if store is None else store.saveDay,
+            onDayStarted=onDayStarted,
         )
         files = {} if self.outputDirectory is None else BacktestCSVReporter().write(results, self.outputDirectory)
         return ExperimentOutcome(results, files)

@@ -185,6 +185,13 @@ repaired on CPU. Winners are retained incrementally across run chunks, so host
 candidate retention no longer scales with the total number of runs. This avoids
 changing the one-hot repair semantics to gain speed.
 
+Categorical repair updates local fields directly from canonical CSC column
+indices and values. Duplicate interactions are summed when the repair model is
+built, so indexed updates visit each affected row once. This avoids constructing
+a sparse submatrix and a dense full-length column for every variable flip.
+The same repair code serves all BQM adapters; sweep order, tie tolerance,
+feasibility preference and original float64 energy scoring remain unchanged.
+
 `executionPolicy.prefetch: true` overlaps production of one bounded host batch
 with solving the current batch. It is opt-in because it uses another host batch's
 memory and calls the source iterator on a worker thread. Solver-specific working
@@ -194,7 +201,9 @@ limits. Reduce `run_batch_size` if a single QUBO exceeds device capacity.
 
 For GPU PCA, set `engine.riskStateGenerator.pcaGridProvider.backend` to
 `{type: torch, device: cuda:0}`. The default remains `{type: numpy, device: auto}`.
-PCA stays float64 and retains both the covariance and observation-space paths.
+PCA defaults to float32 on GPU and float64 on CPU, retaining both covariance
+and observation-space paths. Set backend `dtype: float64` for validation;
+`dtype: float32` also permits testing the reduced-precision path on CPU.
 The surrounding risk-state API still consumes NumPy arrays, so fitted PCA outputs
 return to the host once. Measure end-to-end timing before enabling this on small
 windows, where transfer and decomposition synchronization can outweigh the gain.
@@ -209,6 +218,34 @@ PYTHONPATH=src OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 Use `--device cuda:0` on a GPU host; timings synchronize that device. The script
 checks PCA equivalence before timing and compares noise chunk sizes 1 and 16.
 It is a component benchmark, not an estimate of whole-backtest speedup.
+
+For synchronized before/after measurements of complete SBM and SVL solves:
+
+```bash
+PYTHONPATH=src OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  python tools/benchmark_torch_solvers.py --device cuda:0 \
+  --variables 64 1024 8192 --steps 256 --runs 16 \
+  --output /tmp/torch-solvers.json --trace-directory /tmp/torch-solver-traces
+```
+
+Run the same command on each revision, with separate output paths. JSON records
+hardware/software, input identities, effective parameters, source hashes,
+cold and warmed complete-solve timings after device initialization, peak allocated CUDA bytes, authoritative
+energies and sample hashes. Profiling runs separately from latency measurements.
+Use `--one-hot --problems 4` to include constrained selection/CPU repair,
+`--run-batch-size` for bounded trajectory chunks, and
+`--integrator weak_order_2 --dtype float64` to exercise SVL's second integrator.
+`--device cpu` provides the portable path. These synthetic solver benchmarks
+include packing, transfers and selection; they exclude risk-state generation.
+
+SBM reuses its sparse multiplication output with `torch.addmm(..., beta=0,
+out=...)`. SVL also reuses sine, cosine and force buffers for both integrators.
+Scratch lifetime is one trajectory chunk; acceleration arrays remain separate
+so the second SVL force evaluation cannot overwrite the first acceleration.
+Arithmetic order, precision, random streams and candidate selection are preserved.
+The existing conservative workspace estimate still covers these buffers.
+See [GPU measurements](docs/benchmarks/torch_solver_gpu_20260909.md) for dynamics and
+repair measurements and hardware limits.
 
 `TorchSVLBQMSolver` is registered as `torch_svl`. It converts each QUBO to an
 Ising problem and represents every spin by a planar rotor angle `theta_i`. For
@@ -419,7 +456,7 @@ selects the available Torch device for greedy calculation. `device: cpu` exercis
 the same tensor path without an accelerator. Omit `numericalExecution` to retain
 the existing host pipeline, including multi-GPU scheduling and other risk families.
 
-`TorchReturnsExecution` owns aligned input preparation, resident float64 PCA,
+`TorchReturnsExecution` owns aligned input preparation, resident PCA at the selected precision,
 conditioning, bounded correlation blocks, QUBO coefficients, and their lifetime
 through solving. `TorchPCABackend.fitResident` retains fitted tensors; its existing
 `fit` method explicitly materializes a host `PCAFit` for host consumers. Core
@@ -433,11 +470,22 @@ using the same trajectory and candidate-selection code as the host path. The
 current one-hot topology is reused on device. Immutable host QUBO snapshots remain
 necessary for the existing coefficient-derived seed identity, authoritative
 float64 scoring, and deterministic categorical repair. Control metadata and
-candidates also cross the host/device boundary. This removes the fitted PCA
-round-trip and coefficient re-upload; it does not eliminate all transfers or
+candidates also cross the host/device boundary. With float32 risk numerics, scoring uploads the authoritative float64 source
+coefficients; widening rounded dynamics coefficients would lose source-energy ties.
+This removes the fitted PCA round-trip; it does not eliminate all transfers or
 synchronizations. It does not add asynchronous copy/double-buffer scheduling.
 
-Risk numerics use float64; the solver retains its configured dynamics precision.
+Risk numerics accept `numericalExecution.dtype: auto` (default: float32 on GPU,
+float64 on CPU), `float32`, or `float64`; the solver retains its independently
+configured dynamics precision. Means, scales, scenario bins, correlation blocks,
+and resident QUBO dynamics coefficients follow the risk dtype. Host source QUBOs,
+candidate energy scoring and repair retain float64. The effective risk `dtype` is
+reported in numerical diagnostics. Model fingerprint version 4 invalidates older
+backtest checkpoints. Reduced precision can change bin membership, neighbor order
+for near ties, and coefficients; it is not bitwise equivalent to float64. Use
+float64 for sensitive or ill-conditioned portfolios and compare the resulting
+margins before adopting a precision setting. See
+[float32 risk measurements](docs/benchmarks/gpu_risk_float32_20260909.md).
 NumPy and Torch reductions can differ in low bits. Because seeds depend on the
 resulting coefficients, heuristic BQM samples and margins can differ between
 execution modes even when their risk models agree numerically. Seeds and ordering
@@ -482,7 +530,69 @@ in both NumPy and Torch, including the partitioned/top-k path above 512 assets.
 Nearest-residual distance ties likewise use the earliest chronological observation.
 This makes degenerate histories reproducible across these algorithms; portfolios
 with tied neighbors may legitimately differ from the old unspecified tie order.
-Experiment manifests identify numerical model version 3, and the corresponding
-fingerprint prevents resume from mixing checkpoints made under the old tie rule.
+Numerical model version 3 introduced this tie rule; version 4 additionally
+identifies the GPU float32 default. The fingerprint prevents resume from mixing
+checkpoints made under earlier numerical policies.
 Custom visitors and execution policies require the host path and are rejected by
 the resident configuration rather than being silently bypassed.
+
+
+## Feasibility-preserving categorical solver
+
+`torch_categorical` is an optional alternative for complete one-hot portfolios.
+It uses graph-colored categorical heat-bath annealing, not SBM/SVL equations.
+The solver initializes one selected category per group and updates only mutually
+noninteracting groups together. Every discrete state is feasible; the final
+zero-temperature sweeps improve valid states without projecting or repairing them.
+
+```yaml
+solver:
+  type: torch_categorical
+  constructorParameters: {device: cuda:0}
+  solverParameters:
+    steps: 64
+    runs: 16
+    seed: 1
+    dtype: float32
+    run_batch_size: 16
+    temperature_start: 1.0
+    temperature_end: 0.01
+    greedy_sweeps: 4
+    noise_chunk_size: 16
+    energy_chunk_size: 1000000
+```
+
+`steps` counts full color sweeps, so it is not comparable to an SBM/SVL integration
+step. Temperatures are absolute objective-energy units; rescaling exposures can
+require retuning them. `greedy_sweeps: 0` disables the additional zero-temperature
+updates; outputs still remain feasible. Seed streams are independent of trajectory
+chunks and problem batches for a fixed noise chunk size. Changing noise chunk size
+can change seeded trajectories. CPU and CUDA/ROCm use the same adapter; standard
+explicit multi-device configuration is inherited, but multi-GPU hardware was not
+available for this validation.
+
+Run the local synthetic example with
+`PYTHONPATH=src python -m margin_engine config/categorical.example.yaml`.
+It selects the categorical solver with zero one-hot penalty and uses CUDA when
+available, otherwise CPU.
+
+Declared groups must cover every variable and may be ragged/noncontiguous.
+Unsupported partial coverage is rejected rather than silently changing the problem.
+Diagonal terms are folded into linear costs. Within-group off-diagonal terms are
+identically zero for valid candidates; common linear shifts (including the one-hot
+penalty) are constant. These are removed from dynamics, while original-QUBO energy
+and offsets remain authoritative for float64 final scoring. Thus `lambdaOneHot: 0`
+is permissible for this solver; existing positive penalties do not enforce its
+feasibility and need not be increased. Coefficient-based source seeds may still
+change when the encoding penalty changes.
+
+Trajectories execute in parallel; independent problems execute sequentially per
+admitted device shard. Resident numerical execution is supported, but compiles
+categorical coefficients from the existing host source snapshot and uploads them.
+It does not reuse the resident Ising matrix. Memory estimates include padded ragged
+groups, sparse workspace, RNG chunks and original float64 scoring. Large groups or
+highly connected group graphs can limit memory efficiency and color parallelism.
+
+Existing SBM/SVL defaults and candidate repair behavior remain unchanged. Select
+this solver explicitly and compare quality/latency on the intended portfolio. See
+[feasibility, penalty, and solver measurements](docs/benchmarks/one_hot_feasibility_20260909.md).

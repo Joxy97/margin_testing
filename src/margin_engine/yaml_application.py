@@ -248,10 +248,11 @@ class _YamlConfigParser:
         if "numericalExecution" in config:
             from .numerical_execution_config import TorchNumericalExecutionConfig
             numerical = self._mapping(config["numericalExecution"], "engine.numericalExecution")
-            self._only(numerical, {"type", "device"}, "engine.numericalExecution")
+            self._only(numerical, {"type", "device", "dtype"}, "engine.numericalExecution")
             if numerical.get("type") != "torch":
                 raise ValueError("engine.numericalExecution.type must be torch")
-            numerical_execution = TorchNumericalExecutionConfig(device=numerical.get("device", "auto"))
+            numerical_execution = TorchNumericalExecutionConfig(
+                device=numerical.get("device", "auto"), dtype=numerical.get("dtype", "auto"))
         return MarginEngineConfig(
             numericalExecution=numerical_execution,
             downloadManager=self._downloadManager(
@@ -438,7 +439,7 @@ class _YamlConfigParser:
             )
             backend_path = f"{path}.pcaGridProvider.backend"
             backend_config = self._mapping(provider_config.get("backend", {}), backend_path)
-            self._only(backend_config, {"type", "device"}, backend_path)
+            self._only(backend_config, {"type", "device", "dtype"}, backend_path)
             from risk_state_generator.pca_grid_provider import PCAGridProviderConfig
 
             config["pcaGridProvider"] = PCAGridProviderConfig(

@@ -24,7 +24,9 @@ class TorchCandidateAccumulator:
         self.selection = CandidateSelection(problem)
         self.best: Candidate | None = None
         self.feasible = False
-        if coefficients is None:
+        # Reduced-precision dynamics coefficients cannot rank source-energy ties.
+        # Upload the authoritative snapshot when resident encoding used float32.
+        if coefficients is None or coefficients.linear.dtype != torch.float64:
             self.linear = torch.tensor(problem.linear, dtype=torch.float64, device=device)
             self.heads = torch.tensor(problem.quadraticHeads.astype(numpy.int64), device=device)
             self.tails = torch.tensor(problem.quadraticTails.astype(numpy.int64), device=device)
