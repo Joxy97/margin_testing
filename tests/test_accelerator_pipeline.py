@@ -60,7 +60,7 @@ class PCABackendTest(unittest.TestCase):
             baseline = MarginApplicationConfig.fromYaml(path).generateReport()
             self.assertAlmostEqual(accelerated.margin, baseline.margin, places=12)
 
-    def check_device(self, device):
+    def check_device(self, device, dtype="auto"):
         for observations, assets in ((20, 5), (6, 15)):
             with self.subTest(device=device, shape=(observations, assets)):
                 rng = numpy.random.default_rng(11)
@@ -69,19 +69,38 @@ class PCABackendTest(unittest.TestCase):
                 weights /= weights.sum()
                 before = values.copy()
                 expected = NumpyPCABackend().fit(values, weights, 3)
-                result = TorchPCABackend(device).fit(values, weights, 3)
+                result = TorchPCABackend(device, dtype).fit(values, weights, 3)
+                single = dtype == "float32" or (dtype == "auto" and device.startswith("cuda"))
                 for name in vars(expected):
-                    numpy.testing.assert_allclose(getattr(result, name), getattr(expected, name), atol=1e-11)
+                    actual = getattr(result, name)
+                    self.assertEqual(actual.dtype, numpy.float32 if single else numpy.float64)
+                    numpy.testing.assert_allclose(actual, getattr(expected, name),
+                        rtol=2e-5 if single else 1e-7, atol=2e-5 if single else 1e-11)
                 numpy.testing.assert_array_equal(values, before)
 
     def test_cpu_equivalence(self):
         self.check_device("cpu")
+
+    def test_float32_equivalence_and_invalid_precision(self):
+        self.check_device("cpu", "float32")
+        for dtype in ("float16", "invalid"):
+            with self.assertRaisesRegex(ValueError, "dtype"):
+                TorchPCABackend("cpu", dtype)
+        with self.assertRaisesRegex(TypeError, "dtype"):
+            PCABackendConfig(type="torch", dtype=None)
+        with self.assertRaisesRegex(ValueError, "NumPy"):
+            PCABackendConfig(dtype="float32")
+        for value in (1e40, 1e20):
+            with self.assertRaisesRegex(ValueError, "finite"):
+                TorchPCABackend("cpu", "float32").fit(
+                    numpy.array([[value, 0.], [-value, 1.]]), numpy.array([.5, .5]), 1)
 
     def test_cuda_equivalence(self):
         import torch
         if not torch.cuda.is_available():
             self.skipTest("CUDA/ROCm unavailable")
         self.check_device("cuda:0")
+        self.check_device("cuda:0", "float64")
 
     def test_grid_temporal_window_and_backend_injection(self):
         rng = numpy.random.default_rng(7)
@@ -131,6 +150,19 @@ class PCABackendTest(unittest.TestCase):
 
 @unittest.skipUnless(find_spec("torch"), "requires torch")
 class TorchPipelineTest(unittest.TestCase):
+    def test_float32_resident_coefficients_rank_original_float64_energy(self):
+        import torch
+        from margin_calculator.optimization.optimization_solver.bqm_solver.torch_candidates import TorchCandidateAccumulator
+        from margin_calculator.optimization.optimization_solver.bqm_solver.torch_qubo import TorchQUBO
+        # Float32 collapses this difference; lexicographic ties would pick the wrong sample.
+        p = QUBOProblem(numpy.array([-1.00000001, -1.]), numpy.array([], dtype=numpy.uint32),
+                        numpy.array([], dtype=numpy.uint32), numpy.array([]), oneHotGroups=((0, 1),))
+        coefficients = TorchQUBO(p, torch.tensor(p.linear, dtype=torch.float32),
+            torch.empty(0, dtype=torch.int64), torch.empty(0, dtype=torch.int64), torch.empty(0))
+        accumulator = TorchCandidateAccumulator(torch, p, "cpu", 1, BQMSolver._selectBestCandidates, coefficients)
+        accumulator.add(torch.tensor([[0, 1], [1, 0]], dtype=torch.uint8))
+        self.assertEqual(accumulator.result(), ((1, 0), p.energy((1, 0))))
+
     def test_svl_invalid_numeric_parameters(self):
         for settings in ({"noise_chunk_size": 0}, {"temperature": float("nan")}, {"dt": float("inf")}):
             with self.assertRaises(ValueError):

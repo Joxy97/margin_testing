@@ -85,19 +85,20 @@ class TorchReturnsExecution:
         with torch.inference_mode(), torch.profiler.record_function("margin.resident"):
             def prepare():
                 inputs = ReturnsPCAGrid.prepareInput(key, context.marketData)
-                fit = TorchPCABackend(self.device).fitResident(
+                fit = TorchPCABackend(self.device, self.config.dtype).fitResident(
                     inputs.values, inputs.weights, key.components)
                 return inputs, fit
             inputs, fit = measurements.measure("riskStateGenerationSeconds", prepare)
             device = fit.lambdas.device
+            dtype = fit.lambdas.dtype
             positions = torch.tensor([float(portfolio.weights.get(item, 0)) for item in key.instruments],
-                                     dtype=torch.float64, device=device)
+                                     dtype=dtype, device=device)
             if not bool(torch.isfinite(positions).all()):
                 raise ValueError("portfolio contains a non-finite weight")
-            means = torch.tensor(inputs.logReturnMean, device=device)
-            scales = torch.tensor(inputs.logReturnScale, device=device)
+            means = torch.tensor(inputs.logReturnMean, dtype=dtype, device=device)
+            scales = torch.tensor(inputs.logReturnScale, dtype=dtype, device=device)
             diagnostics = {
-                "mode": "torch_resident", "device": str(device), "scenarioCount": 0,
+                "mode": "torch_resident", "device": str(device), "dtype": str(dtype).removeprefix("torch."), "scenarioCount": 0,
                 "residentFitBytes": sum(value.numel() * value.element_size() for value in vars(fit).values()),
                 "fittedHostMaterializationBytes": 0, "sourceSnapshotBytes": 0,
                 "peakBatchProblems": 0, "peakAdmittedWorkingBytes": 0,
@@ -105,7 +106,7 @@ class TorchReturnsExecution:
             grids = self._grids(fit, means, scales, key.instruments, measurements, diagnostics)
             if isinstance(self.calculator, BQMMarginCalculator):
                 return self._bqm(grids, positions, key.instruments, diagnostics)
-            worst = torch.zeros((), dtype=torch.float64, device=device)
+            worst = torch.zeros((), dtype=dtype, device=device)
             for grid in grids:
                 returns, mask = grid.returns, grid.mask
                 weighted = positions[:, None] * returns
@@ -192,8 +193,9 @@ class TorchReturnsExecution:
         device = weighted.device
         selected = weighted[mask]
         # The immutable host snapshot owns source scoring, deterministic seed
-        # identity and repair. These coefficients never feed another upload.
-        host_returns = selected.cpu().numpy().copy()
+        # identity and repair. Float32 risk coefficients are widened before
+        # host penalty arithmetic; source scoring uploads that precise snapshot.
+        host_returns = selected.cpu().numpy().astype(numpy.float64, copy=True)
         linear = host_returns - penalty
         compatibility = self.calculator.modelParameters.get("lambdaCompat", .1) if isinstance(
             self.generator, CorrelatedReturnsVolaGridRiskStateGenerator) else 0.
@@ -207,7 +209,7 @@ class TorchReturnsExecution:
             topology_cache[topology_key] = (
                 torch.tensor(template.heads, dtype=torch.int64, device=device),
                 torch.tensor(template.tails, dtype=torch.int64, device=device),
-                torch.full((len(template.biases),), 2 * penalty, dtype=torch.float64, device=device))
+                torch.full((len(template.biases),), 2 * penalty, dtype=weighted.dtype, device=device))
         heads, tails, biases = topology_cache[topology_key]
         host_heads, host_tails, host_biases = template.heads, template.tails, template.biases
         if len(correlation) and compatibility:
@@ -265,7 +267,7 @@ class TorchReturnsExecution:
             order = torch.argsort(keys, stable=True)
             keys, values = keys[order], torch.cat(pair_values)[order]
             unique, inverse, count = torch.unique_consecutive(keys, return_inverse=True, return_counts=True)
-            rho = torch.zeros(len(unique), dtype=torch.float64, device=samples.device).scatter_add_(0, inverse, values) / count
+            rho = torch.zeros(len(unique), dtype=samples.dtype, device=samples.device).scatter_add_(0, inverse, values) / count
             first, second = unique // assets, unique % assets
             coordinates = (torch.log1p(grid.returns) - grid.means[:, None]) / grid.scales[:, None]
             residuals = (coordinates - grid.center[:, None]) / std[:, None]
@@ -315,7 +317,7 @@ class TorchReturnsExecution:
 
         generator = self.generator
         with torch.profiler.record_function("margin.condition"):
-            scenario = torch.tensor(point, dtype=torch.float64, device=means.device)
+            scenario = torch.tensor(point, dtype=means.dtype, device=means.device)
             center = fit.pcaMean + scenario @ fit.loadings
             distances = torch.linalg.vector_norm((fit.factors - scenario) / fit.lambdas.clamp_min(1e-12).sqrt(), dim=1)
             count = generator.nNearest or min(100, len(distances), generator.ew_window)
@@ -329,7 +331,7 @@ class TorchReturnsExecution:
             local = nearest.std(dim=0, correction=1) if count > 1 else torch.full_like(means, torch.nan)
             sigma = torch.where(torch.isfinite(local) & (local > 1e-12), local, fit.residualScale)
             sigma = torch.where(torch.isfinite(sigma) & (sigma > 1e-12), sigma, torch.ones_like(sigma)) * inflation
-            edges = torch.tensor(numpy.linspace(-1., 1., generator.nZBins + 1), device=means.device)
+            edges = torch.tensor(numpy.linspace(-1., 1., generator.nZBins + 1), dtype=means.dtype, device=means.device)
             centers = (edges[:-1] + edges[1:]) * .5
             bounds = center[:, None] + fit.maxAbsoluteZ[:, None] * edges
             z = center[:, None] + fit.maxAbsoluteZ[:, None] * centers

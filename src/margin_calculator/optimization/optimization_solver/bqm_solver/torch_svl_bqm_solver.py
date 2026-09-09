@@ -90,14 +90,21 @@ class TorchSVLBQMSolver(TorchExecution):
             generators.append(problem_generators)
 
         velocities = torch.zeros_like(angles)
+        spins = torch.empty_like(angles)
+        local_field = torch.empty_like(angles)
+        longitudinal = torch.empty_like(angles)
+        transverse_force = torch.empty_like(angles)
 
         def force(values: Any, transverse: float, problem_scale: float) -> Any:
-            spins = torch.sin(values)
-            local_field = torch.sparse.mm(matrix, spins).add(field)
-            return (
-                -transverse * spins
-                + problem_scale * torch.cos(values) * local_field
-            )
+            # Only scratch storage is shared between force evaluations. The
+            # caller consumes it into a separate acceleration before reuse.
+            torch.sin(values, out=spins)
+            torch.addmm(local_field, matrix, spins, beta=0, out=local_field)
+            local_field.add_(field)
+            torch.cos(values, out=longitudinal)
+            longitudinal.mul_(problem_scale).mul_(local_field)
+            torch.mul(spins, -transverse, out=transverse_force)
+            return transverse_force.add_(longitudinal)
 
         noise_scale = math.sqrt(2.0 * parameters["damping"] * parameters["temperature"]
                                 * parameters["dt"]) / parameters["mass"]

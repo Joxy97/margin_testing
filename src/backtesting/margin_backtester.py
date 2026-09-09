@@ -66,6 +66,7 @@ class MarginBacktester:
         onDayCompleted: Callable[[tuple[DailyBacktestResult, ...]], None]
         | None = None,
         onNewDay: Callable[[DailyBacktestResult], None] | None = None,
+        onDayStarted: Callable[[date, int, int], None] | None = None,
     ) -> BacktestResults:
         """Backtest one portfolio over the supplied trade dates."""
         if not isinstance(portfolio, Portfolio):
@@ -99,15 +100,19 @@ class MarginBacktester:
         else:
             preparation_seconds = 0.0
         daily_list: list[DailyBacktestResult] = []
+        pending_index = 0
         for backtest_date in backtest_dates:
-            daily_list.append(
-                completed.get(backtest_date)
-                or self._backtestDay(
+            daily_result = completed.get(backtest_date)
+            if daily_result is None:
+                pending_index += 1
+                if onDayStarted is not None:
+                    onDayStarted(backtest_date, pending_index, len(pending_dates))
+                daily_result = self._backtestDay(
                     marginEngine,
                     portfolio,
                     backtest_date,
                 )
-            )
+            daily_list.append(daily_result)
             if onDayCompleted is not None:
                 onDayCompleted(tuple(daily_list))
             if onNewDay is not None and backtest_date not in completed:
@@ -136,6 +141,7 @@ class MarginBacktester:
         ]
         | None = None,
         onNewDay: Callable[[str, DailyBacktestResult], None] | None = None,
+        onDayStarted: Callable[[str, date, int, int], None] | None = None,
     ) -> BacktestBatchResults:
         """Backtest several named portfolios and their respective dates."""
         if not requests:
@@ -164,6 +170,13 @@ class MarginBacktester:
                     )
                 ),
                 None if onNewDay is None else lambda day, item=normalized_name: onNewDay(item, day),
+                (
+                    None
+                    if onDayStarted is None
+                    else lambda day, index, total, item=normalized_name: onDayStarted(
+                        item, day, index, total
+                    )
+                ),
             )
         return BacktestBatchResults(results)
 

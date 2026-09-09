@@ -14,6 +14,7 @@ backtest:
   dates: [2024-01-29, 2024-01-30, 2024-01-31]
 
 engine:
+  # numericalExecution: {type: torch, device: cuda:0, dtype: auto}
   # Opt-in resident returns numerics (ordinary or correlated returns grids).
   # Requires greedy calculation or one Torch SBM/adaptive/SVL solver on the same device.
   # numericalExecution: {type: torch, device: auto}
@@ -51,6 +52,7 @@ engine:
       backend:
         type: numpy # Use torch for optional GPU PCA.
         device: auto # Torch accepts cpu, cuda, or cuda:<index> as well.
+        dtype: auto # Torch: float32 on GPU, float64 on CPU; override with float64.
     ew_window: 60
     ew_lambda: 0.94
     components: 2
@@ -105,3 +107,20 @@ engine:
         transverse_field_final: 0.0
         problem_scale_initial: 0.0
         problem_scale_final: 1.0
+
+# Feasibility-preserving alternative for complete one-hot returns portfolios:
+# Replace the solver block (SBM/SVL-specific parameters do not apply):
+# solver:
+#   type: torch_categorical
+#   constructorParameters: {device: cuda:0}
+#   solverParameters:
+#     steps: 64 # Full graph-color sweeps, not SBM/SVL integration steps.
+#     runs: 16
+#     temperature_start: 1.0 # In objective energy units.
+#     temperature_end: 0.01
+#     greedy_sweeps: 4 # Feasible zero-temperature updates; no repair.
+#     dtype: float32
+#     run_batch_size: 16
+#     noise_chunk_size: 16
+#     energy_chunk_size: 1000000
+#     seed: 1

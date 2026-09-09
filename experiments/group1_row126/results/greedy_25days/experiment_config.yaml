@@ -1,0 +1,57 @@
+marginDate: '2025-07-09'
+portfolio:
+  csv: /tmp/margin_remote/group1_row126/group1_portfolio.csv
+  clientId: group1
+  cash: '0'
+engine:
+  dataManager:
+    backingStore:
+      directory: ./.cache/market-data
+      type: partitioned_pickle
+    cacheType: lru
+    maxMemoryBytes: 268435456
+    memorySize: 16
+  downloadManager:
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    providerSelection: local_first
+    providers:
+      local_csv:
+        type: local_csv
+    requestParameters:
+      locations:
+      - /tmp/margin_remote/group_1_8590.csv
+  marginCalculator:
+    type: greedy
+  riskStateGenerator:
+    allowEmptyBinFallback: true
+    components: 2
+    correlationBlockBytes: 134217728
+    distanceInflationAlpha: 0.5
+    distanceInflationPower: 2.0
+    ew_lambda: 0.93
+    ew_window: 125
+    maxInflationFactor: 5.0
+    nNearest: null
+    nZBins: 21
+    pcaGridProvider:
+      backend:
+        device: cuda:0
+        dtype: float32
+        type: torch
+      cacheType: lru
+      memorySize: 128
+    residualSigmaRange: 5.0
+    scenariosPerComponents:
+    - 21
+    - 5
+    tailDensityGamma: 1.0
+    topKNeighbors: 5
+    type: correlated_returns_vola_grid
+backtest:
+  confidenceLevel: 0.998
+  outputDirectory: ./results/greedy_25days
+  datesFromCsv:
+    path: /tmp/margin_remote/group_1_8590.csv
+    startDate: '2025-07-09'
+    endDate: '2025-08-12'

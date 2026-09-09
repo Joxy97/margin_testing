@@ -38,4 +38,4 @@ class BacktestExperimentTest(unittest.TestCase):
             self.assertEqual(resumed.results.results["default"].preparationSeconds, 0.)
             self.assertTrue(resumed.reportFiles["default"].breaches.is_file())
             self.assertEqual(json.loads((root / "output/experiment_manifest.json").read_text())["checkpointSchema"], 2)
-            self.assertEqual(json.loads((root / "output/experiment_manifest.json").read_text())["numericalModelVersion"], 3)
+            self.assertEqual(json.loads((root / "output/experiment_manifest.json").read_text())["numericalModelVersion"], 4)

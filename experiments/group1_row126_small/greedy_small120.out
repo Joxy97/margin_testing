@@ -1,0 +1,53 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/margin_remote/src/margin_engine/__main__.py", line 65, in <module>
+    main()
+  File "/tmp/margin_remote/src/margin_engine/__main__.py", line 51, in main
+    report = application.generateReport()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/yaml_application.py", line 104, in generateReport
+    return self.createEngine().generateReport(self.portfolio, self.marginDate)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/margin_engine.py", line 56, in generateReport
+    outcome = measurements.measure("marginCalculationSeconds", lambda:
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/calculation_measurements.py", line 21, in measure
+    return operation()
+           ^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/margin_engine.py", line 57, in <lambda>
+    self.marginCalculator.calculateOutcome(risk_states, portfolio))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_calculator/margin_calculator.py", line 20, in calculateOutcome
+    return CalculationOutcome(self.calculateMargin(riskStates, portfolio))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_calculator/state_aware_greedy_margin_calculator.py", line 24, in calculateMargin
+    for risk_state in riskStates:
+                      ^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/calculation_measurements.py", line 30, in iterate
+    value = self.measure("riskStateGenerationSeconds", lambda: next(iterator))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/calculation_measurements.py", line 21, in measure
+    return operation()
+           ^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/calculation_measurements.py", line 30, in <lambda>
+    value = self.measure("riskStateGenerationSeconds", lambda: next(iterator))
+                                                               ^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/returns_vola_grid_risk_state_generator.py", line 156, in getRiskStates
+    pca_grid = self.__pcaGridProvider.getOrCreate(pca_key, context.marketData)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid_provider.py", line 89, in getOrCreate
+    grid = ReturnsPCAGrid.construct(key, data, self.backend)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid/returns_pca_grid.py", line 80, in construct
+    return _ReturnsGridBuilder.construct(key, data, backend)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid/returns_pca_grid.py", line 113, in construct
+    prepared = ReturnsPCAGrid.prepareInput(key, data)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid/returns_pca_grid.py", line 70, in prepareInput
+    prices = grid._extract_price_window(data)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid/returns_pca_grid.py", line 154, in _extract_price_window
+    raise ValueError(
+ValueError: data does not contain ew_window + 1 rows before current_date

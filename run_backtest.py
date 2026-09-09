@@ -37,7 +37,16 @@ def main() -> None:
         experiment = BacktestExperiment.fromYaml(arguments.config, arguments.output_directory)
     except ValueError as error:
         parser.error(str(error))
-    files = experiment.run(resume=arguments.resume).reportFiles
+    def print_progress(name, backtest_date, index, total):
+        print(
+            f"[{name}] Processing date {index}/{total}: {backtest_date.isoformat()}",
+            flush=True,
+        )
+
+    files = experiment.run(
+        resume=arguments.resume,
+        onDayStarted=print_progress,
+    ).reportFiles
     for name, report_files in files.items():
         print(f"{name}:")
         print(f"  breaches: {report_files.breaches}")

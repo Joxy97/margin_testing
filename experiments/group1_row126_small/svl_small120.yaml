@@ -1,0 +1,90 @@
+
+marginDate: '2025-05-27'
+portfolio:
+  csv: /home/uros/Desktop/margin_testing/experiments/group1_row126_small/group1_portfolio_small120.csv
+  clientId: group1_small120
+  cash: '0'
+engine:
+  dataManager:
+    backingStore:
+      directory: ./.cache/market-data
+      type: partitioned_pickle
+    cacheType: lru
+    maxMemoryBytes: 268435456
+    memorySize: 16
+  downloadManager:
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    providerSelection: local_first
+    providers:
+      local_csv:
+        type: local_csv
+    requestParameters:
+      locations:
+      - /tmp/margin_testing_data/group_1_8590.csv
+  marginCalculator:
+    type: bqm
+    modelParameters:
+      lambdaOneHot: 1.0
+      lambdaCompat: 0.1
+    structuralCacheMemorySize: 16
+    executionPolicy:
+      type: batch
+      batchSize: 1
+      maxBatchBytes: 2147483648
+      memoryMultiplier: 3.0
+      prefetch: true
+    solver:
+      type: torch_svl
+      constructorParameters:
+        devices:
+        - cuda:0
+        - cuda:1
+        - cuda:2
+        - cuda:3
+        - cuda:4
+        - cuda:5
+        - cuda:6
+        - cuda:7
+      solverParameters:
+        dtype: float32
+        run_batch_size: 16
+        seed: 1
+        steps: 2000
+        runs: 16
+        dt: 0.01
+        mass: 1.0
+        damping: 0.1
+        temperature: 0.01
+        transverse_field_initial: 1.0
+        transverse_field_final: 0.0
+        problem_scale_initial: 0.0
+        problem_scale_final: 1.0
+        integrator: weak_order_2
+        noise_chunk_size: 16
+        energy_chunk_size: 1000000
+  riskStateGenerator:
+    allowEmptyBinFallback: true
+    components: 2
+    correlationBlockBytes: 134217728
+    distanceInflationAlpha: 0.5
+    distanceInflationPower: 2.0
+    ew_lambda: 0.93
+    ew_window: 125
+    maxInflationFactor: 5.0
+    nNearest: null
+    nZBins: 21
+    pcaGridProvider:
+      backend:
+        device: cuda:0
+        dtype: float32
+        type: torch
+      cacheType: lru
+      memorySize: 128
+    residualSigmaRange: 5.0
+    scenariosPerComponents:
+    - 21
+    - 5
+    tailDensityGamma: 1.0
+    topKNeighbors: 5
+    type: correlated_returns_vola_grid

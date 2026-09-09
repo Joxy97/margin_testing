@@ -70,6 +70,7 @@ class TorchSBMBQMSolver(TorchExecution):
                 )
 
         scratch = torch.empty_like(positions)
+        force = torch.empty_like(positions)
         wall = torch.empty(shape, dtype=torch.bool, device=device)
         old_momenta = (
             torch.empty_like(momenta) if parameters["gamma"] else None
@@ -79,7 +80,9 @@ class TorchSBMBQMSolver(TorchExecution):
             scratch.masked_fill_(scratch == 0, 1.0)
             if old_momenta is not None:
                 old_momenta.copy_(momenta)
-            force = torch.sparse.mm(matrix, scratch)
+            # beta=0 ignores the previous contents, including NaNs. Reuse the
+            # output instead of allocating and zeroing a sparse.mm result.
+            torch.addmm(force, matrix, scratch, beta=0, out=force)
             force.add_(field).mul_(c0Rows)
             pressure = parameters["a0"] * step / parameters["steps"]
             force.add_(positions, alpha=pressure - parameters["a0"])

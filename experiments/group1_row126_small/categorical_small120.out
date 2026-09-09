@@ -1,0 +1,69 @@
+/tmp/margin_remote/src/download_unit/data_assembly.py:28: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  .reindex(columns=command.instruments).reset_index())
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/margin_remote/src/margin_engine/__main__.py", line 65, in <module>
+    main()
+  File "/tmp/margin_remote/src/margin_engine/__main__.py", line 51, in main
+    report = application.generateReport()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/yaml_application.py", line 104, in generateReport
+    return self.createEngine().generateReport(self.portfolio, self.marginDate)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/margin_engine.py", line 56, in generateReport
+    outcome = measurements.measure("marginCalculationSeconds", lambda:
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/calculation_measurements.py", line 21, in measure
+    return operation()
+           ^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/margin_engine.py", line 57, in <lambda>
+    self.marginCalculator.calculateOutcome(risk_states, portfolio))
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_calculator/bqm_margin_calculator.py", line 75, in calculateOutcome
+    for risk_state, result in execution:
+                              ^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_calculator/optimization/optimization_solver/bqm_solver/bqm_execution_policy.py", line 98, in execute
+    while (batch := future.result()) is not None:
+                    ^^^^^^^^^^^^^^^
+  File "/venv/main/lib/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/venv/main/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/venv/main/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_calculator/optimization/optimization_solver/bqm_solver/bqm_execution_policy.py", line 150, in _batches
+    item = next(iterator)
+           ^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_calculator/bqm_margin_calculator.py", line 61, in encodedStates
+    for risk_state in riskStates:
+                      ^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/calculation_measurements.py", line 30, in iterate
+    value = self.measure("riskStateGenerationSeconds", lambda: next(iterator))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/calculation_measurements.py", line 21, in measure
+    return operation()
+           ^^^^^^^^^^^
+  File "/tmp/margin_remote/src/margin_engine/calculation_measurements.py", line 30, in <lambda>
+    value = self.measure("riskStateGenerationSeconds", lambda: next(iterator))
+                                                               ^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/returns_vola_grid_risk_state_generator.py", line 156, in getRiskStates
+    pca_grid = self.__pcaGridProvider.getOrCreate(pca_key, context.marketData)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid_provider.py", line 89, in getOrCreate
+    grid = ReturnsPCAGrid.construct(key, data, self.backend)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid/returns_pca_grid.py", line 80, in construct
+    return _ReturnsGridBuilder.construct(key, data, backend)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid/returns_pca_grid.py", line 113, in construct
+    prepared = ReturnsPCAGrid.prepareInput(key, data)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid/returns_pca_grid.py", line 70, in prepareInput
+    prices = grid._extract_price_window(data)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/margin_remote/src/risk_state_generator/pca_grid/returns_pca_grid.py", line 154, in _extract_price_window
+    raise ValueError(
+ValueError: data does not contain ew_window + 1 rows before current_date
