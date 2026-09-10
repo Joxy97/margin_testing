@@ -76,6 +76,8 @@ engine:
       pnlAnchor: market
     modelParameters:
       lambdaOneHot: 2.0
+      # Correlation-derived coefficients are divided by their scenario-wide
+      # absolute maximum and pruned below 0.01 before applying this weight.
       lambdaCompat: 0.1
     structuralCacheMemorySize: 16
     executionPolicy:
@@ -124,3 +126,23 @@ engine:
 #     noise_chunk_size: 16
 #     energy_chunk_size: 1000000
 #     seed: 1
+
+# General binary angular-flow alternative (replace the entire solver block):
+# solver:
+#   type: torch_transverse_route
+#   constructorParameters: {device: auto}
+#   solverParameters:
+#     steps: 1000
+#     runs: 64
+#     run_batch_size: 16
+#     integrator: euler # Or heun, which evaluates two slopes per step.
+#     time_step: 0.05
+#     route_strength: 1.0
+#     gamma: 0.0
+#     kappa_initial: -1.0
+#     kappa_final: 2.0
+#     candidate_interval: 25
+#     candidate_batch_size: 128
+#     matrix_format: sparse
+#     cuda_graph: true
+# See transverse_route.example.yaml for the complete runnable configuration.

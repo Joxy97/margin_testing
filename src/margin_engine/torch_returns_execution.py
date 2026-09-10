@@ -214,13 +214,22 @@ class TorchReturnsExecution:
         host_heads, host_tails, host_biases = template.heads, template.tails, template.biases
         if len(correlation) and compatibility:
             first_assets, first_states, second_assets, second_states, coefficients = device_correlation
+            # Source precision owns the cutoff so float32 rounding cannot change
+            # topology between resident dynamics and authoritative host scoring.
+            normalized = self.calculator.bqmVisitor.normalizedCorrelationCoefficients(correlation)
+            retained = normalized != 0.0
+            device_retained = torch.tensor(retained, device=device)
+            first_assets, first_states, second_assets, second_states = (
+                values[device_retained]
+                for values in (first_assets, first_states, second_assets, second_states))
+            coefficients = torch.tensor(normalized[retained], dtype=coefficients.dtype, device=device)
             offsets = torch.tensor(template.offsets, device=device)
             heads = torch.cat((heads, offsets[first_assets] + first_states))
             tails = torch.cat((tails, offsets[second_assets] + second_states))
             biases = torch.cat((biases, coefficients * compatibility))
-            host_heads = numpy.concatenate((host_heads, template.offsets[correlation.firstAssets] + correlation.firstStates))
-            host_tails = numpy.concatenate((host_tails, template.offsets[correlation.secondAssets] + correlation.secondStates))
-            host_biases = numpy.concatenate((host_biases, correlation.coefficients * compatibility))
+            host_heads = numpy.concatenate((host_heads, template.offsets[correlation.firstAssets[retained]] + correlation.firstStates[retained]))
+            host_tails = numpy.concatenate((host_tails, template.offsets[correlation.secondAssets[retained]] + correlation.secondStates[retained]))
+            host_biases = numpy.concatenate((host_biases, normalized[retained] * compatibility))
         source = QUBOProblem(linear, host_heads, host_tails, host_biases,
             offset=template.offset, groupOffsets=template.offsets,
             seedOffset=self.calculator.bqmVisitor.scenarioSeedOffset(instruments, linear, correlation, penalty, compatibility))

@@ -1,0 +1,31 @@
+marginDate: '2026-09-08'
+portfolio:
+  csv: portfolio.csv
+  clientId: factor_stress_random
+  cash: '0'
+engine:
+  dataManager:
+    cacheType: lru
+    memorySize: 4
+    maxMemoryBytes: 268435456
+  downloadManager:
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    providerSelection: local_first
+    providers:
+      local_csv:
+        type: local_csv
+    requestParameters:
+      locations:
+      - /home/uros/Desktop/margin_testing/yahoo_equities_grouped/groups/US/group_49_102.csv
+  riskStateGenerator:
+    type: returns_vola_grid
+    components: 2
+    ew_window: 125
+    ew_lambda: 0.93
+    scenariosPerComponents:
+    - 1
+    - 1
+    nZBins: 3
+  marginCalculator:
+    type: state_aware_greedy

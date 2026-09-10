@@ -43,7 +43,7 @@ class MarginEngineConfig:
             from .numerical_execution_config import validateResidentCollaborators
             validateResidentCollaborators(self.marginCalculator.bqmVisitor, self.marginCalculator.executionPolicy)
             solver = self.marginCalculator.solver
-            if solver.solverType not in {"torch_sbm", "adaptive_torch_sbm", "torch_svl", "torch_categorical"}:
+            if solver.solverType not in {"torch_sbm", "adaptive_torch_sbm", "torch_svl", "torch_categorical", "torch_transverse_route"}:
                 raise ValueError("Resident BQM execution requires a Torch solver")
             devices = solver.constructorParameters.get("devices", ())
             if len(devices) > 1:

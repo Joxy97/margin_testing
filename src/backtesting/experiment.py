@@ -18,7 +18,7 @@ from .margin_backtester import MarginBacktester
 if TYPE_CHECKING:
     from margin_engine import MarginApplicationConfig
 
-NUMERICAL_MODEL_VERSION = 4
+NUMERICAL_MODEL_VERSION = 5
 
 
 def experimentFingerprint(

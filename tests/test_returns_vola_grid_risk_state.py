@@ -1,6 +1,7 @@
 """Tests for returns-volatility-grid risk states."""
 
 import unittest
+from itertools import product
 from datetime import date
 from decimal import Decimal
 
@@ -129,7 +130,7 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
         )
         numpy.testing.assert_allclose(
             sorted(correlated_bqm.quadraticBiases),
-            [0.375, 4.0],
+            [0.5, 4.0],
         )
         self.assertAlmostEqual(correlated_bqm.offset, 4.0)
         visitor.createBQM(
@@ -138,6 +139,49 @@ class ReturnsVolaGridRiskStateTest(unittest.TestCase):
             {"lambdaOneHot": 2.0},
         )
         self.assertEqual(len(visitor.structuralCache.cache.memory), 1)
+
+    def test_correlation_normalization_and_cutoff_preserve_other_energy_terms(self) -> None:
+        visitor = PortfolioRiskStateBQMVisitor()
+        grids = {
+            "A": numpy.array([[-0.05, 0.2], [0.03, 0.2]]),
+            "B": numpy.array([[-0.02, 0.2], [0.04, 0.2]]),
+            "C": numpy.array([[0.01, 0.2]]),
+        }
+        portfolio = Portfolio(weights={"A": Decimal("10"), "B": Decimal("-5")})
+        parameters = {"lambdaOneHot": 2.0, "lambdaCompat": 0.5}
+        base = visitor.createBQM(ReturnsVolaGridRiskState(grids), portfolio, parameters)
+        # The cutoff is relative to the global maximum, before lambdaCompat.
+        for raw in ([100., 1., 0.999, 0.], [1., .01, .00999, 0.], [0., 0., 0., 0.]):
+            with self.subTest(coefficients=raw):
+                factors = CorrelationFactors(
+                    numpy.array([0, 0, 0, 0]), numpy.array([0, 0, 1, 1]),
+                    numpy.array([1, 2, 1, 1]), numpy.array([0, 0, 0, 1]),
+                    numpy.array(raw))
+                state = CorrelatedReturnsVolaGridRiskState(grids, factors)
+                problem = visitor.createBQM(state, portfolio, parameters)
+                numpy.testing.assert_array_equal(problem.linear, base.linear)
+                self.assertEqual(problem.offset, base.offset)
+                numpy.testing.assert_array_equal(problem.groupOffsets, base.groupOffsets)
+                numpy.testing.assert_array_equal(factors.coefficients, raw)
+                self.assertFalse(factors.coefficients.flags.writeable)
+                self.assertEqual(len(problem.quadraticBiases), len(base.quadraticBiases) + (2 if raw[0] else 0))
+                for bits in product((0, 1), repeat=5):
+                    sample = numpy.array(bits)
+                    expected = base.energy(sample)
+                    if raw[0]:
+                        expected += .5 * sample[0] * sample[2] + .005 * sample[0] * sample[4]
+                    self.assertAlmostEqual(problem.energy(sample), expected)
+                disabled = visitor.createBQM(state, portfolio, {**parameters, "lambdaCompat": 0.})
+                numpy.testing.assert_array_equal(disabled.quadraticBiases, base.quadraticBiases)
+
+    def test_correlation_cutoff_does_not_hide_invalid_indices(self) -> None:
+        factors = CorrelationFactors(
+            numpy.array([0, 0]), numpy.array([0, 99]),
+            numpy.array([1, 1]), numpy.array([0, 0]), numpy.array([100., .001]))
+        state = CorrelatedReturnsVolaGridRiskState(
+            {"A": numpy.array([[.01, .2]]), "B": numpy.array([[.02, .2]])}, factors)
+        with self.assertRaisesRegex(ValueError, "unknown state"):
+            PortfolioRiskStateBQMVisitor().createBQM(state, Portfolio(), {})
 
     def test_bqm_manager_decodes_the_selected_portfolio_loss(self) -> None:
         risk_state = ReturnsVolaGridRiskState(

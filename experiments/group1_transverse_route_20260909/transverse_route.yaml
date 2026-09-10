@@ -1,0 +1,86 @@
+marginDate: '2025-07-08'
+portfolio:
+  csv: ../group1_row126/group1_portfolio.csv
+  clientId: group1
+  cash: '0'
+engine:
+  dataManager:
+    backingStore:
+      directory: ./.cache/market-data
+      type: partitioned_pickle
+    cacheType: lru
+    maxMemoryBytes: 268435456
+    memorySize: 16
+  downloadManager:
+    downloadAlgorithm: single_request
+    downloadParameters: {}
+    providerSelection: local_first
+    providers:
+      local_csv:
+        type: local_csv
+    requestParameters:
+      locations:
+      - ../../yahoo_equities_grouped/groups/US/group_1_8590.csv
+  marginCalculator:
+    type: bqm
+    modelParameters:
+      lambdaOneHot: 1.0
+      lambdaCompat: 0.1
+    structuralCacheMemorySize: 16
+    executionPolicy:
+      type: batch
+      batchSize: 8
+      maxBatchBytes: 8589934592
+      memoryMultiplier: 3.0
+      prefetch: true
+    solver:
+      type: torch_transverse_route
+      constructorParameters:
+        devices:
+        - cuda:0
+        - cuda:1
+        - cuda:2
+        - cuda:3
+        - cuda:4
+        - cuda:5
+        - cuda:6
+        - cuda:7
+      solverParameters:
+        steps: 1000
+        runs: 4
+        run_batch_size: 4
+        dtype: float32
+        seed: 1
+        max_variables: 200000
+        matrix_format: sparse
+        candidate_interval: 25
+        candidate_batch_size: 128
+        deduplicate_candidates: true
+        energy_chunk_size: 8192
+        cuda_graph: true
+        graph_steps: 25
+  riskStateGenerator:
+    allowEmptyBinFallback: true
+    components: 2
+    correlationBlockBytes: 134217728
+    distanceInflationAlpha: 0.5
+    distanceInflationPower: 2.0
+    ew_lambda: 0.93
+    ew_window: 125
+    maxInflationFactor: 5.0
+    nNearest: null
+    nZBins: 21
+    pcaGridProvider:
+      backend:
+        device: cuda:0
+        dtype: float32
+        type: torch
+      cacheType: lru
+      memorySize: 128
+    residualSigmaRange: 5.0
+    scenariosPerComponents:
+    - 21
+    - 5
+    tailDensityGamma: 1.0
+    topKNeighbors: 5
+    type: correlated_returns_vola_grid

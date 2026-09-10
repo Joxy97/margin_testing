@@ -1,0 +1,152 @@
+{
+  "type": "result",
+  "device": "cuda:2",
+  "instance": {
+    "name": "pw05_100.0",
+    "family": "rudy",
+    "path": "rudy/pw05_100.0",
+    "vertices": 100,
+    "edges": 2475,
+    "sha256": "12ce767e84a775b08d026360ecff7ca79a7e9f1e4543aa7058fc93fa263bb12c",
+    "reference_cut": 8190
+  },
+  "runs": 2,
+  "steps": 10000,
+  "solvers": {
+    "TRF": {
+      "status": "ok",
+      "trials": [
+        {
+          "seconds": 0.39500974502880126,
+          "cut": 7942.0,
+          "energy": -7942.0,
+          "sample": "0010001110010101001100110101011100011110100010101110111010011001100001101101000101110000111101001101",
+          "sample_sha256": "d1f8ea97168f420b3ea71fe85f7c84879626b04986f686a1075dc32f8f130d99"
+        },
+        {
+          "seconds": 0.3950527460547164,
+          "cut": 7942.0,
+          "energy": -7942.0,
+          "sample": "0010001110010101001100110101011100011110100010101110111010011001100001101101000101110000111101001101",
+          "sample_sha256": "d1f8ea97168f420b3ea71fe85f7c84879626b04986f686a1075dc32f8f130d99"
+        },
+        {
+          "seconds": 0.3949942709878087,
+          "cut": 7942.0,
+          "energy": -7942.0,
+          "sample": "0010001110010101001100110101011100011110100010101110111010011001100001101101000101110000111101001101",
+          "sample_sha256": "d1f8ea97168f420b3ea71fe85f7c84879626b04986f686a1075dc32f8f130d99"
+        }
+      ],
+      "parameters": {
+        "steps": 10000,
+        "runs": 2,
+        "time_step": 0.05,
+        "mobility": 1.0,
+        "route_strength": 1.0,
+        "gamma": 0.0,
+        "kappa_initial": -1.0,
+        "kappa_final": 2.0,
+        "schedule_exponent": 1.0,
+        "integrator": "euler",
+        "candidate_interval": 25,
+        "candidate_batch_size": 128,
+        "matrix_format": "sparse",
+        "sparse_threshold": 0.15,
+        "max_dense_variables": 10000,
+        "max_variables": 100000,
+        "dtype": "float32",
+        "seed": 1,
+        "run_batch_size": 2,
+        "energy_chunk_size": 8192,
+        "cuda_graph": true,
+        "graph_steps": 25,
+        "deduplicate_candidates": true
+      }
+    },
+    "SBM": {
+      "status": "ok",
+      "trials": [
+        {
+          "seconds": 0.9763607350178063,
+          "cut": 0.0,
+          "energy": 0.0,
+          "sample": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "sample_sha256": "cd00e292c5970d3c5e2f0ffa5171e555bc46bfc4faddfb4a418b6840b86e79a3"
+        },
+        {
+          "seconds": 0.9726619049906731,
+          "cut": 0.0,
+          "energy": 0.0,
+          "sample": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "sample_sha256": "cd00e292c5970d3c5e2f0ffa5171e555bc46bfc4faddfb4a418b6840b86e79a3"
+        },
+        {
+          "seconds": 0.9818733249558136,
+          "cut": 0.0,
+          "energy": 0.0,
+          "sample": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "sample_sha256": "cd00e292c5970d3c5e2f0ffa5171e555bc46bfc4faddfb4a418b6840b86e79a3"
+        }
+      ],
+      "parameters": {
+        "steps": 10000,
+        "runs": 2,
+        "dt": 1.0,
+        "a0": 1.0,
+        "c0": 0.0,
+        "gamma": 0.0,
+        "initial_scale": 0.05,
+        "seed": 1,
+        "dtype": "float32",
+        "run_batch_size": 2,
+        "energy_chunk_size": 8192
+      }
+    },
+    "SVL": {
+      "status": "ok",
+      "trials": [
+        {
+          "seconds": 1.2542144500184804,
+          "cut": 7521.0,
+          "energy": -7521.0,
+          "sample": "0111010100001011110010001011100010000100011010110001001000111110110100100100101011000110010011011101",
+          "sample_sha256": "525e3ab5bf85be54837569898f84414c2f4751181f80ed1efda4a69bd6cd053a"
+        },
+        {
+          "seconds": 1.2432738249190152,
+          "cut": 7508.0,
+          "energy": -7508.0,
+          "sample": "1000000010101010010011010011110001010000100011011101000110100101100000111110111101011011000111100100",
+          "sample_sha256": "08ca8730e36d41d54f564108f9c95be9abf8100d9b1562f9a65451eb2aa6aed8"
+        },
+        {
+          "seconds": 1.2360587179427966,
+          "cut": 7641.0,
+          "energy": -7641.0,
+          "sample": "0111011100110010010011011011111010111101000010101001000101100001100010001010001110010110011010100001",
+          "sample_sha256": "017b846217dbe70a1c36111129c58d4d5325d5dc658c6ec7a508d2465f9382f6"
+        }
+      ],
+      "parameters": {
+        "steps": 10000,
+        "runs": 2,
+        "dt": 0.01,
+        "mass": 1.0,
+        "damping": 0.1,
+        "temperature": 0.01,
+        "transverse_field_initial": 1.0,
+        "transverse_field_final": 0.0,
+        "problem_scale_initial": 0.0,
+        "problem_scale_final": 1.0,
+        "seed": 1,
+        "dtype": "float32",
+        "integrator": "euler_maruyama",
+        "run_batch_size": 2,
+        "energy_chunk_size": 8192,
+        "noise_chunk_size": 16
+      }
+    }
+  },
+  "seed": 1
+}

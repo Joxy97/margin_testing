@@ -251,18 +251,20 @@ class PortfolioRiskStateBQMVisitor:
                 or numpy.any(correlations.secondStates < 0)
             ):
                 raise ValueError("correlation factors contain an unknown state")
+            coefficients = self.normalizedCorrelationCoefficients(correlations)
+            retained = coefficients != 0.0
             correlation_heads = (
-                offsets[correlations.firstAssets] + correlations.firstStates
+                offsets[correlations.firstAssets[retained]] + correlations.firstStates[retained]
             )
             correlation_tails = (
-                offsets[correlations.secondAssets] + correlations.secondStates
+                offsets[correlations.secondAssets[retained]] + correlations.secondStates[retained]
             )
             heads = numpy.concatenate((template.heads, correlation_heads))
             tails = numpy.concatenate((template.tails, correlation_tails))
             biases = numpy.concatenate(
                 (
                     template.biases,
-                    lambda_compat * correlations.coefficients,
+                    lambda_compat * coefficients[retained],
                 )
             )
         else:
@@ -289,6 +291,17 @@ class PortfolioRiskStateBQMVisitor:
                 lambda_compat,
             ),
         )
+
+    @staticmethod
+    def normalizedCorrelationCoefficients(correlations: CorrelationFactors) -> numpy.ndarray:
+        """Normalize only compatibility terms, then discard magnitudes below 0.01."""
+        coefficients = correlations.coefficients
+        maximum = numpy.max(numpy.abs(coefficients), initial=0.0)
+        if maximum == 0.0:
+            return numpy.zeros_like(coefficients)
+        normalized = coefficients / maximum
+        normalized[numpy.abs(normalized) < 1e-2] = 0.0
+        return normalized
 
     def oneHotTopology(self, stateCounts: tuple[int, ...], lambdaOneHot: float) -> _StructuralQUBOTemplate:
         """Return shared host topology for either host or resident encoding."""

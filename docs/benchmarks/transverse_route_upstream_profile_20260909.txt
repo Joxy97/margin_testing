@@ -1,0 +1,47 @@
+/tmp/margin-trf-upstream/solvers/transverse_route.py:239: UserWarning: Sparse invariant checks are implicitly disabled. Memory errors (e.g. SEGFAULT) will occur when operating on a sparse tensor which violates the invariants, but checks incur performance overhead. To silence this warning, explicitly opt in or out. See `torch.sparse.check_sparse_tensor_invariants.__doc__` for guidance.  (Triggered internally at /pytorch/aten/src/ATen/Context.cpp:760.)
+  return torch.sparse_coo_tensor(
+{"torch": "2.11.0+cu128", "cuda": "12.8", "hardware": "NVIDIA GeForce RTX 2080 Ti", "seconds": 0.10892948997206986, "energy": -104.22400669133074}
+/venv/main/lib/python3.12/site-packages/torch/profiler/profiler.py:224: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+--------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                              Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg       CPU Mem  Self CPU Mem    # of Calls  
+--------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                  cudaLaunchKernel        23.66%      25.711ms        23.66%      25.711ms       3.220us           0 B           0 B          7986  
+                                         aten::mul        14.94%      16.234ms        22.31%      24.246ms       9.468us           0 B           0 B          2561  
+                                       aten::empty        12.29%      13.353ms        12.29%      13.353ms       8.549us     192.00 KB     192.00 KB          1562  
+                                       aten::addmm         8.00%       8.693ms        30.96%      33.646ms     131.428us           0 B           0 B           256  
+                                       aten::copy_         7.98%       8.672ms        12.14%      13.197ms      12.346us           0 B    -259.48 KB          1069  
+                                         aten::sub         6.03%       6.548ms         8.93%       9.701ms       9.464us           0 B           0 B          1025  
+                                         aten::add         5.48%       5.959ms         7.89%       8.573ms      11.163us           0 B           0 B           768  
+                                   aten::remainder         2.42%       2.628ms         3.19%       3.470ms      13.553us           0 B           0 B           256  
+                                         aten::cat         2.33%       2.530ms         3.27%       3.548ms      13.859us           0 B           0 B           256  
+                                         aten::cos         1.80%       1.958ms         2.66%       2.892ms      10.792us           0 B           0 B           268  
+                                       aten::fill_         1.62%       1.764ms         3.06%       3.325ms       6.495us           0 B           0 B           512  
+                                       aten::slice         1.52%       1.654ms         1.84%       1.998ms       3.887us           0 B           0 B           514  
+                                         aten::sin         1.50%       1.625ms         2.23%       2.421ms       9.422us           0 B           0 B           257  
+                                       aten::zero_         1.05%       1.144ms         4.11%       4.469ms       8.729us           0 B           0 B           512  
+                                  aten::as_strided         1.00%       1.085ms         1.00%       1.085ms       0.600us           0 B           0 B          1810  
+--------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 108.665ms
+
+--------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                              Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg       CPU Mem  Self CPU Mem    # of Calls  
+--------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                       aten::empty        12.29%      13.353ms        12.29%      13.353ms       8.549us     192.00 KB     192.00 KB          1562  
+                                  aten::lift_fresh         0.01%       8.557us         0.01%       8.557us       2.852us           0 B           0 B             3  
+                                          aten::to         0.03%      30.177us         2.63%       2.853ms      92.043us     259.48 KB           0 B            31  
+                                    aten::_to_copy         0.07%      74.152us         2.60%       2.823ms     166.067us     259.48 KB           0 B            17  
+                               aten::empty_strided         0.12%     130.365us         0.12%     130.365us       7.669us     259.48 KB     259.48 KB            17  
+                                       aten::copy_         7.98%       8.672ms        12.14%      13.197ms      12.346us           0 B    -259.48 KB          1069  
+                             cudaStreamIsCapturing         0.03%      31.339us         0.03%      31.339us       0.950us           0 B           0 B            33  
+                                   cudaMemcpyAsync         0.37%     406.311us         0.37%     406.311us      20.316us           0 B           0 B            20  
+                             cudaStreamSynchronize         0.11%     124.364us         0.11%     124.364us       5.653us           0 B           0 B            22  
+                                   aten::expand_as         0.02%      23.733us         0.07%      74.074us       5.291us           0 B           0 B            14  
+                                      aten::expand         0.03%      36.227us         0.05%      50.341us       3.596us           0 B           0 B            14  
+                                  aten::as_strided         1.00%       1.085ms         1.00%       1.085ms       0.600us           0 B           0 B          1810  
+                           aten::sparse_coo_tensor         0.01%       8.543us         0.04%      43.878us      43.878us           0 B           0 B             1  
+    aten::_sparse_coo_tensor_with_dims_and_tensors         0.03%      31.276us         0.06%      60.637us      30.318us           0 B           0 B             2  
+                                     aten::resize_         0.67%     725.389us         0.67%     725.389us       2.748us           0 B           0 B           264  
+--------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 108.665ms
+
