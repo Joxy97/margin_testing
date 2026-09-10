@@ -12,6 +12,7 @@ from .config import (
     RiskStateGeneratorConfig,
 )
 from .pca_grid import PCAGrid, ReturnsPCAGrid
+from .factor_stress_model import FactorStressModel
 from .pca_backend import PCABackend, PCABackendConfig, PCAFit, NumpyPCABackend, TorchPCABackend
 from .pca_grid_factory import PCAGridFactory
 from .pca_grid_provider import PCAGridProvider
@@ -36,6 +37,7 @@ from .pca_grid_provider import PCAGridProviderConfig
 
 __all__ = [
     "PCAGridProviderConfig",
+    "FactorStressModel",
 
     "Cache",
     "CacheFactory",

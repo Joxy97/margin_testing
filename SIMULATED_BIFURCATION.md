@@ -304,6 +304,55 @@ identity, so execution-policy batch boundaries, GPU sharding, and
 `run_batch_size` do not change a seeded problem's trajectories. The same
 `cuda:N` spelling is used for CUDA and PyTorch ROCm builds.
 
+## Transverse-route geometric flow
+
+`torch_transverse_route` implements the angular flow from
+[`Joxy97/solver_testing`](https://github.com/Joxy97/solver_testing/blob/f71e926c2d1fee5fb3ebe6fd872161cccde738d0/solvers/transverse_route.py).
+Run `PYTHONPATH=src python -m margin_engine config/transverse_route.example.yaml`.
+The public constructor accepts `device` or `devices`, like the other Torch solvers.
+`steps` and `runs` are solve parameters; upstream aliases `max_steps` and `agents`
+are accepted, but specifying an alias together with its canonical name is rejected.
+
+The solver normalizes positive Ising `J,h` by the largest absolute row bound,
+then integrates angles using Euler (default) or Heun. With `x=cos(theta)` and
+`y=sin(theta)`, its flow is
+`mobility * (y*(J*x+h) - route_strength*(x*x-y*y)*(J*(x*y))
+- 3*gamma*x*y*y*(J*(y*y*y)) - kappa*x*y)`.
+The confinement schedule runs from `kappa_initial` to `kappa_final` with
+`schedule_exponent`. Normalization is per problem, in float64, before casting
+dynamics to `dtype`. Defaults preserve upstream flow parameters.
+
+Binary candidates are sampled initially, every `candidate_interval` steps, and
+at the final step. `candidate_batch_size` bounds checkpoint buffering (at least
+one trajectory batch); `run_batch_size` bounds concurrent trajectories.
+Candidate energies use the original float64 QUBO and the shared feasible-first,
+deterministic repair policy. `deduplicate_candidates: true` collapses identical
+one-hot candidate rows within each checkpoint batch before deterministic repair;
+it does not discard distinct infeasible candidates. This solver searches general binary QUBOs: retain
+one-hot penalties when appropriate. Unlike `torch_categorical`, raw candidates
+are not necessarily feasible. It is a heuristic with no optimality guarantee.
+
+CSR is the default matrix format. `matrix_format: dense` solves scenarios
+sequentially within each device to avoid a dense block-diagonal allocation;
+`auto` considers density only for single-problem shards. Dense allocation is
+bounded by `max_dense_variables` (10,000); `max_variables` defaults to 100,000
+per problem. Resource estimates include dynamics, checkpoint and scoring buffers.
+`cuda_graph: true` replays fixed blocks of `graph_steps` (default 25); it is
+ignored on CPU. Graphs are local to a solve and reused across equal-width run
+batches, so reported end-to-end times must include capture cost. Disable graph
+replay when profiling eager operations or using a runtime without graph support.
+
+Multiple devices shard independent QUBOs through the existing resource plan;
+a single QUBO does not use all GPUs. Stable per-problem/per-run seeds avoid
+global Torch RNG mutation. Resident execution is accepted, but this adapter
+rebuilds normalized coefficients from the authoritative host snapshot, so it
+does not promise transfer-free resident solving.
+
+For changes to this solver, run `tests.test_torch_transverse_route` on CPU and
+CUDA, then use `tools/benchmark_transverse_route.py` with a pinned upstream
+checkout. See `docs/benchmarks/transverse_route.md` for reproducible commands,
+measurements, numerical parity tolerances and attribution.
+
 ## Compact QUBO format
 
 The solver consumes a sparse coordinate format. Variables are zero-based.
@@ -434,6 +483,17 @@ canonical eigenvector signs. Their compatibility-penalty construction also remai
 intentional: directed filtering in the exporter, symmetric nomination union in the
 application. Shared numerical code does not imply interchangeable risk models.
 
+Application QUBO encoding normalizes only the correlation-derived compatibility
+coefficients. For each scenario, let `M = max(abs(c))` over all its state-pair
+compatibility coefficients. When `M > 0`, encoding uses `c / M`, omits terms with
+normalized magnitude strictly below `1e-2`, then multiplies retained terms by
+`lambdaCompat`. A coefficient exactly at `1e-2` is retained; empty or all-zero
+inputs add no quadratic terms. The cutoff applies to normalized QUBO coefficients,
+not the original asset correlations. Returns, one-hot penalties, and the constant
+offset retain their original scales. Raw risk-state factors remain unchanged.
+This changes the relative strength of compatibility penalties and can change
+selected scenarios and decoded margins at existing `lambdaCompat` settings.
+
 ## Opt-in resident returns execution
 
 Recommendation 24 now has an experimental implementation. Enable it explicitly:
@@ -472,6 +532,10 @@ necessary for the existing coefficient-derived seed identity, authoritative
 float64 scoring, and deterministic categorical repair. Control metadata and
 candidates also cross the host/device boundary. With float32 risk numerics, scoring uploads the authoritative float64 source
 coefficients; widening rounded dynamics coefficients would lose source-energy ties.
+Compatibility normalization and pruning use the shared float64 host encoding
+rule. Resident execution uploads the retention mask and retained normalized
+coefficients in the risk dtype, so source scoring and dynamics share the same
+quadratic topology even at the cutoff boundary.
 This removes the fitted PCA round-trip; it does not eliminate all transfers or
 synchronizations. It does not add asynchronous copy/double-buffer scheduling.
 
@@ -480,7 +544,7 @@ float64 on CPU), `float32`, or `float64`; the solver retains its independently
 configured dynamics precision. Means, scales, scenario bins, correlation blocks,
 and resident QUBO dynamics coefficients follow the risk dtype. Host source QUBOs,
 candidate energy scoring and repair retain float64. The effective risk `dtype` is
-reported in numerical diagnostics. Model fingerprint version 4 invalidates older
+reported in numerical diagnostics. Model fingerprint version 5 invalidates older
 backtest checkpoints. Reduced precision can change bin membership, neighbor order
 for near ties, and coefficients; it is not bitwise equivalent to float64. Use
 float64 for sensitive or ill-conditioned portfolios and compare the resulting
@@ -531,7 +595,8 @@ Nearest-residual distance ties likewise use the earliest chronological observati
 This makes degenerate histories reproducible across these algorithms; portfolios
 with tied neighbors may legitimately differ from the old unspecified tie order.
 Numerical model version 3 introduced this tie rule; version 4 additionally
-identifies the GPU float32 default. The fingerprint prevents resume from mixing
+identifies the GPU float32 default. Version 5 identifies compatibility-only
+normalization and the normalized `1e-2` cutoff. The fingerprint prevents resume from mixing
 checkpoints made under earlier numerical policies.
 Custom visitors and execution policies require the host path and are rejected by
 the resident configuration rather than being silently bypassed.
@@ -596,3 +661,22 @@ highly connected group graphs can limit memory efficiency and color parallelism.
 Existing SBM/SVL defaults and candidate repair behavior remain unchanged. Select
 this solver explicitly and compare quality/latency on the intended portfolio. See
 [feasibility, penalty, and solver measurements](docs/benchmarks/one_hot_feasibility_20260909.md).
+
+## Categorical Transverse Route (experimental)
+
+`torch_categorical_trf` combines group-normalized categorical mirror flow with a
+transverse-route-inspired interaction potential. It is not equivalent to binary
+TRF, SBM/SVL, or categorical heat-bath annealing. Checkpoint samples select exactly
+one variable per group and use original float64 scoring without binary repair.
+See [equations, configuration and validation limits](docs/benchmarks/categorical_trf.md)
+before using this variant for comparative research. The full Group 1 RTX 5090
+run is tracked with `bash tools/track_group1_categorical_trf.sh status`.
+# Joint factor-stress experiment
+
+`tools/benchmark_factor_stress.py` compares a single PCA-plus-residual stress
+QUBO with analytical, continuous quadratic, exact-repricing, and exact lattice
+references. The integer-ball conversion adds product and slack bits, with no
+asset one-hot groups. Its constraints require explicit diagnostic checks after
+SBM/SVL/TRF sampling. See [the model and benchmark guide](docs/benchmarks/factor_stress.md)
+for commands, penalty guarantees, and precision limits, and
+[the 102-stock results](experiments/factor_stress_20260910/README.md) for measurements.

@@ -64,8 +64,59 @@ class DeviceResidentPipelineTest(unittest.TestCase):
             config["engine"]["riskStateGenerator"].update(
                 type="correlated_returns_vola_grid", topKNeighbors=1, nZBins=3, nNearest=4)
             report = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
-        self.assertAlmostEqual(report.margin, 0.42607412049256665, places=12)
+            del config["engine"]["numericalExecution"]
+            host = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
+        self.assertAlmostEqual(report.margin, host.margin, places=12)
+        self.assertAlmostEqual(report.margin, 0.6407505515767987, places=12)
         self.assertAlmostEqual(report.comparisonMargins["greedy"], 0.9927113937275229, places=12)
+
+    def test_resident_correlation_cutoff_matches_host_topology_and_energy(self):
+        from decimal import Decimal
+        from itertools import product
+        from unittest.mock import patch
+        import numpy
+        import torch
+        from margin_calculator import BQMMarginCalculator
+        from margin_calculator.optimization.optimization_solver.bqm_solver import TorchSBMBQMSolver
+        from margin_engine.numerical_execution_config import TorchNumericalExecutionConfig
+        from margin_engine.torch_returns_execution import _ConditionedGrid
+        from portfolio import Portfolio
+        from risk_state_generator import CorrelationFactors, CorrelatedReturnsVolaGridRiskState, CorrelatedReturnsVolaGridRiskStateGenerator
+
+        devices = ["cpu"] + (["cuda:0"] if torch.cuda.is_available() else [])
+        for device, dtype, raw in product(devices, (torch.float32, torch.float64),
+                                         ([100., 1., .999, 0.], [0., 0., 0., 0.], [])):
+            with self.subTest(device=device, dtype=dtype, raw=raw):
+                calculator = BQMMarginCalculator(TorchSBMBQMSolver(device=device),
+                    modelParameters={"lambdaOneHot": 2., "lambdaCompat": .5})
+                execution = TorchNumericalExecutionConfig(device=device).createExecution(
+                    CorrelatedReturnsVolaGridRiskStateGenerator(), calculator)
+                returns = torch.tensor([[-.05, .03], [-.02, .04]], dtype=dtype, device=device)
+                grid = _ConditionedGrid(returns=returns, mask=torch.ones_like(returns, dtype=torch.bool),
+                    center=None, nearest=None, inflation=None, sigma=None, means=None, scales=None, fallbackMask=None)
+                arrays = tuple(torch.tensor(values, device=device, dtype=torch.int64 if index < 4 else dtype)
+                    for index, values in enumerate(([0] * len(raw), [0, 0, 1, 1][:len(raw)],
+                        [1] * len(raw), [0, 1, 0, 1][:len(raw)], raw)))
+                factors = CorrelationFactors(*(values.cpu().numpy() for values in arrays))
+                weights = torch.tensor([10., -5.], dtype=dtype, device=device)
+                weighted = weights[:, None] * returns
+                with patch.object(execution, "_correlations", return_value=(factors, arrays)):
+                    resident, _ = execution._encode(weighted, grid, ("A", "B"), {})
+                # Use rounded resident weighted returns as the reference inputs;
+                # this isolates encoding from upstream float32 multiplication.
+                state = CorrelatedReturnsVolaGridRiskState({name: numpy.column_stack(
+                    (values, numpy.zeros(2))) for name, values in zip(("A", "B"), weighted.cpu().numpy())}, factors)
+                host = calculator.bqmVisitor.createBQM(state,
+                    Portfolio(weights={"A": Decimal("1"), "B": Decimal("1")}), calculator.modelParameters)
+                numpy.testing.assert_array_equal(resident.source.quadraticHeads, host.quadraticHeads)
+                numpy.testing.assert_array_equal(resident.source.quadraticTails, host.quadraticTails)
+                numpy.testing.assert_array_equal(resident.source.quadraticBiases, host.quadraticBiases)
+                numpy.testing.assert_array_equal(resident.heads.cpu().numpy(), host.quadraticHeads)
+                numpy.testing.assert_array_equal(resident.tails.cpu().numpy(), host.quadraticTails)
+                numpy.testing.assert_allclose(resident.biases.cpu().numpy(), host.quadraticBiases)
+                self.assertEqual(len(host.quadraticBiases), 4 if any(raw) else 2)
+                for bits in product((0, 1), repeat=4):
+                    self.assertAlmostEqual(resident.source.energy(bits), host.energy(bits))
 
     def test_resident_execution_respects_a_one_problem_memory_budget(self):
         calculator = {"type": "bqm", "comparison": {"type": "state_aware_greedy"},

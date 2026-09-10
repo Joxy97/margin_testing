@@ -1,0 +1,55 @@
+# Single-date Transverse Route calculation on the ten-asset synthetic fixture.
+marginDate: 2025-01-01
+portfolio:
+  csv: ../synthetic_market/assets_00010/portfolio.csv
+  clientId: synthetic_0000
+engine:
+  downloadManager:
+    providers: {synthetic_csv: local_csv}
+    requestParameters:
+      locations:
+        - ../synthetic_market/assets_00010/historical_close.csv
+        - ../synthetic_market/assets_00010/backtest_close.csv
+  riskStateGenerator:
+    type: correlated_returns_vola_grid
+    ew_window: 125
+    ew_lambda: 0.93
+    components: 2
+    scenariosPerComponents: [3, 3]
+    nZBins: 21
+    allowEmptyBinFallback: true
+    topKNeighbors: 5
+  marginCalculator:
+    type: bqm
+    comparison: {type: state_aware_greedy, pnlAnchor: market}
+    modelParameters:
+      lambdaOneHot: 1.0
+      lambdaCompat: 0.1
+    executionPolicy: {type: batch, batchSize: 8, maxBatchBytes: 268435456}
+    solver:
+      type: torch_transverse_route
+      constructorParameters:
+        device: auto
+        # For eight GPUs replace device with:
+        # devices: [cuda:0, cuda:1, cuda:2, cuda:3, cuda:4, cuda:5, cuda:6, cuda:7]
+      solverParameters:
+        steps: 1000
+        runs: 64
+        run_batch_size: 16
+        seed: 1
+        dtype: float32
+        time_step: 0.05
+        mobility: 1.0
+        route_strength: 1.0
+        gamma: 0.0
+        kappa_initial: -1.0
+        kappa_final: 2.0
+        schedule_exponent: 1.0
+        integrator: euler
+        candidate_interval: 25
+        candidate_batch_size: 128
+        deduplicate_candidates: true
+        energy_chunk_size: 8192
+        matrix_format: sparse
+        cuda_graph: true
+        graph_steps: 25

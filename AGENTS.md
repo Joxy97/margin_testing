@@ -171,6 +171,14 @@ Risk states and encoded problems are iterators so large scenario spaces need not
 
 ### Explicit constraints and deterministic decoding
 
+The experimental joint factor-stress API and CLI use a single integer-ball QUBO
+with product/slack auxiliaries and no one-hot groups. Before changing its radius,
+encoding, residual reduction, or references, read `docs/benchmarks/factor_stress.md`.
+Run `tests.test_factor_stress`; validate auxiliary and budget constraints through
+`FactorStressQUBO.diagnostics`, since ordinary one-hot repair does not cover them.
+Its separate `FactorStressRepair` performs integer projection, auxiliary rebuild,
+and exact-P&L neighbor descent; run `tests.test_factor_stress_repair` when changing it.
+
 Each asset contributes one one-hot group to a QUBO. Candidate selection first chooses the lowest-energy feasible sample. If no feasible sample exists, every returned candidate is projected and improved by deterministic categorical descent using the full QUBO, then rescored in float64. Decoding retains a deterministic defensive fallback for results supplied outside the solver path. `CandidateSelection` owns source-energy ranking and one lazy repair model per problem across candidate chunks. Stable QUBO identity seeds make results independent of execution-policy batch boundaries and Torch device shards.
 
 ### Numerical and temporal correctness
@@ -180,7 +188,8 @@ Each asset contributes one one-hot group to a QUBO. Candidate selection first ch
 - Portfolio instruments use canonical lexical order, and repeated long-form CSV positions are summed before risk generation.
 - Returns are standardized by exponentially weighted mean and variance under the same normalized weights used for PCA covariance. Eigenvector signs are canonicalized.
 - Correlation compatibility uses the undirected union of directed top-k nominations and a symmetric bivariate-Gaussian/Mahalanobis penalty. Equal-strength nominations choose the lowest canonical asset index; nearest-residual distance ties choose the earliest observation, in both NumPy and Torch.
-- Experiment fingerprints include numerical model version 4 for the GPU float32 default and tie policy, so CLI resume recomputes checkpoints created under earlier model identities.
+- QUBO encoding divides correlation-derived compatibility coefficients by their absolute maximum across the entire scenario, drops normalized magnitudes below `1e-2`, then applies `lambdaCompat`. Returns, one-hot terms, and the offset keep their original scales. Host and resident Torch encoding share the float64 cutoff; see `SIMULATED_BIFURCATION.md` for transfer and checkpoint implications.
+- Experiment fingerprints include numerical model version 5 for normalized, pruned compatibility terms (plus the GPU float32 default and tie policy), so CLI resume recomputes checkpoints created under earlier model identities.
 - Empty return-bin fallback is opt-in; generated dense grids expose `fallbackAssetMask` so fallback use is auditable.
 - Validate shapes, finite values, binary samples, one-hot group indices, date bounds, and nonzero price denominators at public boundaries.
 - Preserve exact QUBO energy semantics: `offset + linear @ x + sum(bias * x[head] * x[tail])`.
@@ -221,7 +230,7 @@ The root YAML contains `marginDate`, `portfolio`, `engine`, and optionally `back
 - Margin calculators are `greedy`, `state_aware_greedy`, and `bqm`.
 - A `bqm` calculator may define `comparison: {type: state_aware_greedy, pnlAnchor: market}` to compute a paired greedy margin from the exact same lazy risk-state stream.
 - BQM execution policies are `sequential` and `batch`.
-- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, `adaptive_torch_sbm`, `torch_svl`, and `torch_categorical`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
+- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, `adaptive_torch_sbm`, `torch_svl`, `torch_categorical`, and `torch_transverse_route`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
 
 Constructor options belong under `solver.constructorParameters`; per-call solve options belong under `solver.solverParameters`. Do not blur those lifecycles. When adding or renaming YAML options, update the strict parser, typed config, `config/margin.example.yaml`, and parser tests together.
 
@@ -275,6 +284,18 @@ execution rebuilds categorical topology from the authoritative host snapshot.
 When changing this solver, run `tests.test_torch_categorical` and compare with
 `tools/benchmark_one_hot_feasibility.py`; see
 `docs/benchmarks/one_hot_feasibility_20260909.md` for measurements and limits.
+
+### Transverse-route solver
+
+`torch_transverse_route` integrates normalized angular dynamics with Euler or
+Heun and retains initial, periodic and final binary candidates. Source-energy
+scoring and one-hot repair use the shared candidate policy. When changing its
+equations, normalization, buffering or CUDA graphs, run
+`tests.test_torch_transverse_route` on CPU and CUDA and compare with
+`tools/benchmark_transverse_route.py`. Read the transverse-route section of
+`SIMULATED_BIFURCATION.md` for parameter aliases, memory bounds, seed behavior
+and the resident host-snapshot fallback; measurements are in
+`docs/benchmarks/transverse_route.md`.
 
 ### Change native SBM code
 
@@ -339,3 +360,13 @@ Before handing off a change, report:
 - configuration, data migration, ABI, memory, or numerical-accuracy implications.
 
 Do not claim the full suite passed if collection failed or dependencies were absent. Preserve user changes in a dirty worktree and keep unrelated modifications out of the patch.
+
+### Categorical Transverse Route
+
+`torch_categorical_trf` is an experimental categorical mirror-flow variant, not
+binary TRF with repair disabled. It requires complete one-hot groups and emits
+feasible category selections without descent/repair. Before changing its flow,
+normalization, discretization or benchmarking, read
+`docs/benchmarks/categorical_trf.md` for the equations and current validation gaps.
+The full Group 1 example is
+`experiments/group1_categorical_trf_20260910/categorical_trf.yaml`.
