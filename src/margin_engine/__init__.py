@@ -7,7 +7,11 @@ from .yaml_application import MarginApplicationConfig
 
 from .numerical_execution_config import TorchNumericalExecutionConfig
 
+from .factor_extensions_config import FactorStressExtensionsConfig, FactorExtensionsExperimentConfig
+
 __all__ = [
+    "FactorStressExtensionsConfig",
+    "FactorExtensionsExperimentConfig",
     "TorchNumericalExecutionConfig",
     "MarginApplicationConfig",
     "MarginEngine",

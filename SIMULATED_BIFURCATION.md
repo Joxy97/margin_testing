@@ -673,6 +673,13 @@ before using this variant for comparative research. The full Group 1 RTX 5090
 run is tracked with `bash tools/track_group1_categorical_trf.sh status`.
 # Joint factor-stress experiment
 
+The original model also supports European equity options through
+`EuropeanOptionFactorStressModel`: fixed IV calibrated from market marks,
+delta/gamma quadratic coefficients, and exact Black–Scholes P&L during repair.
+The integer-ball encoding and binary solvers are unchanged. See
+[European factor stress](docs/benchmarks/european_factor_stress.md) for input
+units, horizon/expiry rules, certificate limits, and the runnable offline example.
+
 `tools/benchmark_factor_stress.py` compares a single PCA-plus-residual stress
 QUBO with analytical, continuous quadratic, exact-repricing, and exact lattice
 references. The integer-ball conversion adds product and slack bits, with no
@@ -680,3 +687,99 @@ asset one-hot groups. Its constraints require explicit diagnostic checks after
 SBM/SVL/TRF sampling. See [the model and benchmark guide](docs/benchmarks/factor_stress.md)
 for commands, penalty guarantees, and precision limits, and
 [the 102-stock results](experiments/factor_stress_20260910/README.md) for measurements.
+
+## Gaussian exchange-field cascade
+
+`torch_exchange_cascade` is a separate experimental vector-spin optimizer in the
+BQM solver layer. It implements the Gaussian node-field model from the supplied
+“Exchange Fields and Symmetry-Breaking Cascades for QUBO” specification. Dynamics
+use float32; original QUBO scoring and the shared candidate repair remain float64.
+`config/exchange_cascade.example.yaml` lists the complete configuration and
+constructor options for independent QUBO shards on eight GPUs.
+
+Read [the model and benchmark notes](docs/benchmarks/exchange_field_cascade.md)
+before changing equations, propagators, numerical integration, order schedules,
+terminal framing, candidate collection or memory controls. The notes distinguish
+the exact node closure and terminal ground-state identity from finite-trajectory
+convergence, and document the host-snapshot fallback for resident execution.
+
+```bash
+PYTHONPATH=src python -m margin_engine config/exchange_cascade.example.yaml
+PYTHONPATH=src python -m unittest tests.test_torch_exchange_cascade
+PYTHONPATH=src python tools/benchmark_exchange_cascade.py --variables 256 2048 --output exchange.json
+```
+
+The full-library best-of-25 comparison of Torch SBM, TRF, SVL and Exchange Field
+uses `tools/benchmark_biqmac_random.py`. See
+[the Biq Mac experiment protocol](docs/benchmarks/biqmac_random25_20260911.md)
+for fixed budgets, reference-bound handling, full-solve/search timing and remote
+status/fetch commands.
+
+The 200-portfolio Group 1 TRF Cartesian experiment uses the joint integer-ball
+QUBO with 8-bit coordinates and existing discrete factor-stress repair. Its
+radius/EW-decay sweep, fixed pre-period portfolio design, greedy 21×5 baseline,
+and 16-GPU resume layout are documented in
+[`random200_cartesian_20260911.md`](docs/benchmarks/random200_cartesian_20260911.md).
+
+### Factor-stress extension references
+
+The opt-in `tools/benchmark_factor_extensions.py` runner adds a global quadratic
+trust-region reference, exact-P&L Taylor bracket, and full-residual convex
+supporting bound. Its versioned research YAML is separate from application
+solver configuration. It can retain existing binary solver samples and apply
+legacy factor-stress repair without changing solver algorithms or encoding.
+Read [the extension guide](docs/benchmarks/factor_extensions.md) for switches,
+certificate scope, float64 checks, and verified-artifact offline replay.
+
+## Ten-component factor-stress backtest
+
+The separate CPU reference/bounds sweep for the T0–T3 extension model is
+documented in `experiments/group1_extensions_precision_20260911/PROGRESS.md`.
+Its user-selected precision mode disables binary sampling and keeps the existing
+model/reference formulas. It does not modify the PCA10 GPU run below.
+
+The opt-in experiment runner accepts ten PCA components plus one portfolio
+residual direction, using the existing integer-ball encoding (410 variables at
+8 bits). Its approved pairwise repair uses 242 exact-PnL neighbors; legacy full
+repair defaults remain unchanged. See
+`experiments/group1_full8590_pca10_20260911/PROGRESS.md` for the recalibrated radius,
+saved portfolio identity, and 24-GPU execution. Implementation details and limitations
+are in `docs/benchmarks/factor_stress.md`.
+
+## Volatility forecast comparison
+
+The separate first-stage row-scaling experiment implements EWMA, GARCH, GJR,
+calendar and jump forecasts without changing the three-coordinate eight-bit
+QUBO shape. See `docs/benchmarks/volatility_extensions.md` for forecast and
+certificate contracts. This precision sweep uses continuous exact repricing
+and bounds, with binary sampling disabled per the selected experiment scope.
+
+T0–T3 rolling experiments can select `--gpu` for float64 CUDA Taylor/Lipschitz
+bounds, with CPU exact reference optimization and shared certificate checks.
+See the CUDA execution section in `docs/benchmarks/factor_extensions.md` for
+parity, synchronized timing and resume provenance. This does not enable binary
+sampling or change a solver's dynamics.
+
+## European and American options in the joint factor model
+
+The separate research API now supports vanilla equity/index calls and puts of
+both exercise styles through `OptionBook`, `OptionFactorStressModel`, and
+`solveOptionFactorStress`. Read `docs/benchmarks/american_factor_stress.md` before
+changing pricing, calibration or boundary search. Existing QUBO solvers and
+integer encoding are reused; pricing and nonlinear repair use CPU float64.
+The updated mathematical document is `docs/pca_greedy_and_joint_qubo_v2.pdf`.
+
+### Rolling stock/American-option PC10 experiment
+
+For the 200 portfolios × 20,000 positions × 294 dates QUBO-only run, see
+[the rolling American-option guide](docs/benchmarks/american_pc10_rolling.md).
+It uses the existing 410-bit integer-ball QUBO and float64 TRF, with an explicitly
+bounded multi-anchor policy and pairwise full-option-P&L repair. Its missing-mark
+loss intervals are hypothetical frozen-book results; they do not reconstruct
+American assignment. The guide records liquidity selection, gross normalization,
+source identity, and status/fetch commands.
+
+The isolated US house PC10 + jump-GARCH experiment uses the existing TRF solver
+and pair-coordinate repair with comparison generation disabled. Deployment,
+resume layout and reporting commands are documented in
+`docs/benchmarks/us_house_jump_garch_20260912.md`.

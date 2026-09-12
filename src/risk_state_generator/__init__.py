@@ -12,7 +12,10 @@ from .config import (
     RiskStateGeneratorConfig,
 )
 from .pca_grid import PCAGrid, ReturnsPCAGrid
-from .factor_stress_model import FactorStressModel
+from .factor_stress_model import FactorStressModel, FactorStressPnlModel, LocalQuadratic
+from .european_option_factor_stress_model import EuropeanOptionFactorStressModel
+from .option_factor_stress_model import OptionFactorStressModel
+from .residual_operator import ResidualOperator, ResidualStressFit, buildResidualStressFit
 from .pca_backend import PCABackend, PCABackendConfig, PCAFit, NumpyPCABackend, TorchPCABackend
 from .pca_grid_factory import PCAGridFactory
 from .pca_grid_provider import PCAGridProvider
@@ -36,8 +39,15 @@ from .option_scenario_risk_state_generator import OptionScenarioRiskStateGenerat
 from .pca_grid_provider import PCAGridProviderConfig
 
 __all__ = [
+    "OptionFactorStressModel",
     "PCAGridProviderConfig",
     "FactorStressModel",
+    "FactorStressPnlModel",
+    "EuropeanOptionFactorStressModel",
+    "LocalQuadratic",
+    "ResidualOperator",
+    "ResidualStressFit",
+    "buildResidualStressFit",
 
     "Cache",
     "CacheFactory",

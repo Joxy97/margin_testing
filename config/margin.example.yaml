@@ -146,3 +146,15 @@ engine:
 #     matrix_format: sparse
 #     cuda_graph: true
 # See transverse_route.example.yaml for the complete runnable configuration.
+
+# Gaussian exchange-field cascade (float32 dynamics, float64 source scoring):
+# solver:
+#   type: torch_exchange_cascade
+#   constructorParameters: {device: auto}
+#   solverParameters:
+#     dtype: float32
+#     steps: 1000
+#     runs: 64
+#     run_batch_size: 16
+#     terminal_mass: 2.0 # Must exceed k (default 1.0).
+# See exchange_cascade.example.yaml for all controls and eight-GPU configuration.

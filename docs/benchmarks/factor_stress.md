@@ -180,6 +180,17 @@ dates. `samples/` and `batches/` retain each result for independent verification
 
 ## Repair saved factor-stress encodings
 
+The opt-in `FactorStressRepairConfig(neighborhood="pairwise")` supports larger
+stress spaces with `2*d*d` single- and two-coordinate moves in lexical order.
+At ten PCA components plus the existing residual direction, this gives 242
+neighbors and a 410-variable 8-bit QUBO. Integer projection, exact-PnL scoring,
+auxiliary reconstruction, and the 1024 accepted-move cap are unchanged. Its local
+optimum is relative to this smaller neighborhood. Default `full` mode still
+requires at most three coordinates and preserves the prior 26-neighbor search.
+Run `tests.test_factor_stress_repair` and `tests.test_random_factor_cartesian`
+when changing this path. The prepared ten-component experiment is documented in
+`experiments/group1_full8590_pca10_20260911/PROGRESS.md`.
+
 `optimization.factor_stress_repair.FactorStressRepair` implements a separate
 postprocessing path. It does not alter the binary solvers or the shared one-hot
 repair policy. Run it on the archived results without additional GPU sampling:
@@ -344,3 +355,17 @@ dates, calibration windows and realized P&L with the prior backtest. Plotting
 requires exact date alignment; updated charts retain the solver series and add
 the greedy baseline. Per-portfolio `margins_with_greedy.csv` provides all plotted
 margin series without changing the original QUBO result files.
+
+## Optional extension diagnostics (T0–T3)
+
+For European equity options on the original PCA-plus-residual stress geometry,
+read [european_factor_stress.md](european_factor_stress.md). The separate Python
+composition calibrates fixed IV from observed marks, builds delta/gamma QUBO
+coefficients, and uses exact Black–Scholes during repair and final repricing.
+
+For the versioned extension YAML, global quadratic trust-region reference,
+Taylor/margin brackets, full-residual long-only supporting bound, and offline
+manifest replay, read [factor_extensions.md](factor_extensions.md). The separate
+runner is `tools/benchmark_factor_extensions.py`; existing factories, historical
+runners and application defaults retain their numerical behavior. Start from
+`config/benchmarks/factor_extensions_diagnostics.yaml` for a small local run.

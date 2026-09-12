@@ -22,8 +22,14 @@ from .models import (
 )
 
 from .prepared_market import PreparedOptionMarket, OptionMarketPreparer
+from .european_option_book import EuropeanOptionBook
+from .option_book import OptionBook, OptionCalibration
+from .ju_zhong import JuZhongPricingModel, VanillaPriceContext, OptionPricingError, NonsmoothOptionError
 
 __all__ = [
+    "OptionBook", "OptionCalibration", "JuZhongPricingModel", "VanillaPriceContext",
+    "OptionPricingError", "NonsmoothOptionError",
+    "EuropeanOptionBook",
     "PreparedOptionMarket",
     "OptionMarketPreparer",
 

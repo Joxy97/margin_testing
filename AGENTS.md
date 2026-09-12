@@ -176,6 +176,9 @@ with product/slack auxiliaries and no one-hot groups. Before changing its radius
 encoding, residual reduction, or references, read `docs/benchmarks/factor_stress.md`.
 Run `tests.test_factor_stress`; validate auxiliary and budget constraints through
 `FactorStressQUBO.diagnostics`, since ordinary one-hot repair does not cover them.
+For the ten-PCA-component backtest and opt-in pairwise repair, read
+`experiments/group1_full8590_pca10_20260911/PROGRESS.md` and the repair section of
+`docs/benchmarks/factor_stress.md`; run `tests.test_random_factor_cartesian` too.
 Its separate `FactorStressRepair` performs integer projection, auxiliary rebuild,
 and exact-P&L neighbor descent; run `tests.test_factor_stress_repair` when changing it.
 
@@ -230,7 +233,7 @@ The root YAML contains `marginDate`, `portfolio`, `engine`, and optionally `back
 - Margin calculators are `greedy`, `state_aware_greedy`, and `bqm`.
 - A `bqm` calculator may define `comparison: {type: state_aware_greedy, pnlAnchor: market}` to compute a paired greedy margin from the exact same lazy risk-state stream.
 - BQM execution policies are `sequential` and `batch`.
-- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, `adaptive_torch_sbm`, `torch_svl`, `torch_categorical`, and `torch_transverse_route`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
+- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, `adaptive_torch_sbm`, `torch_svl`, `torch_categorical`, `torch_transverse_route`, and `torch_exchange_cascade`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
 
 Constructor options belong under `solver.constructorParameters`; per-call solve options belong under `solver.solverParameters`. Do not blur those lifecycles. When adding or renaming YAML options, update the strict parser, typed config, `config/margin.example.yaml`, and parser tests together.
 
@@ -297,11 +300,28 @@ equations, normalization, buffering or CUDA graphs, run
 and the resident host-snapshot fallback; measurements are in
 `docs/benchmarks/transverse_route.md`.
 
+### Exchange-field cascade solver
+
+`torch_exchange_cascade` implements Gaussian node-field exchange with float32
+unit-spin and order-field dynamics, followed by a fixed terminal frame. Before
+changing its propagators, schedule, normalization, terminal controller or GPU
+batching, read `docs/benchmarks/exchange_field_cascade.md`. Run
+`tests.test_torch_exchange_cascade` on CPU and CUDA; use
+`tools/benchmark_exchange_cascade.py` for synchronized full-solve measurements.
+Original scoring/repair stays float64. Multiple GPUs shard independent QUBOs;
+one QUBO uses one GPU. The complete configuration is
+`config/exchange_cascade.example.yaml`.
+
 ### Change native SBM code
 
 Keep public declarations in `include/sbm/` aligned with implementations and the C ABI in `src/sbm/python_api.cpp`. Test the native library with CTest and exercise the Python adapter when its ABI changes. Guard optional backends with existing CMake definitions. Changes shared with HLS must remain synthesizable in the HLS path; avoid unsupported dynamic allocation or library facilities there.
 
 ## Testing and Verification
+
+For the complete Biq Mac four-Torch-solver random parameter benchmark, its objective
+conventions, resume identity, timing definitions, and status/fetch commands, read
+`docs/benchmarks/biqmac_random25_20260911.md`. The runner is
+`tools/benchmark_biqmac_random.py`; validate changes with `tests.test_biqmac_random`.
 
 Python tests use the standard library test runner:
 
@@ -350,6 +370,17 @@ PYTHONPATH=src python options_margin_benchmark/plot_results.py
 - Preserve public `__init__.py` exports when introducing a public type.
 - In C++, retain C++17 compatibility, RAII, contiguous buffers, explicit size validation, and compile-time backend guards.
 
+## Experiment Report Placement
+
+When fetching or regenerating experiment reports, publish the final CSVs, plots,
+and report indexes directly under the owning `experiments/<experiment>/` folder,
+using its existing `plots/` or `reports/` layout. Use `fetched_results/` for staging,
+provenance, and backups. Combine compatible instance shards into one experiment
+report, validate date/portfolio identities, and regenerate plots from the combined
+daily rows. Preserve newer local data and identify unavailable shards. Link the
+canonical experiment reports when handing off results. This is the user's default
+for future fetches and report generation.
+
 ## Agent Completion Checklist
 
 Before handing off a change, report:
@@ -370,3 +401,116 @@ normalization, discretization or benchmarking, read
 `docs/benchmarks/categorical_trf.md` for the equations and current validation gaps.
 The full Group 1 example is
 `experiments/group1_categorical_trf_20260910/categorical_trf.yaml`.
+
+For running, resuming, fetching, or interpreting the 200-portfolio Group 1
+TRF radius/EW-decay Cartesian experiment, read
+`docs/benchmarks/random200_cartesian_20260911.md`. The runner is
+`tools/run_random_factor_cartesian.py`; validate shared model construction and
+random design with `tests.test_random_factor_cartesian`.
+
+### Factor-stress extension diagnostics
+
+For European/American equity or index option calibration, Ju–Zhong pricing,
+boundary-aware factor search, or the v2 mathematical PDF, read
+`docs/benchmarks/american_factor_stress.md`. `OptionBook` owns fixed-IV contexts
+and calibration diagnostics; `OptionFactorStressModel` shares the underlying
+geometry; `solveOptionFactorStress` owns anchor search and nonlinear ranking.
+Run `tests.test_american_factor_stress` with the European/factor/repair tests.
+Pricing domains and nonsmooth centers fail explicitly; supplied alignment/IV
+inputs remain identified. The existing European-only API retains its scope.
+
+Before changing European options in the original factor-stress model, read
+`docs/benchmarks/european_factor_stress.md`. `EuropeanOptionBook` owns dated
+mark/IV preparation and Black–Scholes valuation; `EuropeanOptionFactorStressModel`
+owns mixed Taylor coefficients and residual alignment. Run
+`tests.test_european_factor_stress`, `tests.test_factor_stress`, and
+`tests.test_factor_stress_repair`. American contracts are rejected. Exact option
+P&L participates in repair; stock-only convexity/Taylor certificates do not apply.
+
+For the rolling 200-portfolio T0–T3 precision sweep, read
+`experiments/group1_extensions_precision_20260911/PROGRESS.md`; validate its
+runner with `tests.test_factor_extension_sweep` and the extension tests below.
+
+Before changing or running the opt-in T0–T3 model/reference runner, read
+`docs/benchmarks/factor_extensions.md` for strict extension YAML, numerical
+certificate domains, fixed-radius full-residual geometry, and offline replay.
+The runner is `tools/benchmark_factor_extensions.py`; its configs live under
+`config/benchmarks/factor_extensions_*.yaml`. Validate with
+`tests.test_factor_stress_reference_global`, `tests.test_factor_stress_bounds`,
+`tests.test_residual_operator`, and `tests.test_factor_extensions`, alongside
+existing factor-stress/repair tests. Keep legacy factory and SLSQP defaults
+unchanged; later-stage model switches require an implementation before acceptance.
+
+### Volatility forecast overlays
+
+Before changing or running the separate EWMA/GARCH/GJR/calendar/jump sweep, read
+`docs/benchmarks/volatility_extensions.md` for prior-window backcasts, fixed
+residual geometry, forecast presets, bound scopes and status/fetch commands.
+The runner is `tools/run_volatility_sweep.py`; run `tests.test_volatility_forecast`
+and the factor-extension reference/bounds tests for numerical changes.
+
+The T0–T3 rolling runner supports optional `--gpu` CUDA bound execution; its
+launcher accepts `--gpus`. Before changing this hybrid path, read the CUDA section
+of `docs/benchmarks/factor_extensions.md` and run `tests.test_factor_stress_cuda_bounds`
+on actual CUDA hardware plus the paired full-evaluator GPU benchmark.
+
+### Rolling American-option PC10 backtest
+
+Before running, resuming, interpreting missing marks, or changing the 200-book
+20,000-position American-option experiment, read
+`docs/benchmarks/american_pc10_rolling.md`. Its runner is
+`tools/run_american_pc10_backtest.py`; the manager is
+`tools/manage_american_pc10_backtest.py`. Daily hypothetical books use prior-only
+liquidity selection, the extended American model, bounded multi-anchor QUBOs,
+and observed-mark loss intervals. Run `tests.test_american_rolling` alongside the
+American/factor/repair tests. Preserve explicit indeterminate breach outcomes,
+contract-count/multiplier semantics, and calculation-source resume identity.
+
+### Liquidity-screened house-policy portfolios
+
+Before generating or interpreting the 200 US house-policy portfolios, read
+`docs/benchmarks/us_house_portfolios_20260912.md`. The two builders are
+`tools/build_liquid_short_portfolios.py` and `tools/build_house_policy_portfolios.py`;
+run `tests.test_liquid_short_portfolios` and `tests.test_house_policy_portfolios`.
+The final collection uses €100m reference equity, prior-only formation inputs,
+conditional unverified shorts and explicit house-policy approximations. Keep
+formation liquidity eligibility distinct from dated borrow availability and
+regulatory/member acceptance. Existing output directories are immutable inputs.
+
+For the mixed stock/option extension, read
+`docs/benchmarks/mixed_house_portfolios_20260912.md` before building, consuming or
+backtesting its files. `tools/build_mixed_house_portfolios.py` separates integer
+option quantities from stock weights and cash; run `tests.test_mixed_house_portfolios`.
+The 8,590-stock universe includes inactive slots. Gross/concentration caps count
+full option underlying notional; the files require a mixed research adapter and
+expiry handling rather than the existing single-underlying option YAML runner.
+
+For launching, resuming, or reporting the US house PC10 + jump-GARCH run, read
+`docs/benchmarks/us_house_jump_garch_20260912.md`. The shared Cartesian runner's
+`compute_greedy: false` setting skips comparison generation and omits comparison
+fields from reports; absent means the historical default. Run
+`tests.test_pca10_garch` and `tests.test_house_jump_garch` when changing this branch.
+
+For the same house collection with PC15 on the separate eight-4080-SUPER host,
+read `docs/benchmarks/us_house_pc15_jump_garch_20260912.md`. The house preparation
+CLI accepts `--components` and recalibrates radius for components plus one
+residual dimension; defaults preserve PC10. The launcher accepts explicit
+experiment/service/GPU/batch settings. Retain deployed settings on resume.
+
+Before launching, resuming, fetching, or interpreting the mixed house EUR rolling
+experiment, read `docs/benchmarks/mixed_house_jump_20260912.md`. Its manager is
+`tools/manage_mixed_house_jump.py`; run the mixed renewal, preparation, greedy,
+worker and report tests when changing these adapters. Preserve dated FX,
+decision-contract share units across splits, cash fallback on failed renewal,
+immutable preparation identities and explicit missing-mark loss intervals.
+
+For its isolated PC20 variant, read
+`docs/benchmarks/mixed_house_pc20_jump_20260912.md` and run
+`tests.test_mixed_house_pc20_jump`. Its separate scripts and remote snapshot
+preserve the source identity of active PC10 workers; only verified idle hosts
+belong in the PC20 manager's server list.
+The twelve-host deployment uses `date_assignments.json` as its authoritative
+date partition. Preserve it when resuming; `run_mixed_pc20_assignment.py` invokes
+the frozen solver separately for each pending date. Assignment completion is
+recorded in `assignment_complete.json`, while ordinary `complete.json` covers
+only the most recently invoked date.

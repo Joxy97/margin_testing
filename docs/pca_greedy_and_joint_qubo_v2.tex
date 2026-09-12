@@ -1,0 +1,424 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=20mm]{geometry}
+\usepackage{amsmath,amssymb,booktabs}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={Joint PCA-QUBO margin: European and American options, version 2}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\setlength{\emergencystretch}{2em}
+\newcommand{\pnl}{\operatorname{PnL}}
+\newcommand{\diag}{\operatorname{diag}}
+\begin{document}
+\begin{center}
+{\Large Joint PCA--QUBO margin for equities,\\European and American options}\\[5pt]
+{\large Version 2: implemented extension}\\[4pt]
+{\small 12 September 2026}
+\end{center}
+
+\textbf{What changed.}
+The original document described equities and European equity/spot-index options.
+The new research API accepts vanilla calls and puts of either exercise style,
+with long or short positions. European values use Black--Scholes; American values
+use the Ju--Zhong approximation specified in the supplied
+\path{american_pca_qubo_model.md}. Calibration, horizon valuation and sensitivities
+use the same selected pricing formula. Boundary-aware candidate generation
+supplements QUBO proposals, and final ranking uses full nonlinear portfolio P\&L.
+
+The existing PCA geometry and integer-ball QUBO algebra are retained. No binary
+exercise choice is added. With three stress coordinates and eight bits per
+coordinate, the QUBO still has 122 variables, regardless of option count.
+Multiple smooth anchors generate separate QUBOs on the same stress domain.
+
+\textbf{Scope.}
+The supported instruments are vanilla equity and spot-index options with
+continuous dividend yield and European or continuous American exercise.
+American pricing requires nonnegative rates and yields, positive spot, strike
+and IV, and nonnegative remaining maturity. Rates, yield and IV are held fixed
+across scenarios. Futures options, discrete dividends, exotic exercise/payoffs,
+FX and stochastic volatility are outside this extension.
+
+This is a frozen-book horizon revaluation. It treats each option as outstanding
+at the horizon; it does not simulate intervening exercise, assignment or their
+cash/stock ledger. A short American contract is a negative holding of the
+holder's value, not a different exercise policy. Ju--Zhong is an approximation
+to American optimal stopping. The result is the \emph{greatest model loss found},
+not an exact American value, a certified worst-case loss, or a calibrated VaR.
+
+\textbf{Implementation map.}
+\begin{center}\small
+\begin{tabular}{p{.43\linewidth}p{.49\linewidth}}
+\toprule
+Component & Responsibility\\\midrule
+\texttt{VanillaPriceContext} & Immutable pricing context, cached boundary, branch derivatives and domain checks.\\
+\texttt{OptionBook} & Dated marks, contract units, bracketed IV calibration, supplied-IV diagnostics and nonlinear option P\&L.\\
+\texttt{OptionFactorStressModel} & Shared stock/option scenarios, residual alignment and mixed quadratic coefficients.\\
+\texttt{solveOptionFactorStress} & Boundary seeds, smooth-anchor QUBOs, integer repair and nonlinear ranking.\\
+\bottomrule
+\end{tabular}\end{center}
+The original European-only API and PDF remain available. Application YAML,
+existing option-market conventions and T0--T3 runner defaults are unchanged.
+
+\newpage
+\textbf{1. Portfolio units, dates and shared scenarios}
+
+For underlying $i$, let $S_{i0}>0$ be the dated spot and $w_i$ its signed monetary
+return exposure. A holding of $q_i^{\rm sh}$ shares has $w_i=q_i^{\rm sh}S_{i0}$.
+For option $o$, let $i(o)$ identify its underlying, $K_o$ its strike, $T_o$ its
+expiry, $n_o$ its signed contract count and $\mu_o$ its contract multiplier.
+Write $\beta_o=n_o\mu_o$ and $\phi_o=+1$ for a call, $-1$ for a put.
+Observed marks $V_{o0}^{\rm market}$ are per quoted unit. The multiplier is
+applied exactly once, and all monetary inputs must use one currency.
+
+With valuation date $t_0$ and horizon $t_h$, ACT/365 maturity is
+\[
+ \tau_o=\frac{\operatorname{days}(T_o-t_0)}{365},\qquad
+ \tau'_o=\frac{\operatorname{days}(T_o-t_h)}{365}.
+\]
+The option must be unexpired at $t_0$. At $\tau'_o=0$ use
+$[\phi_o(S-K_o)]_+$. Expiry before $t_h$ fails because the terminal scenario
+does not supply settlement data. Underlying return observations must match the
+horizon; changing the option date gap does not rescale the fitted return model.
+Nominal mark-change P\&L excludes funding, stock-dividend cash credits and FX.
+
+For aligned horizon-compatible historical log returns $\ell_{ti}$, oldest first,
+use the same normalized exponential weights in all fitted moments:
+\[
+ \omega_t=\frac{\alpha^{n-t}}{\sum_u\alpha^{n-u}},\quad
+ c_i=\sum_t\omega_t\ell_{ti},\quad
+ \sigma_i^2=\sum_t\omega_t(\ell_{ti}-c_i)^2,\quad
+ x_{ti}=\frac{\ell_{ti}-c_i}{\sigma_i}.
+\]
+For nonzero variance, let $D=\diag(\sigma_i)$ and
+$C=\sum_t\omega_t x_tx_t^\top$, with descending eigenpairs $(u_a,\lambda_a)$.
+The existing PCA layer owns degenerate-history validation and numerical scaling;
+this extension does not change that layer. Retaining $p$ directions gives
+\[
+ \epsilon_t=D(I-U_pU_p^\top)x_t,\qquad
+ R=\sum_t\omega_t\epsilon_t\epsilon_t^\top.
+\]
+At a smooth portfolio center, let $v$ be the full stock/option log-return
+gradient. The baseline residual direction and factor matrix are
+\[
+ a_{\rm res}=\frac{Rv}{\sqrt{v^\top Rv}},\quad
+ A=[Du_1\sqrt{\lambda_1},\ldots,Du_p\sqrt{\lambda_p},a_{\rm res}],
+\]
+with $a_{\rm res}=0$ if $v^\top Rv=0$. Weighted observation products avoid a dense
+residual covariance. This preserves local linear residual variance; it can miss
+residual gamma risk, particularly in delta-neutral option books.
+
+All positions on underlying $i$ share
+\[
+ \ell(z)=c+Az,\qquad S_i(z)=S_{i0}e^{c_i+a_i^\top z}
+ =\bar S_i e^{a_i^\top z},\qquad \|z\|_2\leq\rho.
+\]
+The configured radius is a stress budget. PCA alone does not give it a
+probability interpretation. At $z=0$, log return is $c$, not zero.
+
+\newpage
+\textbf{2. European and American valuation}
+
+For positive remaining maturity $\tau$, volatility $\nu$, rate $r$ and continuous
+yield $q$, define
+\[
+ d_1=\frac{\log(S/K)+(r-q+\nu^2/2)\tau}{\nu\sqrt\tau},\quad
+ d_2=d_1-\nu\sqrt\tau,
+\]
+\[
+ V_E=\phi[Se^{-q\tau}\Phi(\phi d_1)-Ke^{-r\tau}\Phi(\phi d_2)],\quad
+ \Delta_E=\phi e^{-q\tau}\Phi(\phi d_1),\quad
+ \Gamma_E=\frac{e^{-q\tau}\varphi(d_1)}{S\nu\sqrt\tau}.
+\]
+European spot gamma is positive for both calls and puts. The maturity derivative
+at fixed spot and parameters is
+\[
+ T_E=\frac{Se^{-q\tau}\varphi(d_1)\nu}{2\sqrt\tau}
+ -\phi qSe^{-q\tau}\Phi(\phi d_1)+\phi rKe^{-r\tau}\Phi(\phi d_2).
+\]
+
+\textbf{Ju--Zhong context.}
+For an American option, first use the European-equivalent shortcuts: $q=0$ for
+a call, or $r=0$ for a put, under the nonnegative rate/yield restrictions.
+Otherwise define
+\[
+ \beta_J=\frac{2(r-q)}{\nu^2},\qquad
+ \kappa_J=\begin{cases}
+ 2r/[\nu^2(1-e^{-r\tau})],&r>0,\\
+ 2/(\nu^2\tau),&r=0,
+ \end{cases}
+\]
+\[
+ \zeta_J=\sqrt{(\beta_J-1)^2+4\kappa_J},\quad
+ \eta_J=\frac{-(\beta_J-1)+\phi\zeta_J}{2},\quad
+ d_J=\phi\zeta_J.
+\]
+The implementation uses \texttt{expm1} for $1-e^{-r\tau}$ and a stable quadratic
+root computation. The finite boundary $S^\star$ solves
+\[
+ U^\star=\phi(S^\star-K)-V_E(S^\star),\qquad
+ \Delta_E(S^\star)+\eta_J U^\star/S^\star-\phi=0.
+\]
+A sign-changing log-spot bracket and safeguarded scalar root solver determine
+the boundary. Its residual and positive premium are checked before computing
+\[
+ b_J=-\frac{e^{-r\tau}\kappa_J^2}{2\zeta_J^2},\qquad
+ c_J=-\frac{1}{d_J}\left[
+ \frac{2T_E(S^\star)}{\nu^2U^\star}+e^{-r\tau}\kappa_J+2b_J\right].
+\]
+For $X=\log(S/S^\star)$, set $\mathcal D=1-b_JX^2-c_JX$ and
+$\mathcal E=U^\star e^{\eta_JX}/\mathcal D$. The complete price is
+\[
+ \widehat V_J(S)=\begin{cases}
+ V_E(S)+\mathcal E(X),&\phi(S^\star-S)>0,\\
+ \phi(S-K),&\phi(S^\star-S)\leq0.
+ \end{cases}
+\]
+The context is cached per contract and remaining maturity. Spot-only scenarios
+do not recalibrate IV or solve another boundary. The final rational/exponential
+pricing formula is not itself a quadratic polynomial.
+
+\newpage
+\textbf{3. Calibration, derivatives and pricing-domain checks}
+
+\textbf{Mark inversion.}
+The new book solves $V(\nu_o)=V_{o0}^{\rm market}$ using the contract's exercise
+style. Brent's method maintains a bracket; every trial American IV rebuilds the
+boundary. The default explicit bracket is $[0.01,5]$. Invalid trial contexts and
+missing brackets fail. The final quoted-price residual must satisfy
+\[
+ |V(\nu_o)-V_{o0}^{\rm market}|\leq10^{-10}\max(1,V_{o0}^{\rm market}).
+\]
+Necessary economic mark bounds are checked, including the zero-volatility
+American stopping lower limit
+$\max_{0\leq u\leq\tau}[\phi(Se^{-qu}-Ke^{-ru})]_+$.
+An American intrinsic-value plateau does not identify a unique positive IV.
+Such a mark requires an explicitly supplied IV; supplied-IV status and its
+calibration residual are recorded. Observed marks remain the P\&L anchor.
+An American bracketed root is not a uniqueness certificate.
+
+\textbf{Derivatives of the selected formula.}
+Write $x=\log S$, $u_J=c_J+2b_JX$ and
+$L_J=\eta_J+u_J/\mathcal D$. In continuation,
+\begin{align*}
+ D^J:=\widehat V_{J,x}
+ &=S\Delta_E+\mathcal E L_J,\\
+ G^J:=\widehat V_{J,xx}
+ &=S\Delta_E+S^2\Gamma_E+
+ \mathcal E\left[L_J^2+\frac{2b_J}{\mathcal D}
+                      +\frac{u_J^2}{\mathcal D^2}\right].
+\end{align*}
+The European terms use the current spot. In the strict exercise region,
+$D^J=G^J=\phi S$. At expiry, these derivatives apply inside the money, and both
+are zero outside the money. Two-sided derivatives at the strike are undefined.
+
+The final Ju--Zhong formula matches value at $S^\star$ but generally has a slope
+jump:
+\[
+ \Delta_J^{\rm continuation}(S^\star)
+ -\Delta_J^{\rm exercise}(S^\star)=\frac{c_JU^\star}{S^\star}.
+\]
+The implementation raises for requested derivatives within log-distance
+$10^{-10}$ of the boundary; it does not invent a two-sided Hessian.
+Price-only candidate evaluation remains valid.
+
+\textbf{Domain checks.}
+Each contract's marginal stress interval is
+\[
+ [S_i^{\min},S_i^{\max}]=
+ [\bar S_i e^{-\rho\|a_i\|},\bar S_i e^{\rho\|a_i\|}].
+\]
+On its continuation portion, the exact quadratic denominator minimum is tested
+at endpoints and the vertex. A value $\mathcal D\leq10^{-10}$ fails. Economic
+bounds are sampled at 65 log-spaced points and checked at every evaluated
+scenario: $\max(I,V_E)\leq\widehat V_J$, call value $\leq S$, put value $\leq K$,
+with materiality tolerance $10^{-7}\max(S,K)$. These sampled checks are not an
+interval-wide certificate. Nonfinite prices, invalid premiums and material
+bounds violations fail explicitly. No clipping or scenario-dependent backend
+switch is used; no automatic tree fallback is claimed.
+
+\newpage
+\textbf{4. Mixed P\&L, residual alignment and anchor polynomials}
+
+Use $V_o=V_E$ for European contracts and $V_o=\widehat V_J$ for American
+contracts, with the specified payoff/equivalent branches. Then
+\[
+ P(z)=\sum_i w_i\operatorname{expm1}(c_i+a_i^\top z)
+ +\sum_o\beta_o[V_o(S_{i(o)}(z),\tau'_o)-V_{o0}^{\rm market}].
+\]
+This includes horizon time decay in both full P\&L and the Taylor constant.
+For a smooth center, aggregate by underlying
+\[
+ v_i=w_i e^{c_i}+\sum_{o:i(o)=i}\beta_o V_{o,x}(\bar S_i),\qquad
+ h_i=w_i e^{c_i}+\sum_{o:i(o)=i}\beta_o V_{o,xx}(\bar S_i).
+\]
+The full $v$, including American and European log deltas, selects the residual
+direction. The center polynomial is
+\[
+ F(z)=p_0+g^\top z+\tfrac12z^\top Hz,\quad
+ p_0=P(0),\quad g=A^\top v,\quad H=A^\top\diag(h)A.
+\]
+The Hessian is symmetrized for floating-point roundoff. Signed positions and
+all legs on one underlying are aggregated before optimization; there is no
+independent worst scenario for each option.
+
+At a nonsmooth center, default PCA construction fails instead of manufacturing
+Greeks. An explicit \texttt{localPnlGradient} may select alternative residual
+alignment, or the caller may supply fixed geometry directly. The diagnostic
+distinguishes mixed-delta, supplied and fixed-geometry construction. This choice
+does not make the nonsmooth center differentiable. Price-only seeds and other
+smooth anchors remain available. The optional extra negative-curvature residual
+mode proposed in the supplied Markdown is not enabled by this implementation.
+
+\textbf{Reachable boundaries.}
+For an American boundary $B_o=S_o^\star$, or expiry strike $B_o=K_o$, put
+$b_o^\star=\log(B_o/\bar S_{i(o)})$. The boundary plane is
+\[
+ a_{i(o)}^\top z=b_o^\star.
+\]
+For a nonzero loading row, it intersects the ball exactly when
+$|b_o^\star|\leq\rho\|a_{i(o)}\|$, and its nearest point is
+$z_o^\star=b_o^\star a_{i(o)}/\|a_{i(o)}\|^2$.
+Zero loading is handled separately without division. A boundary touching the
+ball or a coarse lattice need not have feasible points on both sides.
+
+The search generates center and axis seeds, nearby boundary-side seeds and
+marginal extreme seeds. After integer rounding/projection it checks which
+boundary sides are actually represented. Extreme seeds help expose the loss
+of a short expiry option whose center lies on a flat out-of-the-money payoff.
+
+At each smooth lattice anchor $z_j$, form
+\[
+ F_j(z)=P(z_j)+g_j^\top(z-z_j)+\tfrac12(z-z_j)^\top H_j(z-z_j).
+\]
+In global coordinates its coefficients are
+$\widetilde g_j=g_j-H_jz_j$ and
+$\widetilde p_j=P(z_j)-g_j^\top z_j+\tfrac12z_j^\top H_jz_j$.
+Keep $A,c,\rho$ fixed. Nonsmooth anchors are fully repriced but do not generate
+derivative QUBOs. Multi-anchor global-ball proposals are heuristic; the optional
+local trust-ball encoding from the Markdown is not included.
+
+\newpage
+\textbf{5. Unchanged integer encoding and nonlinear selection}
+
+For $k\in\{2,\ldots,8\}$ bits per coordinate, write
+\[
+ m=2^{k-1}-1,\quad t_a=\sum_{j=0}^{k-1}2^j b_{aj}-m,\quad
+ z_a=\frac{\rho}{m}t_a,\quad \sum_a t_a^2\leq m^2.
+\]
+The extra representable unsigned level is excluded by the exact ball budget.
+For product bits $y_{aij}=b_{ai}b_{aj}$, the squared integer norm is represented
+by the linear expression
+\[
+ Q(b,y)=dm^2+\sum_{a,j}(2^{2j}-2m2^j)b_{aj}
+             +2\sum_a\sum_{i<j}2^{i+j}y_{aij}.
+\]
+Let $s=\sum_{h=0}^{L-1}2^h u_h$ with $L=\lceil\log_2(m^2+1)\rceil$.
+For the actual anchor polynomial $F_j$, the QUBO is
+\begin{align*}
+ E(b,y,u)={}&F_j(z(b))+\mathcal P[Q(b,y)+s-m^2]^2\\
+ &+\mathcal P\sum_a\sum_{i<j}
+ [b_{ai}b_{aj}-2b_{ai}y_{aij}-2b_{aj}y_{aij}+3y_{aij}].
+\end{align*}
+Each product penalty is nonnegative and vanishes exactly for a consistent
+product. An invalid integer encoding incurs an unweighted penalty of at least
+one. If $B$ is the sum of absolute nonconstant binary objective coefficients,
+the default $\mathcal P=1.1\max(B,\varepsilon)$ is sufficient for global
+feasibility in exact arithmetic. Each anchor recomputes $B$ for its polynomial.
+Weaker configured penalty multipliers may remove that guarantee.
+
+The number of variables remains
+\[
+ N=dk+d\binom{k}{2}+L.
+\]
+For $d=3,k=8$, this is $24+84+14=122$. Option count increases pricing and
+anchor-search cost, but not the variable count of each QUBO.
+
+\textbf{Repair and ranking.}
+Every raw solver output receives integer/product/slack diagnostics. The new
+search projects its integer coordinates into the ball and rebuilds auxiliaries
+before pricing; an invalid raw sample can lie outside the screened domain.
+Deterministic seed candidates are also repaired. Nonlinear local improvement
+prices only feasible neighbors and accepts strict decreases in complete $P$.
+The original 26-neighbor mode applies at three dimensions, with explicit
+pairwise repair above three dimensions. Convergence versus the move cap is
+retained for every candidate.
+
+For all retained candidates $\mathcal C$, the reported result is
+\[
+ M_{\rm found}=\max_{z\in\mathcal C}\max(0,-P(z)).
+\]
+The result includes the worst coordinates and stressed spots; stock, European
+and American P\&L; repaired feasible encodings; raw feasibility; anchor counts;
+and lattice boundary-side coverage. Calibration and pricing-domain diagnostics
+are retained by the book/model and archived by the runnable example.
+The existing solver interface returns one selected binary sample per solve;
+this search ranks those returned samples and its deterministic seeds after
+repair, not every internal solver trajectory.
+
+No stock-only convexity certificate applies to a nonzero option position.
+Neither QUBO optimality nor neighborhood convergence establishes a global
+minimum of the nonlinear American portfolio value.
+
+\newpage
+\textbf{6. Validation, reproducibility and interpretation}
+
+The implemented formula reproduces these supplied numerical examples:
+\begin{center}\small
+\begin{tabular}{p{.62\linewidth}r}
+\toprule
+Inputs ($S=K=100$) & Ju--Zhong price\\\midrule
+Call: $\tau=0.5$, $r=0.03$, $q=0.07$, $\nu=0.2$ & 4.76818024\\
+Put: $\tau=3$, $r=0.08$, $q=0$, $\nu=0.2$ & 6.95561233\\\bottomrule
+\end{tabular}\end{center}
+For the put, the implementation obtains
+\[
+ S^\star=82.2759889300,\quad U^\star=8.3733727010,\quad
+ \Delta_J^{\rm cont}-\Delta_J^{\rm exercise}=0.03133987185.
+\]
+Independent log-price finite differences agree with analytic first/second
+derivatives on smooth continuation and exercise branches. Existing independent
+CRR trees at 800 and 1,600 steps refine to within 0.01 quoted units for these
+two cases; the Ju--Zhong/reference difference remains visible. This validates
+implementation examples, not a uniform American-pricing error bound.
+
+The focused suites passed 48 tests. The complete Python suite ran 363 tests
+successfully with 9 skips. Checks include mixed-style calibration, explicit-IV
+residuals, zero-rate limits, immutable contexts, signed multipliers, calendar
+maturity, mixed gradients/Hessians, residual alignment, exact QUBO energy,
+fixed variable counts, nonsmooth anchors, expiry plateau escape, boundary-side
+coverage and feasible-only repair. Native and GPU solver kernels are unchanged;
+no separate GPU benchmark or native rebuild was needed for this CPU extension.
+
+Run the synthetic end-to-end example from the repository root:
+\begin{verbatim}
+PYTHONPATH=src python tools/example_option_factor_stress.py
+\end{verbatim}
+To archive it, add \texttt{--output} followed by
+\path{docs/benchmarks/american_factor_stress_example.json}.
+It fits underlying PCA, creates European/American call and put marks, calibrates
+IV, solves the anchor QUBOs with simulated annealing, repairs and selects the
+greatest model loss. Its JSON separates same-IV CRR prices at the final worst
+scenario from the model margin. It is an offline composition demonstration,
+not a market-data coverage study or an exercise/assignment backtest.
+
+\textbf{Separate approximation limits.}
+Residual reduction, finite lattice resolution, Taylor proposals, finite solver
+search and Ju--Zhong pricing each introduce different limitations. Nonlinear
+repricing removes Taylor error from the reported value of a retained candidate;
+it does not recover unsearched scenarios or remove the American-pricing
+approximation. The additional curvature residual and local trust-ball designs
+in the supplied Markdown remain optional future extensions. Domain failures
+are explicit; a material unpriced contract is never assigned zero risk.
+
+\textbf{Sources and implementation notes.}
+The primary specification is the supplied \path{american_pca_qubo_model.md},
+dated 12 September 2026. Its reported 87-case paper-table audit was not rerun
+here; only the implementation tests described above are claimed. The cited
+Ju--Zhong paper is N. Ju and R. Zhong, ``An Approximate Formula for Pricing
+American Options,'' \emph{The Journal of Derivatives} 7(2), 1999, 31--40.
+The stable coefficients and corrected European Greek terms were cross-checked
+against the \href{https://github.com/lballabio/QuantLib/blob/master/ql/pricingengines/vanilla/juquadraticengine.cpp}{official QuantLib Ju engine source};
+QuantLib is not a dependency. Further details and commands are in
+\path{docs/benchmarks/american_factor_stress.md}.
+\end{document}

@@ -23,6 +23,36 @@ def fixture(dimension=3, bits=3):
 
 
 class FactorStressRepairTest(unittest.TestCase):
+    def test_eleven_coordinate_pairwise_repair_and_original_qubo(self):
+        rng = np.random.default_rng(39)
+        model = FactorStressModel(tuple(f'A{i}' for i in range(15)), rng.normal(size=15),
+                                  np.zeros(15), rng.normal(0, .01, (15, 11)))
+        encoded = FactorStressQUBO.build(QuadraticStressObjective(*model.quadraticCoefficients()),
+                                         FactorStressQUBOConfig(8, 5.756441175254773))
+        self.assertEqual(encoded.problem.variableCount, 410)
+        with self.assertRaises(ValueError):
+            FactorStressRepair(model, encoded)
+        repair = FactorStressRepair(model, encoded, FactorStressRepairConfig(neighborhood='pairwise'))
+        self.assertEqual(repair.moves.shape, (242, 11))
+        self.assertEqual(len(set(map(tuple, repair.moves))), 242)
+        self.assertTrue(np.all(np.count_nonzero(repair.moves, axis=1) <= 2))
+        sample = rng.integers(0, 2, encoded.problem.variableCount, dtype=np.uint8)
+        result = repair.repair(sample)
+        self.assertTrue(result.converged)
+        self.assertTrue(encoded.diagnostics(result.sample)['encoding_feasible'])
+        self.assertLessEqual(result.pnl, result.projectedPnL)
+        np.testing.assert_array_equal(result.sample, repair.repair(sample).sample)
+        neighbors = result.integers+repair.moves
+        feasible = np.sum(neighbors**2, axis=1) <= encoded.latticeRadius**2
+        self.assertTrue(np.all(model.pnl(neighbors[feasible]*repair.scale) >= result.pnl-1e-12))
+        point = result.integers*repair.scale
+        expected = model.pnl((result.integers+repair.moves)*repair.scale)-model.pnl(point)
+        weighted = model.exposures*np.exp(model.center+model.directions@point)
+        np.testing.assert_allclose(repair.increments@weighted, expected, atol=1e-14)
+        # Feasible auxiliaries cancel all integer penalties in the original QUBO.
+        energy = encoded.problem.energy(result.sample)
+        self.assertAlmostEqual(energy, float(encoded.objective.value(point)), delta=1e-3)
+
     def test_integer_projection_is_feasible_idempotent_and_preserves_inside(self):
         for values in product(range(-5, 6), repeat=3):
             original = np.array(values)

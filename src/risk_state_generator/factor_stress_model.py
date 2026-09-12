@@ -3,11 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 import numpy as np
 
 from portfolio import Portfolio
 from .pca_grid import ReturnsPCAGrid
+
+
+class FactorStressPnlModel(Protocol):
+    """Exact scenario valuation consumed by factor repair and references."""
+
+    @property
+    def dimension(self) -> int: ...
+
+    @property
+    def isConvex(self) -> bool: ...
+
+    def pnl(self, coordinates: np.ndarray) -> np.ndarray: ...
+
+    def pnlGradient(self, coordinates: np.ndarray) -> np.ndarray: ...
 
 
 def _owned(values: np.ndarray) -> np.ndarray:
@@ -47,8 +62,18 @@ class FactorStressModel:
     def dimension(self) -> int:
         return self.directions.shape[1] if self.directions.ndim == 2 else 0
 
+    @property
+    def isConvex(self) -> bool:
+        return bool(np.all(self.exposures >= 0))
+
     @classmethod
-    def fromPCAGrid(cls, grid: ReturnsPCAGrid, portfolio: Portfolio) -> FactorStressModel:
+    def fromPCAGrid(cls, grid: ReturnsPCAGrid, portfolio: Portfolio, *,
+                    localPnlGradient: np.ndarray | None = None) -> FactorStressModel:
+        """Fit the original geometry, optionally aligning residuals to mixed P&L.
+
+        localPnlGradient is dPnL/d(log return) at center, in instrument order.
+        Omitting it retains the stock-only residual direction.
+        """
         if tuple(grid.instruments) != portfolio.instruments:
             raise ValueError("PCA instruments must match canonical portfolio order")
         exposures = np.array([float(portfolio.weights[i]) for i in grid.instruments])
@@ -58,7 +83,10 @@ class FactorStressModel:
         weights = grid.ew_lambda ** np.arange(len(residuals) - 1, -1, -1, dtype=float)
         weights /= weights.sum()
         residuals = residuals - weights @ residuals
-        local_exposures = exposures * np.exp(center)
+        local_exposures = (exposures * np.exp(center) if localPnlGradient is None
+                           else np.asarray(localPnlGradient, dtype=np.float64))
+        if local_exposures.shape != exposures.shape or not np.isfinite(local_exposures).all():
+            raise ValueError("localPnlGradient must be finite and match instruments")
         projected = residuals @ local_exposures
         variance = float(weights @ projected**2)
         # R @ local_exposures, without constructing an assets-by-assets matrix.
@@ -88,3 +116,30 @@ class FactorStressModel:
         return (float(np.expm1(self.center) @ self.exposures),
                 self.directions.T @ weighted,
                 self.directions.T @ (weighted[:, None] * self.directions))
+
+
+    def pnlHessian(self, coordinates: np.ndarray) -> np.ndarray:
+        """Exact P&L Hessian at a finite scenario coordinate vector."""
+        z = np.asarray(coordinates, dtype=float)
+        if z.shape != (self.dimension,) or not np.isfinite(z).all():
+            raise ValueError("coordinates must be a finite vector of model dimension")
+        with np.errstate(over="raise", invalid="raise"):
+            weighted = self.exposures*np.exp(self.center + self.directions@z)
+            return self.directions.T @ (weighted[:, None]*self.directions)
+
+    def localQuadratic(self, coordinates: np.ndarray) -> LocalQuadratic:
+        """Taylor coefficients in displacement from the returned expansion center."""
+        return LocalQuadratic(float(self.pnl(coordinates)), self.pnlGradient(coordinates),
+                              self.pnlHessian(coordinates), coordinates)
+
+
+@dataclass(frozen=True)
+class LocalQuadratic:
+    value: float
+    gradient: np.ndarray
+    hessian: np.ndarray
+    center: np.ndarray
+
+    def __post_init__(self) -> None:
+        for name in ("gradient", "hessian", "center"):
+            object.__setattr__(self, name, _owned(getattr(self, name)))

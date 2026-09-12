@@ -31,6 +31,7 @@ from .torch_svl_bqm_solver import TorchSVLBQMSolver
 from .torch_categorical_bqm_solver import TorchCategoricalBQMSolver
 from .torch_transverse_route_bqm_solver import TorchTransverseRouteBQMSolver
 from .torch_categorical_trf_bqm_solver import TorchCategoricalTRFBQMSolver
+from .torch_exchange_cascade_bqm_solver import TorchExchangeCascadeBQMSolver
 from ...optimization_problem.qubo_problem import QUBOProblem
 
 from .resource_plan import BQMResourcePlan
@@ -69,6 +70,7 @@ __all__ = [
     "TorchCategoricalBQMSolver",
     "TorchTransverseRouteBQMSolver",
     "TorchCategoricalTRFBQMSolver",
+    "TorchExchangeCascadeBQMSolver",
     "TreeDecompositionBQMSolver",
     "TreeDecompositionSamplerBQMSolver",
 ]

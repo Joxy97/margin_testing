@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import product
+from functools import singledispatchmethod
+from itertools import combinations, product
 from math import isqrt
 from time import perf_counter
 
 import numpy as np
 
-from risk_state_generator.factor_stress_model import FactorStressModel
+from risk_state_generator.factor_stress_model import FactorStressModel, FactorStressPnlModel
 from .factor_stress import FactorStressQUBO, _owned
 
 
@@ -17,8 +18,11 @@ from .factor_stress import FactorStressQUBO, _owned
 class FactorStressRepairConfig:
     maxSteps: int = 1024
     improvementTolerance: float = 1e-12
+    neighborhood: str = "full"
 
     def __post_init__(self) -> None:
+        if self.neighborhood not in {"full", "pairwise"}:
+            raise ValueError("neighborhood must be full or pairwise")
         if isinstance(self.maxSteps, bool) or not isinstance(self.maxSteps, int):
             raise TypeError("maxSteps must be an integer")
         if self.maxSteps < 0:
@@ -81,23 +85,58 @@ def projectIntegerBall(coordinates: np.ndarray, radius: int) -> np.ndarray:
 class FactorStressRepair:
     """Repair one sample, then search its feasible neighboring lattice points.
 
-    All 3**d-1 unit-neighborhood moves are considered (26 for three coordinates),
+    The default considers all 3**d-1 moves for up to three coordinates. Explicit
+    pairwise mode considers the 2*d*d single- and two-coordinate unit moves,
     including simultaneous changes that allow motion along the sphere boundary.
-    Moves minimize exact exponential P&L, not the penalized QUBO or its Taylor
+    Moves minimize exact portfolio P&L, not the penalized QUBO or its Taylor
     approximation. Precomputed exponential increments are shared across calls;
     no returned samples or solutions are cached.
     """
 
-    def __init__(self, model: FactorStressModel, encoding: FactorStressQUBO,
+    def __init__(self, model: FactorStressPnlModel, encoding: FactorStressQUBO,
                  config: FactorStressRepairConfig = FactorStressRepairConfig()) -> None:
-        if model.dimension != encoding.objective.dimension or model.dimension > 3:
-            raise ValueError("repair requires matching model/encoding dimensions, at most three")
+        if model.dimension != encoding.objective.dimension:
+            raise ValueError("repair requires matching model/encoding dimensions")
+        if config.neighborhood == "full" and model.dimension > 3:
+            raise ValueError("full repair supports at most three dimensions; select pairwise explicitly")
         self.model, self.encoding, self.config = model, encoding, config
         self.scale = encoding.config.radius/encoding.latticeRadius
-        moves = np.array([move for move in product((-1, 0, 1), repeat=model.dimension) if any(move)], dtype=np.int64)
+        if config.neighborhood == "full":
+            moves = np.array([move for move in product((-1, 0, 1), repeat=model.dimension) if any(move)], dtype=np.int64)
+        else:
+            candidates = []
+            for count in (1, 2):
+                for axes in combinations(range(model.dimension), count):
+                    for signs in product((-1, 1), repeat=count):
+                        move = [0]*model.dimension
+                        for axis, sign in zip(axes, signs):
+                            move[axis] = sign
+                        candidates.append(tuple(move))
+            moves = np.array(sorted(candidates), dtype=np.int64)
         self.moves = _owned(moves, np.int64)
+        self._prepareScoring(model)
+
+    @singledispatchmethod
+    def _prepareScoring(self, model):
+        # General exact repricing also covers option books; stock exponential
+        # increments cannot represent their normal-CDF terms.
+        self.increments = None
+        def changes(coordinates, feasible):
+            # A pricing backend may only be valid inside the declared stress
+            # domain. Infeasible neighbors must never be sent to that backend.
+            result = np.full(len(self.moves), np.inf)
+            result[feasible] = (model.pnl(coordinates + self.moves[feasible]*self.scale)
+                                - model.pnl(coordinates))
+            return result
+        self._changes = changes
+
+    @_prepareScoring.register
+    def _(self, model: FactorStressModel):
         with np.errstate(over="raise", invalid="raise"):
-            self.increments = _owned(np.expm1((moves*self.scale) @ model.directions.T))
+            self.increments = _owned(np.expm1((self.moves*self.scale) @ model.directions.T))
+        self._changes = lambda coordinates, feasible: self.increments @ (
+            model.exposures*np.exp(model.center+model.directions@coordinates)
+        )
 
     def repair(self, sample: np.ndarray) -> FactorStressRepairResult:
         started = perf_counter()
@@ -124,9 +163,8 @@ class FactorStressRepair:
                 converged = True
                 break
             with np.errstate(over="raise", invalid="raise"):
-                weighted = self.model.exposures*np.exp(self.model.center+self.model.directions@(current*self.scale))
-                changes = self.increments @ weighted
-            scores += len(changes)
+                changes = self._changes(current*self.scale, feasible)
+            scores += len(changes) if self.increments is not None else int(np.count_nonzero(feasible))
             changes[~feasible] = np.inf
             best = int(np.argmin(changes))
             if changes[best] >= -self.config.improvementTolerance:
