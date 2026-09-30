@@ -24,7 +24,7 @@ import traceback
 import numpy as np
 import torch
 
-from benchmark_biqmac import SOLVERS, atomicCsv, atomicJson, stamp
+from benchmark_biqmac import SOLVERS, atomicCsv, atomicJson, librarySourceHashes, stamp
 from benchmark_biqmac_bandit import actionBank, stableSeed
 from qoblib_hybrid_sac import DiscreteSAC, HybridSAC, RANGES, branches, decode, frozen_actor, frozen_choice
 from qoblib_time_budget import plan_phase
@@ -95,13 +95,11 @@ def supplied_parameters(solver, chosen, seed):
     # Bound hardware choices to the preparation admission envelope. These are
     # deliberately not actions; neither learner can buy more VRAM or runs.
     result = dict(chosen)
-    result.update(steps=10000, runs=32, seed=seed, dtype="float64",
-                  run_batch_size=8, energy_chunk_size=8192)
-    if solver == "SVL":
-        result["noise_chunk_size"] = 16
-    if solver == "TRF":
-        result.update(matrix_format="sparse", candidate_batch_size=128,
-                      max_variables=2**31 - 1, cuda_graph=True, graph_steps=25)
+    result.update(steps=10000, runs=32, seed=seed, dtype="float64", run_batch_size=8)
+    if solver == "SBM":
+        result['energy_chunk_size'] = 8192
+    else:
+        result['best_only'] = True
     return result
 
 
@@ -165,12 +163,12 @@ class LoadedQubo:
 
 def gpu_worker(gpu, connection, inputs):
     try:
-        from margin_calculator.optimization.optimization_solver.bqm_solver.bqm_solver_factory import BQMSolverFactory
+        from qubo_solvers import create_bqm_solver
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
         torch.cuda.set_device(gpu)
         torch.cuda.init()
-        solvers = {name: BQMSolverFactory.create(kind, {"device": f"cuda:{gpu}"}) for name, kind in SOLVERS.items()}
+        solvers = {name: create_bqm_solver(kind, {"device": f"cuda:{gpu}"}) for name, kind in SOLVERS.items()}
         connection.send(dict(type="ready", hardware=torch.cuda.get_device_name(gpu)))
         while True:
             job = connection.recv()
@@ -275,6 +273,7 @@ class Comparison:
             target_window_seconds=args.target_window, utilization=args.utilization, gpus=8, dtype="float64",
             run_batch_size=8, memory_fraction=.8, bank=self.bank,
             hybrid_ranges=RANGES, hybrid_branches={s: branches(s) for s in SOLVERS},
+            library_source_sha256=librarySourceHashes(),
             split_policy="source-name grouped; parameter variants grouped; not graph-isomorphism detection",
             quality_policy="feasible-first for converted LP; bounded QUBO energy for native QS",
             setup_inside_budget=True, external_test_validation_run=False))

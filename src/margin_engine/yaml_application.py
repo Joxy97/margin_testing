@@ -523,7 +523,7 @@ class _YamlConfigParser:
                 constructor_parameters["libraryPath"]
             )
         solver_config = BQMSolverConfig(
-            solverType=str(solver.get("type", "simulated_annealing")),
+            solverType=str(solver.get("type", "lib_simulated_annealing")),
             constructorParameters=constructor_parameters,
             solverParameters=dict(
                 self._mapping(

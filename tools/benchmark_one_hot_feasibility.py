@@ -19,10 +19,12 @@ import numpy
 import torch
 
 from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
-from margin_calculator.optimization.optimization_solver.bqm_solver import TorchSBMBQMSolver, TorchSVLBQMSolver
-from margin_calculator.optimization.optimization_solver.bqm_solver.candidate_selection import CandidateSelection
-from margin_calculator.optimization.optimization_solver.bqm_solver.torch_candidates import TorchCandidateAccumulator
-from margin_calculator.optimization.optimization_solver.bqm_solver.torch_execution import TorchExecution
+from qubo_solvers import create_bqm_solver
+from qubo_solvers.backends.library_solver import LibraryBQMSolver
+from qubo_solvers.backends.candidate_selection import CandidateSelection
+from qubo_solvers.backends.torch_candidates import TorchCandidateAccumulator
+from qubo_solvers.backends.torch_execution import TorchExecution
+from benchmark_biqmac import librarySourceHashes
 
 
 def fixture(groups, states, exposureScale):
@@ -92,12 +94,17 @@ def measure(solver, problem, parameters, repeats, reference, base):
         sync()
         times.append(perf_counter() - start)
     captured, repair_times = [], []
-    original_add = TorchCandidateAccumulator.add
+    capture_class = CandidateSelection if isinstance(solver, LibraryBQMSolver) else TorchCandidateAccumulator
+    original_add = capture_class.add
     original_repair = CandidateSelection._repairCandidate
     original_model = CandidateSelection._repairModel
     model_times = []
     def add(accumulator, samples):
-        captured.append(samples.cpu().numpy().copy())
+        if capture_class is CandidateSelection:
+            samples = list(samples)
+            captured.append(numpy.asarray([row for row, _energy in samples], dtype=numpy.uint8))
+        else:
+            captured.append(samples.cpu().numpy().copy())
         return original_add(accumulator, samples)
     def repair(*args):
         start = perf_counter()
@@ -109,7 +116,7 @@ def measure(solver, problem, parameters, repeats, reference, base):
         value = original_model(*args)
         model_times.append(perf_counter() - start)
         return value
-    with patch.object(TorchCandidateAccumulator, 'add', add), \
+    with patch.object(capture_class, 'add', add), \
          patch.object(CandidateSelection, '_repairCandidate', staticmethod(repair)), \
          patch.object(CandidateSelection, '_repairModel', staticmethod(model)):
         instrumented = solver.solve(problem, parameters)
@@ -152,7 +159,7 @@ def main():
     parser.add_argument('--seeds', type=int, nargs='+', default=[1, 13, 31])
     parser.add_argument('--runs', type=int, default=16)
     parser.add_argument('--repeats', type=int, default=3)
-    parser.add_argument('--solvers', nargs='+', default=['torch_sbm', 'torch_svl'])
+    parser.add_argument('--solvers', nargs='+', default=['lib_simulated_bifurcation', 'lib_spin_vector_langevin'])
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if min(*args.groups, args.states, *args.steps, args.runs, args.repeats) < 1:
@@ -160,11 +167,12 @@ def main():
     if any(not numpy.isfinite(v) or v < 0 for v in [*args.exposure_scales, *args.penalties]):
         parser.error('scales and penalties must be finite and nonnegative')
     torch.set_num_threads(1)
-    from margin_calculator.optimization.optimization_solver.bqm_solver import BQMSolverFactory
-    classes = [TorchSBMBQMSolver, TorchSVLBQMSolver, CandidateSelection, TorchExecution, TorchCandidateAccumulator]
+    classes = [type(create_bqm_solver(name)) for name in args.solvers]
+    classes += [CandidateSelection, TorchExecution, TorchCandidateAccumulator]
     result = {'environment': {'torch': torch.__version__, 'cuda': torch.version.cuda, 'numpy': numpy.__version__,
         'python': platform.python_version(), 'hardware': torch.cuda.get_device_name(args.device) if args.device.startswith('cuda') else platform.processor(),
         'arguments': vars(args) | {'output': str(args.output)},
+        'library_source_sha256': librarySourceHashes(),
         'sourceHashes': {c.__name__: hashlib.sha256(Path(inspect.getfile(c)).read_bytes()).hexdigest() for c in classes}}, 'measurements': []}
     for groups, scale in itertools.product(args.groups, args.exposure_scales):
         base = fixture(groups, args.states, scale)
@@ -172,7 +180,7 @@ def main():
         bound = sufficientPenalty(base)
         for strength, steps, name, seed in itertools.product([*args.penalties, bound], args.steps, args.solvers, args.seeds):
             problem = penalized(base, strength)
-            solver = BQMSolverFactory.createBQMSolver(name, {'device': args.device})
+            solver = create_bqm_solver(name, {'device': args.device})
             parameters = {'steps': steps, 'runs': args.runs, 'seed': seed, 'dtype': 'float32'}
             measurement = measure(solver, problem, parameters, args.repeats, exact, base)
             measurement.update({'groups': groups, 'states': args.states, 'exposureScale': scale, 'penalty': strength,

@@ -92,7 +92,7 @@ def report(directory: Path, result: dict) -> None:
               "| Bits/coordinate | Solver | Mean solve seconds | Fully valid / trials | Scenario inside ball / trials |",
               "|---:|---|---:|---:|---:|"]
     for k in settings["bits"]:
-        for name in ("torch_sbm", "torch_svl", "torch_transverse_route"):
+        for name in sorted({r["solver"] for r in result["solvers"] if r["bits_per_coordinate"] == k}):
             rows = [r for r in result["solvers"] if r["bits_per_coordinate"] == k and r["solver"] == name]
             if rows:
                 lines.append(f"| {k} | {name} | {np.mean([r['seconds'] for r in rows]):.3f} | "

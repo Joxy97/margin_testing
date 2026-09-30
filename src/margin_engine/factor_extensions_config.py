@@ -197,8 +197,8 @@ class FactorExtensionsExperimentConfig:
             raise ValueError('prior_close_available_time_utc uses an implicit UTC timezone')
         seed = value.get('seed', 20260910)
         _number(seed, 'seed', 0, 2**32-1, integer=True, inclusive=True)
-        solver = _mapping(value.get('solver', {'type': 'simulated_annealing',
-            'solverParameters': {'num_reads': 8, 'num_sweeps': 100}}), 'solver')
+        solver = _mapping(value.get('solver', {'type': 'lib_simulated_annealing',
+            'solverParameters': {'runs': 8, 'sweeps': 100}}), 'solver')
         _keys(solver, ('type', 'constructorParameters', 'solverParameters'), 'solver')
         if not isinstance(solver.get('type'), str):
             raise TypeError('solver.type must be a string')

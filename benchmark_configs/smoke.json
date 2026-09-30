@@ -1,0 +1,32 @@
+{
+  "cpu_threads": 1,
+  "device": "cpu",
+  "instances": [
+    "gka1e",
+    "be200.8.1",
+    "bqp500-1",
+    "gka5f",
+    "bqp1000-1",
+    "p_hat1000-1__clique_QUBO"
+  ],
+  "precision": "float32",
+  "seeds": [
+    0
+  ],
+  "setup_limit_s": 60,
+  "time_limit_s": 10,
+  "solvers": [
+    {
+      "id": "lib_simulated_bifurcation",
+      "output_variant": "library simulated bifurcation, standard dynamics; no harness polish",
+      "parameters": {
+        "steps": 16,
+        "runs": 1,
+        "dynamics": "standard"
+      },
+      "solver": "lib_simulated_bifurcation",
+      "trial_kind": "independent_seeded_start",
+      "device": "cpu"
+    }
+  ]
+}

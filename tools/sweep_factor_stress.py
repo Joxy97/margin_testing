@@ -29,7 +29,7 @@ from margin_calculator.optimization.factor_stress_reference import (
 from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
 
 
-SOLVERS = ("torch_sbm", "torch_svl", "torch_transverse_route")
+SOLVERS = ("lib_simulated_bifurcation", "lib_spin_vector_langevin", "lib_transverse_route")
 
 
 def measured(timings, name, function):
@@ -172,7 +172,7 @@ def batches(args):
 def worker(gpu, inbox, events, config):
     try:
         import torch
-        from margin_calculator.optimization.optimization_solver.bqm_solver import BQMSolverFactory
+        from qubo_solvers import create_bqm_solver
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
         torch.cuda.set_device(gpu)
@@ -183,15 +183,13 @@ def worker(gpu, inbox, events, config):
         if config.get("repair_samples", False):
             from margin_calculator.optimization.factor_stress_repair import FactorStressRepair
             (output/"repaired_samples").mkdir(exist_ok=True)
-        solvers = {name: BQMSolverFactory.create(name, {"device": f"cuda:{gpu}"}) for name in SOLVERS}
+        solvers = {name: create_bqm_solver(name, {"device": f"cuda:{gpu}"}) for name in SOLVERS}
         params = dict(steps=config["steps"], runs=config["runs"], run_batch_size=config["runs"],
-                      dtype="float64", seed=config["seed"], energy_chunk_size=8192)
+                      dtype="float64", seed=config["seed"])
         tiny = QUBOProblem([-1., -.5], [0], [1], [1.])
         before = time.perf_counter()
         for name, solver in solvers.items():
             warm = {**params, "steps": 16, "runs": 1, "run_batch_size": 1}
-            if name == "torch_transverse_route":
-                warm.update(matrix_format="sparse", candidate_interval=16, cuda_graph=True)
             solver.solve(tiny, warm)
         torch.cuda.synchronize()
         events.put(dict(type="ready", gpu=gpu, warmup_seconds=time.perf_counter()-before,
@@ -206,9 +204,6 @@ def worker(gpu, inbox, events, config):
             encoded_models, problems, rows = [], [], []
             solver = solvers[batch["solver"]]
             supplied = dict(params)
-            if batch["solver"] == "torch_transverse_route":
-                supplied.update(matrix_format="sparse", candidate_interval=max(1, config["steps"]//8),
-                                cuda_graph=True, graph_steps=25)
             torch.cuda.reset_peak_memory_stats(gpu)
             for trial in batch["trials"]:
                 model, objective = models[trial["day"]]

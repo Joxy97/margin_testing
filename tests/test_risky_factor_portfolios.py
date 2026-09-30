@@ -74,7 +74,7 @@ class RiskyFactorPortfoliosTest(unittest.TestCase):
                    references=[dict(method="exact_repricing_continuous", coverage=.9995, margin=.6, success=True)])
         trials = [dict(day=0, setting=config["id"], solver=solver, repeat=repeat, id=f"{solver}{repeat}",
                        repaired_margin=.2+.1*repeat)
-                  for solver in ("torch_sbm", "torch_svl", "torch_transverse_route") for repeat in range(3)]
+                  for solver in ("lib_simulated_bifurcation", "lib_spin_vector_langevin", "lib_transverse_route") for repeat in range(3)]
         rows = dailyRows([day], trials, [config])
         paired = next(r for r in rows if r["analysis"] == "paired_seed0" and r["solver"] == "combined")
         primary = next(r for r in rows if r["analysis"] == "primary_best3" and r["solver"] == "combined")
@@ -82,6 +82,13 @@ class RiskyFactorPortfoliosTest(unittest.TestCase):
         self.assertTrue(paired["breach"])
         self.assertAlmostEqual(primary["margin"], .4)
         self.assertFalse(primary["breach"])
+        legacy = dict(zip(("lib_simulated_bifurcation", "lib_spin_vector_langevin", "lib_transverse_route"),
+                          ("torch_sbm", "torch_svl", "torch_transverse_route")))
+        archived = [dict(row, solver=legacy[row["solver"]]) for row in trials]
+        legacy_rows = dailyRows([day], archived, [config])
+        self.assertEqual({row["solver"] for row in legacy_rows}, {*legacy.values(), "combined"})
+        self.assertEqual([row["margin"] for row in rows if row["solver"] == "combined"],
+                         [row["margin"] for row in legacy_rows if row["solver"] == "combined"])
 
 
 if __name__ == "__main__":

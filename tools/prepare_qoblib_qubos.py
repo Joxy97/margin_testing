@@ -14,11 +14,15 @@ import lzma
 import math
 import os
 from pathlib import Path
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 import subprocess
 import sys
 import time
 import urllib.request
+from types import SimpleNamespace
 
 import numpy as np
 from scipy import sparse
@@ -43,14 +47,22 @@ def atomic_json(path, value):
 
 
 def memory_estimates(n, edges):
-    # Repository estimates, 32 total trajectories, batches of 8, float64 dynamics.
-    # Sparse TRF only. No one-hot groups are synthesized for this general adapter.
-    source = 8 * int(n) + 16 * int(edges)
-    common = 8 * source + int(n) * 32 * 16 + min(int(edges), 8192) * 8 * 32
-    return {"SBM": common + int(n) * 8 * 8 * 16,
-            "SVL": common + int(n) * 8 * 8 * 32,
-            "TRF": 12 * source + int(n) * 8 * 8 * 24 + int(n) * 128 * 32
-                   + min(int(edges), 8192) * 128 * 32 + 10001 * 8}
+    """Use current library workspace estimates before allocating coefficients."""
+    from qubo_solvers import create_bqm_solver
+    from benchmark_biqmac import SOLVERS
+
+    n, edges = int(n), int(edges)
+    if n < 0 or edges < 0:
+        raise ValueError("variable and interaction counts must be nonnegative")
+    shape = SimpleNamespace(variableCount=n, interactionCount=edges,
+                            numericMemoryBytes=8*n+16*edges)
+    common = dict(steps=10000, runs=32, run_batch_size=8, dtype="float64")
+    return {
+        name: create_bqm_solver(solver_id, {"device": "cpu"}).estimatedWorkingMemoryBytes(
+            shape, common | ({"energy_chunk_size": 8192} if name == "SBM" else {"best_only": True}),
+        )
+        for name, solver_id in SOLVERS.items()
+    }
 
 
 def weights_for(width):
@@ -238,6 +250,8 @@ def convert_lp(path, destination):
 
 
 def worker(job_path, output):
+    if resource is None:
+        raise RuntimeError("QOBLIB preparation workers require POSIX resource limits; run on Linux")
     resource.setrlimit(resource.RLIMIT_AS, (12 * 1024**3, 12 * 1024**3))
     job = json.loads(Path(job_path).read_text())
     destination = Path(output) / "cases" / job["id"]
@@ -326,7 +340,7 @@ def main():
     if (args.output / "manifest.json").exists():
         raise RuntimeError("Existing inventory; use a new output directory")
     atomic_json(args.output / "manifest.json", dict(commit=COMMIT, candidates=jobs, memory_limit=LIMIT,
-        memory_policy="Repository estimates, float64, runs32, batch8, steps10000; SVL noise16; sparse TRF candidate batch128",
+        memory_policy="Canonical library estimates, float64, runs32, batch8, steps10000; dense SVL/TRF best_only; sparse SBM scoring chunks8192",
         data_license="QOBLIB CC-BY-4.0; retain original source attribution", no_continuous_discretization=True))
     results = []
     started = time.time()

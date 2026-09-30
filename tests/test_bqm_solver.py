@@ -8,26 +8,17 @@ from unittest.mock import patch
 
 import dimod
 import numpy
+from qubo_solvers import SOLVERS, create_bqm_solver
+from qubo_solvers.backends.simulated_bifurcation import SimulatedBifurcationBQMSolver as TorchSBMBQMSolver
 
 from margin_calculator.optimization.optimization_solver.bqm_solver import (
-    AdaptiveTorchSBMBQMSolver,
     BQMSolver,
     BQMSolverFactory,
     BQMOptimizationResult,
     OptimizationProblem,
     OptimizationSolver,
     OptimizationSolverResult,
-    PlanarGraphBQMSolver,
     QUBOProblem,
-    RandomBQMSolver,
-    SBMBQMSolver,
-    SimulatedAnnealingBQMSolver,
-    SteepestDescentBQMSolver,
-    TabuBQMSolver,
-    TorchSBMBQMSolver,
-    TorchSVLBQMSolver,
-    TreeDecompositionBQMSolver,
-    TreeDecompositionSamplerBQMSolver,
 )
 
 
@@ -80,29 +71,18 @@ class BQMSolverTest(unittest.TestCase):
         self.assertEqual(solver.answer, "custom")
 
     def test_factory_rejects_unknown_solver(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unknown BQM solver"):
+        with self.assertRaisesRegex(ValueError, "Unknown solver"):
             BQMSolverFactory.createBQMSolver("unknown")
 
     def test_factory_includes_all_bqm_solvers(self) -> None:
-        expected_solvers = {
-            "adaptive_torch_sbm": AdaptiveTorchSBMBQMSolver,
-            "planar_graph": PlanarGraphBQMSolver,
-            "random": RandomBQMSolver,
-            "sbm": SBMBQMSolver,
-            "simulated_annealing": SimulatedAnnealingBQMSolver,
-            "steepest_descent": SteepestDescentBQMSolver,
-            "tabu": TabuBQMSolver,
-            "torch_sbm": TorchSBMBQMSolver,
-            "torch_svl": TorchSVLBQMSolver,
-            "tree_decomposition_solver": TreeDecompositionBQMSolver,
-            "tree_decomposition_sampler": TreeDecompositionSamplerBQMSolver,
-        }
+        for name in SOLVERS:
+            with self.subTest(name=name):
+                self.assertIsInstance(create_bqm_solver(name), BQMSolver)
 
-        for name, solver_class in expected_solvers.items():
-            self.assertIsInstance(
-                BQMSolverFactory.createBQMSolver(name),
-                solver_class,
-            )
+    def test_retired_solver_names_are_rejected(self):
+        for name in ("sbm", "torch_sbm", "adaptive_torch_sbm", "torch_svl", "random", "simulated_annealing"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                create_bqm_solver(name)
 
     def test_solver_selects_first_valid_one_hot_sample_by_energy(self) -> None:
         sample_set = dimod.SampleSet.from_samples(
@@ -137,210 +117,18 @@ class BQMSolverTest(unittest.TestCase):
         self.assertEqual(sample[0] + sample[1], 1)
         self.assertEqual(sample[2] + sample[3], 1)
 
-    @unittest.skipUnless(
-        SBMBQMSolver().libraryPath.is_file(),
-        "build the sbm_python CMake target to run this integration test",
-    )
-    def test_sbm_solver_uses_the_cpp_kernel(self) -> None:
-        problem = QUBOProblem(
-            numpy.array([-1.0, 0.5]),
-            numpy.array([0], dtype=numpy.uint32),
-            numpy.array([1], dtype=numpy.uint32),
-            numpy.array([-0.25]),
-        )
-        solver = BQMSolverFactory.createBQMSolver("sbm")
 
-        result = solver.solve(
-            problem,
-            {"steps": 100, "runs": 4, "seed": 7},
-        )
 
-        self.assertAlmostEqual(result.energy, problem.energy(result.sample))
-        self.assertEqual(len(result.sample), 2)
 
-    @unittest.skipUnless(
-        SBMBQMSolver().libraryPath.is_file(),
-        "build the sbm_python CMake target to run this integration test",
-    )
-    def test_sbm_solver_batches_different_problem_sizes(self) -> None:
-        problems = [
-            QUBOProblem(
-                numpy.array([-1.0, 0.5]),
-                numpy.array([0], dtype=numpy.uint32),
-                numpy.array([1], dtype=numpy.uint32),
-                numpy.array([-0.25]),
-            ),
-            QUBOProblem(
-                numpy.array([0.2, -0.4, -0.1]),
-                numpy.array([0, 1], dtype=numpy.uint32),
-                numpy.array([1, 2], dtype=numpy.uint32),
-                numpy.array([0.3, -0.2]),
-            ),
-        ]
 
-        results = SBMBQMSolver().solveMany(
-            problems,
-            {"steps": 100, "runs": 3, "seed": 9},
-        )
-
-        self.assertEqual(len(results), 2)
-        for problem, result in zip(problems, results):
-            self.assertEqual(len(result.sample), problem.variableCount)
-            self.assertAlmostEqual(result.energy, problem.energy(result.sample))
-
-    @unittest.skipUnless(
-        SBMBQMSolver().libraryPath.is_file(),
-        "build the sbm_python CMake target to run this integration test",
-    )
-    def test_sbm_adaptive_solver_returns_valid_warm_started_samples(self) -> None:
-        problem = QUBOProblem(
-            numpy.array([-1.0, -1.0]),
-            numpy.array([0], dtype=numpy.uint32),
-            numpy.array([1], dtype=numpy.uint32),
-            numpy.array([2.0]),
-            oneHotGroups=((0, 1),),
-        )
-        solver = SBMBQMSolver()
-        parameters = {
-            "steps": 100,
-            "runs": 8,
-            "adaptive": True,
-            "min_runs": 2,
-            "runs_per_batch": 2,
-            "stability_batches": 1,
-            "warm_start": True,
-            "topology_cache_bytes": 1024 * 1024,
-            "seed": 17,
-        }
-
-        solver.beginSeries()
-        first = solver.solveMany([problem], parameters)[0]
-        solver.endSeries()
-        solver.beginSeries()
-        second = solver.solveMany([problem], parameters)[0]
-        solver.endSeries()
-
-        self.assertEqual(sum(first.sample), 1)
-        self.assertEqual(sum(second.sample), 1)
-        self.assertGreaterEqual(solver.lastRunCounts[0], 2)
-        self.assertLessEqual(solver.lastRunCounts[0], 8)
-
-    def test_sbm_parameters_are_validated_before_native_allocation(self) -> None:
-        with self.assertRaisesRegex(ValueError, "steps and runs"):
-            SBMBQMSolver._getParameters({"runs": 0})
-
-    def test_sbm_adaptive_parameters_are_validated(self) -> None:
-        with self.assertRaisesRegex(ValueError, "min_runs"):
-            SBMBQMSolver._getParameters(
-                {"adaptive": True, "runs": 4, "min_runs": 5}
-            )
 
     def test_torch_sbm_parameters_are_validated_without_loading_torch(self) -> None:
         with self.assertRaisesRegex(ValueError, "dtype"):
             TorchSBMBQMSolver._getParameters({"dtype": "float16"})
 
-    def test_torch_svl_parameters_are_validated_without_loading_torch(self) -> None:
-        invalid = (
-            ({"unknown": 1}, "Unknown Torch SVL parameters"),
-            ({"steps": 0}, "steps and runs"),
-            ({"mass": 0.0}, "dt and mass"),
-            ({"temperature": -0.1}, "temperature"),
-            ({"integrator": "verlet"}, "integrator"),
-            ({"dtype": "float16"}, "dtype"),
-            ({"run_batch_size": 0}, "run_batch_size"),
-        )
-        for parameters, message in invalid:
-            with self.subTest(parameters=parameters):
-                with self.assertRaisesRegex(ValueError, message):
-                    TorchSVLBQMSolver._getParameters(parameters)
 
-    def test_torch_svl_qubo_to_ising_conversion_preserves_energies(self) -> None:
-        problem = QUBOProblem(
-            numpy.array([-1.2, 0.3, 0.7]),
-            numpy.array([0, 1, 1, 2], dtype=numpy.uint32),
-            numpy.array([1, 0, 2, 2], dtype=numpy.uint32),
-            numpy.array([0.4, -0.1, 0.8, -0.25]),
-            offset=0.6,
-        )
-        converted = TorchSVLBQMSolver._toIsingProblem(
-            problem, numpy.float64, configuredC0=1.0
-        )
-        differences = []
-        for mask in range(1 << problem.variableCount):
-            binary = numpy.array(
-                [(mask >> variable) & 1 for variable in range(problem.variableCount)],
-                dtype=numpy.uint8,
-            )
-            spins = 2.0 * binary - 1.0
-            ising_energy = -converted.forceField @ spins - numpy.sum(
-                converted.couplings
-                * spins[converted.heads]
-                * spins[converted.tails]
-            )
-            differences.append(problem.energy(binary) - ising_energy)
-        numpy.testing.assert_allclose(
-            differences,
-            numpy.full(len(differences), differences[0]),
-            atol=1e-12,
-        )
 
-    def test_torch_svl_distributes_ordered_batch_across_devices(self) -> None:
-        problems = [
-            QUBOProblem(
-                numpy.array([float(index)]),
-                numpy.array([], dtype=numpy.uint32),
-                numpy.array([], dtype=numpy.uint32),
-                numpy.array([]),
-            )
-            for index in range(5)
-        ]
-        calls: list[tuple[str, list[int]]] = []
 
-        def solve_batch(worker, batch, parameters):
-            identifiers = [int(problem.linear[0]) for problem in batch]
-            calls.append((worker.device, identifiers))
-            return [BQMOptimizationResult((0,), float(item)) for item in identifiers]
-
-        solver = TorchSVLBQMSolver(devices=["cuda:0", "cuda:1"])
-        with (
-            patch.object(
-                TorchSVLBQMSolver,
-                "_resolveDevice",
-                side_effect=lambda requested: requested,
-            ),
-            patch.object(TorchSVLBQMSolver, "_solveBatch", solve_batch),
-        ):
-            results = solver.solveMany(problems, {"seed": 17})
-
-        self.assertEqual([result.energy for result in results], list(range(5)))
-        calls.sort(key=lambda call: call[1][0])
-        self.assertEqual(calls, [("cuda:0", [0, 1, 2]), ("cuda:1", [3, 4])])
-
-    @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
-    def test_torch_svl_cpu_solve_is_deterministic_for_both_integrators(self) -> None:
-        problem = QUBOProblem(
-            numpy.array([-1.0, -0.5]),
-            numpy.array([0], dtype=numpy.uint32),
-            numpy.array([1], dtype=numpy.uint32),
-            numpy.array([0.4]),
-            oneHotGroups=((0, 1),),
-        )
-        for integrator in ("euler_maruyama", "weak_order_2"):
-            with self.subTest(integrator=integrator):
-                parameters = {
-                    "steps": 20,
-                    "runs": 3,
-                    "dt": 0.01,
-                    "dtype": "float64",
-                    "integrator": integrator,
-                    "seed": 29,
-                }
-                first = TorchSVLBQMSolver("cpu").solve(problem, parameters)
-                second = TorchSVLBQMSolver("cpu").solve(problem, parameters)
-                self.assertEqual(first.sample, second.sample)
-                self.assertAlmostEqual(first.energy, second.energy, places=12)
-                self.assertAlmostEqual(first.energy, problem.energy(first.sample), places=12)
-                self.assertEqual(sum(first.sample), 1)
 
     def test_torch_sbm_multi_device_configuration_is_validated(self) -> None:
         with self.assertRaisesRegex(TypeError, "sequence"):
@@ -352,8 +140,7 @@ class BQMSolverTest(unittest.TestCase):
 
         solver = TorchSBMBQMSolver(devices=["cuda:0", "cuda:0"])
         with patch.object(
-            TorchSBMBQMSolver,
-            "_resolveDevice",
+            TorchSBMBQMSolver, "_resolveDevice",
             side_effect=lambda requested: requested,
         ):
             with self.assertRaisesRegex(ValueError, "unique"):
@@ -386,8 +173,7 @@ class BQMSolverTest(unittest.TestCase):
         solver = TorchSBMBQMSolver(devices=["cuda:0", "cuda:1"])
         with (
             patch.object(
-                TorchSBMBQMSolver,
-                "_resolveDevice",
+                TorchSBMBQMSolver, "_resolveDevice",
                 side_effect=lambda requested: requested,
             ),
             patch.object(TorchSBMBQMSolver, "_solveBatch", solve_batch),
@@ -402,15 +188,16 @@ class BQMSolverTest(unittest.TestCase):
         self.assertEqual(calls[1][2], 17)
 
     def test_adaptive_torch_sbm_creates_adaptive_device_workers(self) -> None:
-        solver = AdaptiveTorchSBMBQMSolver(devices=["cuda:0", "cuda:1"])
+        solver = TorchSBMBQMSolver(devices=["cuda:0", "cuda:1"])
         solver._resolvedDevices = ("cuda:0", "cuda:1")
 
         workers = solver._getWorkerSolvers()
 
         self.assertEqual(len(workers), 2)
         self.assertTrue(
-            all(isinstance(worker, AdaptiveTorchSBMBQMSolver) for worker in workers)
+            all(isinstance(worker, TorchSBMBQMSolver) for worker in workers)
         )
+
 
     @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
     def test_torch_sbm_accepts_rocm_device_aliases(self) -> None:
@@ -418,11 +205,13 @@ class BQMSolverTest(unittest.TestCase):
         with (
             patch.object(torch.version, "hip", "7.2"),
             patch.object(torch.cuda, "is_available", return_value=True),
+            patch.object(torch.cuda, "current_device", return_value=0),
+            patch.object(torch.cuda, "device_count", return_value=1),
         ):
             for alias in ("rocm", "amd", "hip"):
                 self.assertEqual(
                     TorchSBMBQMSolver._resolveDevice(alias),
-                    "cuda",
+                    "cuda:0",
                 )
 
     @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
@@ -434,9 +223,10 @@ class BQMSolverTest(unittest.TestCase):
 
     def test_adaptive_torch_sbm_parameters_are_validated(self) -> None:
         with self.assertRaisesRegex(ValueError, "mode"):
-            AdaptiveTorchSBMBQMSolver._getParameters({"mode": "unknown"})
+            TorchSBMBQMSolver._getParameters({"mode": "unknown"})
         with self.assertRaisesRegex(ValueError, "sampling_period"):
-            AdaptiveTorchSBMBQMSolver._getParameters({"sampling_period": 0})
+            TorchSBMBQMSolver._getParameters({"sampling_period": 0})
+
 
     def test_adaptive_torch_sbm_polish_preserves_one_hot_groups(self) -> None:
         problem = QUBOProblem(
@@ -448,7 +238,7 @@ class BQMSolverTest(unittest.TestCase):
         )
         initial = BQMOptimizationResult((1, 0, 1, 0), 1.5)
 
-        polished = AdaptiveTorchSBMBQMSolver._polish(
+        polished = TorchSBMBQMSolver._polish(
             problem,
             initial,
             sweeps=2,
@@ -460,6 +250,7 @@ class BQMSolverTest(unittest.TestCase):
         self.assertEqual(sum(polished.sample[:2]), 1)
         self.assertEqual(sum(polished.sample[2:]), 1)
 
+
     @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
     def test_adaptive_torch_sbm_tracks_and_polishes_candidates(self) -> None:
         problem = QUBOProblem(
@@ -469,11 +260,12 @@ class BQMSolverTest(unittest.TestCase):
             numpy.array([0.2, -0.1, -0.3, 0.4]),
             oneHotGroups=((0, 1), (2, 3)),
         )
-        solver = AdaptiveTorchSBMBQMSolver("cpu")
+        solver = TorchSBMBQMSolver("cpu")
 
         result = solver.solve(
             problem,
             {
+                "dynamics": "adaptive",
                 "steps": 60,
                 "runs": 4,
                 "dt": 0.1,
@@ -489,6 +281,7 @@ class BQMSolverTest(unittest.TestCase):
         self.assertAlmostEqual(result.energy, problem.energy(result.sample))
         self.assertLessEqual(solver.lastStepCount, 60)
 
+
     @unittest.skipUnless(find_spec("torch"), "install torch to run this test")
     def test_adaptive_torch_sbm_stops_when_agent_energies_stabilize(self) -> None:
         problem = QUBOProblem(
@@ -497,11 +290,12 @@ class BQMSolverTest(unittest.TestCase):
             numpy.array([], dtype=numpy.uint32),
             numpy.array([]),
         )
-        solver = AdaptiveTorchSBMBQMSolver("cpu")
+        solver = TorchSBMBQMSolver("cpu")
 
         solver.solve(
             problem,
             {
+                "dynamics": "adaptive",
                 "steps": 100,
                 "runs": 2,
                 "sampling_period": 5,
@@ -513,6 +307,7 @@ class BQMSolverTest(unittest.TestCase):
         )
 
         self.assertLess(solver.lastStepCount, 100)
+
 
     def test_torch_sbm_qubo_to_ising_conversion_preserves_energies(self) -> None:
         problem = QUBOProblem(

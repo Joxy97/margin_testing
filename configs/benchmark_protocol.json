@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "variable_counts": [200, 500, 1000],
+  "densities": ["sparse", "dense"],
+  "budgets_s": [0.05, 0.1, 0.5, 1.0, 5.0, 10.0],
+  "default_runs": 100,
+  "default_seed_start": 0,
+  "instance_mode": "all",
+  "representatives": {
+    "200_sparse": "gka1e",
+    "200_dense": "be200.8.1",
+    "500_sparse": "bqp500-1",
+    "500_dense": "gka5f",
+    "1000_sparse": "bqp1000-1",
+    "1000_dense": "p_hat1000-1__clique_QUBO"
+  },
+  "execution": {
+    "cpu_threads": 1,
+    "watchdog_grace_s": 0.5,
+    "setup_timeout_s": 120.0,
+    "memory_sampling_interval_s": 0.01,
+    "heartbeat_interval_s": 1.0,
+    "observation": "every native record; SBM every step; physics native candidate interval; synchronous immutable host capture",
+    "worker_policy": "fresh spawned worker per trial; ready handshake; infrastructure-only warmup",
+    "timing_scope": "warm_process_wall_clock_including_reset_preprocess_search_decode_capture",
+    "retry_selection": "first durable attempt only; retries diagnostic",
+    "schedule_policy": "fixed iteration schedules, never rescaled to wall budget",
+    "tf32": false
+  }
+}

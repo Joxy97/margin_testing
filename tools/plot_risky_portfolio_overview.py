@@ -19,8 +19,13 @@ def plot(root):
     settings = json.loads((root/"settings.json").read_text())
     moves_path = root/"large_asset_moves.csv"
     large_moves = pd.read_csv(moves_path) if moves_path.exists() else pd.DataFrame(columns=["portfolio", "date", "pnl_contribution"])
-    methods = (("torch_sbm", "SBM", "#2563eb"), ("torch_svl", "SVL", "#d97706"),
-               ("torch_transverse_route", "TRF", "#7c3aed"), ("combined", "Combined", "#15803d"))
+    methods = (("lib_simulated_bifurcation", "SBM", "#2563eb"),
+               ("lib_spin_vector_langevin", "SVL", "#d97706"),
+               ("lib_transverse_route", "TRF", "#7c3aed"),
+               ("torch_sbm", "SBM (legacy)", "#2563eb"),
+               ("torch_svl", "SVL (legacy)", "#d97706"),
+               ("torch_transverse_route", "TRF (legacy)", "#7c3aed"),
+               ("combined", "Combined", "#15803d"))
     fig, axes = plt.subplots(5, 2, figsize=(17, 16), layout="constrained")
     metrics, breach_details = [], []
     for axis, metadata in zip(axes.flat, settings["portfolios"]):
@@ -35,6 +40,8 @@ def plot(root):
         greedy = loadGreedy(directory, data)
         for method, label, color in methods:
             selected = data[data.solver == method].sort_values("date")
+            if selected.empty:
+                continue
             axis.plot(selected.date, selected.margin*100, label=label, color=color, lw=1.)
         if greedy is not None:
             axis.plot(pd.to_datetime(greedy.date), greedy.margin*100,

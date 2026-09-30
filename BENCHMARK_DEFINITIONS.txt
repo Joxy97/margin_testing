@@ -1,0 +1,61 @@
+QUBO BENCHMARK DEFINITIONS
+==========================
+
+Problem selection
+- Variable counts: 200, 500, 1000.
+- Density categories: sparse, dense.
+- Default instance mode: ALL matching validated catalog instances.
+- Optional instance mode: representative (for smoke tests only).
+
+Run protocol
+- Time budgets: 0.05, 0.1, 0.5, 1.0, 5.0, 10.0 seconds.
+- Runs per instance per solver: 100.
+- Default seeds: 0 through 99.
+- Every selected instance gets all 100 seeds for every solver.
+- Solver parameters are frozen during the campaign and recorded per solver.
+- Runs for different time budgets are separately initialized; do not reuse a longer run as prefixes for shorter budgets.
+
+Canonical scoring
+- All benchmark problems are scored as minimization problems.
+- Reference gap = achieved_objective - reference_objective.
+- Negative gap = better than the reference.
+- Zero gap = equal to the reference.
+- Positive gap = worse than the reference.
+- Relative reference gap (%) = 100 * gap / abs(reference_objective), when reference_objective != 0.
+
+Quality target
+- 1% target is reached when:
+  achieved_objective <= reference_objective + 0.01 * abs(reference_objective)
+- A solution better than the reference also counts as reaching the 1% target.
+- Success rate = fraction of the 100 attempted runs that reach the 1% target with a valid independently verified solution.
+
+Timing metrics
+- requested_time_limit_s: configured per-run solver budget.
+- actual_solve_wall_s: measured wall-clock solve time for the timed solver section.
+- time_to_1pct_target_s: first observed time at which a valid incumbent reaches the 1% target.
+- time_to_reference_s: first observed time at which a valid incumbent reaches or beats the reference value.
+- time_to_optimum_s: first observed time at which a proven optimum is reached, when applicable.
+- time_to_best_s: first observed time at which the final best in-budget solution was first found.
+- If incumbent history is unavailable, do not invent time-to-target values; record them as unavailable/null with a reason.
+
+Reference status
+- Keep proven optimum and best-known/published reference values clearly distinguished.
+- Negative gap against a proven optimum is a validation alarm.
+- Negative gap against a best-known reference is a candidate improvement and must be independently verified.
+
+Scaling metrics
+- Record encoded binary variable count.
+- Record number of nonzero pairwise couplings.
+- Record measured interaction density.
+- Record CPU memory and GPU memory metrics when available.
+- Record hardware, software versions, precision, solver configuration, configuration hash, seed, instance ID, and status.
+
+Solution verification
+- Save returned binary solutions in reconstructable form.
+- Independently rescore every returned bitstring using the canonical QUBO evaluator.
+- Keep solver-reported/internal energy separate from the independently evaluated benchmark objective.
+
+Persistence
+- Save results after every run.
+- Support safe resume without overwriting completed trials.
+- Copy this definitions file into each test result directory so each result package is self-describing.

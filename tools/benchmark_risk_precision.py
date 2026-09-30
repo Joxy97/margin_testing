@@ -107,7 +107,7 @@ def main():
                         "marginCalculator": {"type": "state_aware_greedy"}}}
                 reference = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport().margin
                 config["engine"]["marginCalculator"] = {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
-                    "solver": {"type": "torch_sbm", "constructorParameters": {"device": str(device)},
+                    "solver": {"type": "lib_simulated_bifurcation", "constructorParameters": {"device": str(device)},
                         "solverParameters": {"steps": args.steps, "runs": args.runs, "seed": 24,
                             "dtype": "float32", "run_batch_size": min(8, args.runs)}},
                     "executionPolicy": {"type": "batch", "batchSize": 2, "maxBatchBytes": 256 * 1024 * 1024}}

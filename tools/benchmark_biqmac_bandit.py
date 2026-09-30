@@ -18,7 +18,7 @@ import traceback
 
 import numpy as np
 
-from benchmark_biqmac import SOLVERS, atomicCsv, atomicJson, parameters, readGraph, stamp
+from benchmark_biqmac import SOLVERS, atomicCsv, atomicJson, librarySourceHashes, parameters, readGraph, stamp
 
 
 STEPS = {"SBM": 5000, "SVL": 5000, "TRF": 10000}
@@ -40,33 +40,21 @@ def actionBank(seed, count=32):
     log = lambda low, high: math.exp(rng.uniform(math.log(low), math.log(high)))
     for _ in range(count - 1):
         common = {"dtype": rng.choice(["float32", "float32", "float64"]),
-                  "run_batch_size": rng.choice([8, 16, 32]),
-                  "energy_chunk_size": rng.choice([8192, 65536])}
+                  "run_batch_size": rng.choice([8, 16, 32])}
         bank["SBM"].append(dict(common, dt=log(.05, 1.2), a0=log(.3, 3.),
                                 c0=rng.choice([0., log(1e-8, .1)]),
                                 gamma=rng.choice([0., log(1e-5, .03)]),
                                 initial_scale=log(.005, .3)))
-        bank["SVL"].append(dict(common, dt=log(.001, .05), mass=log(.2, 5.),
+        bank["SVL"].append(dict(common, time_step=log(.001, .05), mass=log(.2, 5.),
                                 damping=log(.02, 3.),
                                 temperature=rng.choice([0., log(1e-5, .3)]),
-                                transverse_field_initial=log(.2, 4.),
-                                transverse_field_final=rng.choice([0., log(.001, .2)]),
-                                problem_scale_initial=rng.choice([0., log(1e-9, .001)]),
-                                problem_scale_final=log(1e-7, 2.),
-                                integrator=rng.choice(["euler_maruyama", "weak_order_2"]),
-                                noise_chunk_size=rng.choice([16, 64, 128])))
-        bank["TRF"].append(dict(common, time_step=log(.005, .2), mobility=log(.3, 3.),
-                                route_strength=rng.choice([0., log(.05, 5.)]),
+                                integrator=rng.choice(["euler", "heun"])))
+        bank["TRF"].append(dict(common, time_step=log(.005, .2),
+                                feature_strength=rng.choice([0., log(.05, 5.)]),
                                 gamma=rng.choice([0., log(.001, 1.)]),
-                                kappa_initial=rng.uniform(-3., -.1),
-                                kappa_final=log(.3, 5.), schedule_exponent=log(.3, 3.),
-                                integrator=rng.choice(["euler", "heun"]),
-                                candidate_interval=rng.choice([10, 25, 100, 250]),
-                                candidate_batch_size=rng.choice([32, 128, 256]),
-                                matrix_format=rng.choice(["sparse", "dense", "auto"]),
-                                sparse_threshold=rng.choice([.05, .15, .4]),
-                                cuda_graph=rng.choice([True, True, False]),
-                                graph_steps=rng.choice([10, 25, 50])))
+                                locking_start=rng.uniform(-3., -.1),
+                                locking=log(.3, 5.), schedule_exponent=log(.3, 3.),
+                                integrator=rng.choice(["euler", "heun"])))
     return bank
 
 
@@ -110,11 +98,11 @@ def gpuWorker(gpu, inbox, events, inputs, bank, budget):
     try:
         import torch
         from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
-        from margin_calculator.optimization.optimization_solver.bqm_solver.bqm_solver_factory import BQMSolverFactory
+        from qubo_solvers import create_bqm_solver
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
         torch.cuda.set_device(gpu)
-        solvers = {name: BQMSolverFactory.create(kind, {"device": f"cuda:{gpu}"})
+        solvers = {name: create_bqm_solver(kind, {"device": f"cuda:{gpu}"})
                    for name, kind in SOLVERS.items()}
         tiny = QUBOProblem(np.array([-1., -1.]), np.array([0], dtype=np.uint32),
                            np.array([1], dtype=np.uint32), np.array([2.]))
@@ -435,6 +423,7 @@ def main():
         "algorithm": "context-bucket EXP3-IX adaptation, eta=.05, gamma=.025",
         "reward": "on-time incumbent gain / max(1, abs(reference_cut)); train only",
         "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "library_source_sha256": librarySourceHashes(),
         "timing": "resident parsed QUBO; feature extraction through validated host result; late calls excluded",
         "reference": "https://proceedings.neurips.cc/paper/2015/file/e5a4d6bf330f23a8707bb0d6001dfbe8-Paper.pdf"})
     print(f"{stamp()} START instances={len(entries)} split={counts} windows={windows} "

@@ -39,7 +39,7 @@ class DeviceResidentPipelineTest(unittest.TestCase):
 
     def test_resident_bqm_preserves_paired_margin_and_source_scoring(self):
         calculator = {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
-            "solver": {"type": "torch_sbm", "constructorParameters": {"device": "cpu"},
+            "solver": {"type": "lib_simulated_bifurcation", "constructorParameters": {"device": "cpu"},
                        "solverParameters": {"steps": 8, "runs": 4, "seed": 13, "dtype": "float64"}},
             "executionPolicy": {"type": "batch", "batchSize": 2}}
         with tempfile.TemporaryDirectory() as directory:
@@ -51,7 +51,7 @@ class DeviceResidentPipelineTest(unittest.TestCase):
     def test_resident_correlation_penalties_match_the_host_reference(self):
         calculator = {"type": "bqm", "modelParameters": {"lambdaCompat": 1.},
             "comparison": {"type": "state_aware_greedy"},
-            "solver": {"type": "torch_sbm", "constructorParameters": {"device": "cpu"},
+            "solver": {"type": "lib_simulated_bifurcation", "constructorParameters": {"device": "cpu"},
                        "solverParameters": {"steps": 50, "runs": 8, "dtype": "float64"}},
             "executionPolicy": {"type": "batch", "batchSize": 2}}
         with tempfile.TemporaryDirectory() as directory:
@@ -77,7 +77,7 @@ class DeviceResidentPipelineTest(unittest.TestCase):
         import numpy
         import torch
         from margin_calculator import BQMMarginCalculator
-        from margin_calculator.optimization.optimization_solver.bqm_solver import TorchSBMBQMSolver
+        from qubo_solvers.backends.simulated_bifurcation import SimulatedBifurcationBQMSolver as TorchSBMBQMSolver
         from margin_engine.numerical_execution_config import TorchNumericalExecutionConfig
         from margin_engine.torch_returns_execution import _ConditionedGrid
         from portfolio import Portfolio
@@ -120,7 +120,7 @@ class DeviceResidentPipelineTest(unittest.TestCase):
 
     def test_resident_execution_respects_a_one_problem_memory_budget(self):
         calculator = {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
-            "solver": {"type": "torch_sbm", "constructorParameters": {"device": "cpu"},
+            "solver": {"type": "lib_simulated_bifurcation", "constructorParameters": {"device": "cpu"},
                        "solverParameters": {"steps": 8, "runs": 4, "dtype": "float64"}},
             "executionPolicy": {"type": "batch", "batchSize": 100, "maxBatchBytes": 1}}
         with tempfile.TemporaryDirectory() as directory:
@@ -134,7 +134,7 @@ class DeviceResidentPipelineTest(unittest.TestCase):
 
     def test_unsupported_solver_is_rejected_while_loading_the_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
-            config = self.configuration(directory, {"type": "bqm", "solver": {"type": "random"}})
+            config = self.configuration(directory, {"type": "bqm", "solver": {"type": "lib_planar_graph"}})
             with self.assertRaisesRegex(ValueError, "Torch solver"):
                 MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory)
 
@@ -149,19 +149,18 @@ class DeviceResidentPipelineTest(unittest.TestCase):
                 MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
 
     def test_resident_solver_variants_and_batch_sizes_preserve_the_reference(self):
-        for solver_type in ("torch_sbm", "adaptive_torch_sbm", "torch_svl"):
+        for solver_type, extra in (("lib_simulated_bifurcation", {}), ("lib_simulated_bifurcation", {"dynamics": "adaptive"}), ("lib_spin_vector_langevin", {})):
             for batch_size in (1, 4):
                 with self.subTest(solver=solver_type, batch=batch_size), tempfile.TemporaryDirectory() as directory:
                     calculator = {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
                         "solver": {"type": solver_type, "constructorParameters": {"device": "cpu"},
-                                   "solverParameters": {"steps": 8, "runs": 4, "run_batch_size": 2, "dtype": "float64"}},
+                                   "solverParameters": {"steps": 8, "runs": 4, "run_batch_size": 2, "dtype": "float64", **extra}},
                         "executionPolicy": {"type": "batch", "batchSize": batch_size}}
                     config = self.configuration(directory, calculator)
                     report = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
-                    # At eight steps the host SVL reference selects the less
-                    # adverse feasible sample; a heuristic need not find the bound.
-                    expected = 0. if solver_type == "torch_svl" else 0.1798027685847499
-                    self.assertAlmostEqual(report.margin, expected, places=12)
+                    del config["engine"]["numericalExecution"]
+                    host = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
+                    self.assertAlmostEqual(report.margin, host.margin, places=12)
                     self.assertAlmostEqual(report.comparisonMargins["greedy"], 0.1798027685847499, places=12)
 
     def test_resident_pca_matches_host_for_wide_inputs_and_canonical_asset_order(self):
@@ -187,7 +186,7 @@ class DeviceResidentPipelineTest(unittest.TestCase):
         if not torch.cuda.is_available():
             self.skipTest("requires a CUDA/ROCm GPU")
         calculator = {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
-            "solver": {"type": "torch_sbm", "constructorParameters": {"device": "cuda:0"},
+            "solver": {"type": "lib_simulated_bifurcation", "constructorParameters": {"device": "cuda:0"},
                        "solverParameters": {"steps": 1, "runs": 4, "initial_scale": 0., "dtype": "float64"}},
             "executionPolicy": {"type": "batch", "batchSize": 2}}
         with tempfile.TemporaryDirectory() as directory:
@@ -239,10 +238,10 @@ class DeviceResidentPipelineTest(unittest.TestCase):
                     self.assertAlmostEqual(single.margin, reference.margin, delta=2e-5)
                     self.assertEqual(single.numericalDiagnostics["residentFitBytes"] * 2,
                                      reference.numericalDiagnostics["residentFitBytes"])
-                    for solver in ("torch_sbm", "adaptive_torch_sbm", "torch_svl"):
+                    for solver, extra in (("lib_simulated_bifurcation", {}), ("lib_simulated_bifurcation", {"dynamics": "adaptive"}), ("lib_spin_vector_langevin", {})):
                         config["engine"]["marginCalculator"] = {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
                             "solver": {"type": solver, "constructorParameters": {"device": device},
-                                       "solverParameters": {"steps": 8, "runs": 3, "run_batch_size": 2}},
+                                       "solverParameters": {"steps": 8, "runs": 3, "run_batch_size": 2, **extra}},
                             "executionPolicy": {"type": "batch", "batchSize": 2}}
                         with patch.object(TorchReturnsExecution, "_encode", capture):
                             report = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory).generateReport()
@@ -305,7 +304,7 @@ class DeviceResidentPipelineTest(unittest.TestCase):
             pass
         with tempfile.TemporaryDirectory() as directory:
             config = self.configuration(directory, {"type": "bqm", "solver": {
-                "type": "torch_sbm", "constructorParameters": {"device": "cpu"}}})
+                "type": "lib_simulated_bifurcation", "constructorParameters": {"device": "cpu"}}})
             application = MarginApplicationConfig.fromYamlText(yaml.safe_dump(config), directory)
             calculator = replace(application.engine.marginCalculator, bqmVisitor=CustomVisitor())
             with self.assertRaisesRegex(ValueError, "custom"):

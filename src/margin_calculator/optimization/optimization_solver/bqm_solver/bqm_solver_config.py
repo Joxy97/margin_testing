@@ -12,7 +12,7 @@ from .bqm_solver_factory import BQMSolverFactory
 class BQMSolverConfig:
     """Select a BQM solver and separate construction from solve options."""
 
-    solverType: str = "simulated_annealing"
+    solverType: str = "lib_simulated_annealing"
     constructorParameters: Mapping[str, Any] = field(default_factory=dict)
     solverParameters: Mapping[str, Any] = field(default_factory=dict)
 

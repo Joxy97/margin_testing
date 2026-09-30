@@ -18,7 +18,7 @@ from risk_state_generator import EuropeanOptionFactorStressModel, ReturnsPCAGrid
 from margin_calculator.optimization.factor_stress import FactorStressQUBO, FactorStressQUBOConfig, QuadraticStressObjective
 from margin_calculator.optimization.factor_stress_reference import solveRepricedReference
 from margin_calculator.optimization.factor_stress_repair import FactorStressRepair
-from margin_calculator.optimization.optimization_solver.bqm_solver import BQMSolverFactory
+from qubo_solvers import create_bqm_solver
 
 
 def main() -> None:
@@ -47,8 +47,8 @@ def main() -> None:
     model = EuropeanOptionFactorStressModel.fromPCAGrid(grid, portfolio, options)
     encoding = FactorStressQUBO.build(QuadraticStressObjective(*model.quadraticCoefficients()),
                                      FactorStressQUBOConfig(bitsPerCoordinate=3, radius=3.))
-    solver = BQMSolverFactory.create("simulated_annealing")
-    result = solver.solve(encoding.problem, {"num_reads": 32, "num_sweeps": 2000, "seed": 19})
+    solver = create_bqm_solver("lib_simulated_annealing")
+    result = solver.solve(encoding.problem, {"runs": 32, "steps": 2000, "seed": 19})
     repaired = FactorStressRepair(model, encoding).repair(result.sample)
     reference = solveRepricedReference(model, 3., boundCoordinates=True)
     print(json.dumps({

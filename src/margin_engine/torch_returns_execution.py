@@ -19,7 +19,6 @@ from margin_calculator.optimization.optimization_problem.qubo_problem import QUB
 from margin_calculator.optimization.optimization_solver.bqm_solver.resource_plan import BQMResourcePlan
 from margin_calculator.optimization.optimization_solver.bqm_solver.execution_memory import ExecutionMemoryTracker
 from margin_calculator.optimization.optimization_solver.bqm_solver.torch_qubo import TorchQUBO
-from margin_calculator.optimization.optimization_solver.bqm_solver.torch_execution import TorchExecution
 from risk_state_generator.risk_state import CorrelationFactors
 
 import numpy
@@ -55,7 +54,9 @@ class TorchReturnsExecution:
             raise ValueError("Torch numerical execution requires a returns-grid risk generator")
         if type(calculator) is BQMMarginCalculator:
             validateResidentCollaborators(calculator.bqmVisitor, calculator.executionPolicy, calculator.comparisonVisitor)
-            if not isinstance(calculator.bqmSolver, TorchExecution):
+            if not getattr(calculator.bqmSolver, "supportsResident", False) or not callable(
+                getattr(calculator.bqmSolver, "solveResidentPlanned", None)
+            ):
                 raise ValueError("Resident BQM execution requires a Torch solver")
             if len(calculator.bqmSolver.devices) > 1:
                 raise ValueError("Resident numerical execution requires one solver device")
@@ -118,6 +119,7 @@ class TorchReturnsExecution:
 
         calculator = self.calculator
         solver = calculator.bqmSolver
+        diagnostics["solverPreparationMode"] = getattr(solver, "residentMode", "unspecified")
         policy = calculator.executionPolicy
         batch_size = policy.batchSize if isinstance(policy, BatchBQMExecutionPolicy) else 1
         budget = policy.maxBatchBytes if isinstance(policy, BatchBQMExecutionPolicy) else None

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qubo-solvers"
+version = "0.1.0"
+description = "Torch QUBO/Ising solver library and adapters for the solver testing application"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.6"]
+
+[project.optional-dependencies]
+compact = ["numpy>=1.26", "scipy>=1.11"]
+benchmark = [
+  "psutil>=7",
+  "threadpoolctl>=3",
+  "numpy>=1.26", "scipy>=1.11", "certifi>=2024.2.2",
+  "dimod>=0.12.21,<0.13", "dwave-samplers>=1.6,<2", "networkx>=3",
+]
+application = [
+  "numpy", "pandas", "scikit-learn", "dimod", "dwave-samplers",
+  "yfinance", "PyYAML", "scipy", "matplotlib",
+]
+dev = ["pytest>=8", "psutil>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+qubo_solvers = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

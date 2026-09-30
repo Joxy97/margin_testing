@@ -23,7 +23,7 @@ import numpy as np
 from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
 
 
-SOLVERS = {'SBM': 'torch_sbm', 'SVL': 'torch_svl', 'TRF': 'torch_transverse_route'}
+SOLVERS = {'SBM': 'lib_simulated_bifurcation', 'SVL': 'lib_spin_vector_langevin', 'TRF': 'lib_transverse_route'}
 ARCHIVE_URL = 'https://biqmac.aau.at/library/tar_files/mac_all.tar.gz'
 REFERENCE_URL = 'https://biqmac.aau.at/biqmaclib.tex'
 
@@ -123,21 +123,22 @@ def prepare(archive, references, destination):
 
 def parameters(solver, runs, steps, seed):
     p = dict(runs=runs, steps=steps, seed=seed, dtype='float32', run_batch_size=runs,
-             energy_chunk_size=8192)
-    if solver == 'TRF':
-        p.update(cuda_graph=True, candidate_interval=25)
+             best_only=True)
+    if solver == 'SBM':
+        p.pop('best_only')
+        p['energy_chunk_size'] = 8192
     return p
 
 
 def worker(device, tasks, events, inputDirectory, repeats, seed):
     try:
         import torch
-        from margin_calculator.optimization.optimization_solver.bqm_solver import BQMSolverFactory
+        from qubo_solvers import create_bqm_solver
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
         if device.startswith('cuda'):
             torch.cuda.set_device(device)
-        solvers = {name: BQMSolverFactory.create(kind, {'device': device}) for name, kind in SOLVERS.items()}
+        solvers = {name: create_bqm_solver(kind, {'device': device}) for name, kind in SOLVERS.items()}
         cache = {}
         def sync():
             if device.startswith('cuda'):
@@ -278,11 +279,19 @@ def publish(output, records, settings, expected):
     return overall
 
 
+def librarySourceHashes():
+    """Fingerprint delegated implementations as well as the caller facade."""
+    import qubo_solvers
+    root = Path(qubo_solvers.__file__).resolve().parent
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.rglob('*.py'))}
+
+
 def run(args):
     import torch
-    from margin_calculator.optimization.optimization_solver.bqm_solver import BQMSolverFactory
-    from margin_calculator.optimization.optimization_solver.bqm_solver.torch_execution import TorchExecution
-    from margin_calculator.optimization.optimization_solver.bqm_solver.torch_candidates import TorchCandidateAccumulator
+    from qubo_solvers import create_bqm_solver
+    from qubo_solvers.backends.torch_execution import TorchExecution
+    from qubo_solvers.backends.torch_candidates import TorchCandidateAccumulator
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     # A second coordinator must not race checkpoint/CSV publication.
@@ -299,12 +308,12 @@ def run(args):
     for entry in entries:
         if hashlib.sha256((args.inputs / entry['path']).read_bytes()).hexdigest() != entry['sha256']:
             raise ValueError(f"Input checksum changed: {entry['name']}")
-    classes = [BQMSolverFactory.create(kind).__class__ for kind in SOLVERS.values()]
+    classes = [create_bqm_solver(kind).__class__ for kind in SOLVERS.values()]
     files = {Path(inspect.getfile(c)).resolve() for c in classes + [TorchExecution, TorchCandidateAccumulator, QUBOProblem]}
     files.add(Path(__file__).resolve())
     signature = dict(runs=args.runs, steps=args.steps, repeats=args.repeats, seed=args.seed,
         devices=args.devices, input_manifest_sha256=hashlib.sha256(data_path.read_bytes()).hexdigest(),
-        instances=[entry['name'] for entry in entries],
+        instances=[entry['name'] for entry in entries], library_source_sha256=librarySourceHashes(),
         code_sha256={path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(files)})
     manifest_path = output / 'manifest.json'
     if manifest_path.exists():
@@ -315,7 +324,7 @@ def run(args):
             torch=torch.__version__, cuda=torch.version.cuda,
             hardware={d: torch.cuda.get_device_name(d) if d.startswith('cuda') else 'CPU' for d in args.devices},
             comparison='Native solver defaults; fixed-seed repeated timings; QUBO=-cut; quality then median time',
-            solver_parameters={name: BQMSolverFactory.create(kind)._getParameters(parameters(name, args.runs[0], args.steps[0], args.seed)) for name, kind in SOLVERS.items()}))
+            solver_parameters={name: create_bqm_solver(kind)._getParameters(parameters(name, args.runs[0], args.steps[0], args.seed)) for name, kind in SOLVERS.items()}))
     settings = [(runs, steps) for runs in args.runs for steps in args.steps]
     checkpoints = output / '.checkpoints'
     checkpoints.mkdir(exist_ok=True)

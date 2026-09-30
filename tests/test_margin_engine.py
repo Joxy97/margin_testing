@@ -170,7 +170,7 @@ class MarginEngineTest(unittest.TestCase):
                     dataManager=DataManagerConfig(memorySize=2),
                     riskStateGenerator=generator_config,
                     marginCalculator=BQMMarginCalculatorConfig(
-                        solver=BQMSolverConfig(solverType="random")
+                        solver=BQMSolverConfig(solverType="lib_random_search")
                     ),
                 )
             )
@@ -207,7 +207,7 @@ class MarginEngineTest(unittest.TestCase):
                     scenariosPerComponents=(1,),
                 ),
                 marginCalculator=BQMMarginCalculatorConfig(
-                    solver=BQMSolverConfig(solverType="random")
+                    solver=BQMSolverConfig(solverType="lib_random_search")
                 ),
             )
         )

@@ -71,7 +71,7 @@ def report(output):
         raise ValueError("repair archive is incomplete or contains duplicate samples")
     grouped = []
     for bits in raw_settings["bits"]:
-        for solver in ("torch_sbm", "torch_svl", "torch_transverse_route"):
+        for solver in sorted({r["solver"] for r in rows if r["bits"] == bits}):
             group = [r for r in rows if r["bits"] == bits and r["solver"] == solver]
             grouped.append(dict(bits=bits, solver=solver, trials=len(group),
                 projected_breaches=sum(r["projected_breach"] for r in group),

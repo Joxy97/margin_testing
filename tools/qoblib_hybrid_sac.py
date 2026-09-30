@@ -22,15 +22,11 @@ RANGES = {
     "SBM": [("dt", .05, 1.2, True), ("a0", .3, 3., True),
             ("c0", 1e-8, .1, True), ("gamma", 1e-5, .03, True),
             ("initial_scale", .005, .3, True)],
-    "SVL": [("dt", .001, .05, True), ("mass", .2, 5., True),
-            ("damping", .02, 3., True), ("temperature", 1e-5, .3, True),
-            ("transverse_field_initial", .2, 4., True),
-            ("transverse_field_final", .001, .2, True),
-            ("problem_scale_initial", 1e-9, .001, True),
-            ("problem_scale_final", 1e-7, 2., True)],
-    "TRF": [("time_step", .005, .2, True), ("mobility", .3, 3., True),
-            ("route_strength", .05, 5., True), ("gamma", .001, 1., True),
-            ("kappa_initial", -3., -.1, False), ("kappa_final", .3, 5., True),
+    "SVL": [("time_step", .001, .05, True), ("mass", .2, 5., True),
+            ("damping", .02, 3., True), ("temperature", 1e-5, .3, True)],
+    "TRF": [("time_step", .005, .2, True),
+            ("feature_strength", .05, 5., True), ("gamma", .001, 1., True),
+            ("locking_start", -3., -.1, False), ("locking", .3, 5., True),
             ("schedule_exponent", .3, 3., True)],
 }
 
@@ -39,13 +35,10 @@ def branches(solver):
     if solver == "SBM":
         return [dict(c0_zero=a, gamma_zero=b) for a, b in itertools.product((False, True), repeat=2)]
     if solver == "SVL":
-        return [dict(integrator=i, temperature_zero=t,
-                     transverse_field_final_zero=f, problem_scale_initial_zero=p)
-                for i, t, f, p in itertools.product(
-                    ("euler_maruyama", "weak_order_2"), (False, True), (False, True), (False, True))]
-    return [dict(integrator=i, route_strength_zero=r, gamma_zero=g, candidate_interval=c)
-            for i, r, g, c in itertools.product(("euler", "heun"), (False, True),
-                                               (False, True), (10, 100, 250))]
+        return [dict(integrator=i, temperature_zero=t)
+                for i, t in itertools.product(("euler", "heun"), (False, True))]
+    return [dict(integrator=i, feature_strength_zero=r, gamma_zero=g)
+            for i, r, g in itertools.product(("euler", "heun"), (False, True), (False, True))]
 
 
 def decode(solver, action):

@@ -29,7 +29,7 @@ from margin_calculator.optimization.factor_stress_reference import (
     solveLinearReference, solveQuadraticReference, solveRepricedReference,
 )
 from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
-from margin_calculator.optimization.optimization_solver.bqm_solver import BQMSolverFactory
+from qubo_solvers import create_bqm_solver
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,12 +185,10 @@ def run(args) -> None:
         np.save(output/f"lattice_{k}_sample.npy", sample)
         emit(output, dict(stage="lattice_reference", **lattice))
         for solver_name in args.solvers:
-            solver = BQMSolverFactory.create(solver_name, {"device": args.device})
+            solver = create_bqm_solver(solver_name, {"device": args.device})
             for repeat in range(args.repeats):
                 parameters = dict(steps=args.steps, runs=args.runs, run_batch_size=args.runs,
                                   dtype="float64", seed=args.seed+repeat)
-                if solver_name == "torch_transverse_route":
-                    parameters.update(candidate_interval=max(1, args.steps//8), matrix_format="dense")
                 if args.device.startswith("cuda"):
                     torch.cuda.synchronize()
                 before = perf_counter()
@@ -246,8 +244,8 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=64)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--solvers", nargs="+", choices=["torch_sbm", "torch_svl", "torch_transverse_route"],
-                        default=["torch_sbm", "torch_svl", "torch_transverse_route"])
+    parser.add_argument("--solvers", nargs="+", choices=["lib_simulated_bifurcation", "lib_spin_vector_langevin", "lib_transverse_route"],
+                        default=["lib_simulated_bifurcation", "lib_spin_vector_langevin", "lib_transverse_route"])
     args = parser.parse_args()
     if args.steps < 1 or args.runs < 1 or args.repeats < 1 or args.window < 2:
         parser.error("steps, runs and repeats must be positive; window must be at least two")

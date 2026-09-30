@@ -10,10 +10,11 @@ import numpy
 import yaml
 
 from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
-from margin_calculator.optimization.optimization_solver.bqm_solver import BQMSolverFactory, TorchCategoricalBQMSolver
-from margin_calculator.optimization.optimization_solver.bqm_solver.candidate_selection import CandidateSelection
-from margin_calculator.optimization.optimization_solver.bqm_solver.torch_candidates import TorchCandidateAccumulator
-from margin_calculator.optimization.optimization_solver.bqm_solver.torch_categorical_bqm_solver import _CategoricalModel
+from qubo_solvers import create_bqm_solver
+from qubo_solvers.backends.categorical import TorchCategoricalBQMSolver
+from qubo_solvers.backends.candidate_selection import CandidateSelection
+from qubo_solvers.backends.torch_candidates import TorchCandidateAccumulator
+from qubo_solvers.backends.categorical import _CategoricalModel
 
 
 def fixture():
@@ -50,7 +51,7 @@ class CategoricalModelTest(unittest.TestCase):
                 TorchCategoricalBQMSolver().estimatedWorkingMemoryBytes(p)
 
     def test_configuration_validation_and_factory(self):
-        self.assertIsInstance(BQMSolverFactory.createBQMSolver('torch_categorical'), TorchCategoricalBQMSolver)
+        self.assertIsInstance(create_bqm_solver('lib_categorical'), TorchCategoricalBQMSolver)
         for params in ({'steps': 0}, {'runs': -1}, {'seed': -1}, {'dtype': 'float16'},
                        {'temperature_start': float('nan')}, {'temperature_end': 2.},
                        {'noise_chunk_size': 0}, {'greedy_sweeps': -1}, {'run_batch_size': 0}, {'typo': 1}):
@@ -124,7 +125,7 @@ class TorchCategoricalTest(unittest.TestCase):
 
     def test_zero_temperature_matches_dense_categorical_descent(self):
         import torch
-        from margin_calculator.optimization.optimization_solver.bqm_solver.torch_execution import _RUN_SEED_STRIDE, _MAX_TORCH_SEED
+        from qubo_solvers.backends.torch_execution import _RUN_SEED_STRIDE, _MAX_TORCH_SEED
         p = fixture()
         model = _CategoricalModel.fromProblem(p)
         params = {'steps': 3, 'runs': 3, 'seed': 7, 'temperature_start': 0., 'temperature_end': 0., 'greedy_sweeps': 0, 'dtype': 'float64'}
@@ -167,7 +168,7 @@ class TorchCategoricalTest(unittest.TestCase):
         from margin_engine import MarginApplicationConfig
         with tempfile.TemporaryDirectory() as directory:
             calculator = {'type': 'bqm', 'comparison': {'type': 'state_aware_greedy'},
-                'solver': {'type': 'torch_categorical', 'constructorParameters': {'device': 'cpu'},
+                'solver': {'type': 'lib_categorical', 'constructorParameters': {'device': 'cpu'},
                     'solverParameters': {'steps': 4, 'runs': 3, 'temperature_start': .5, 'temperature_end': 0.}},
                 'executionPolicy': {'type': 'batch', 'batchSize': 2}}
             config = DeviceResidentPipelineTest().configuration(directory, calculator)

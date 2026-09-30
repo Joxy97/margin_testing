@@ -1,13 +1,2 @@
-"""Result returned by binary quadratic model optimization."""
-
-from collections.abc import Hashable, Mapping, Sequence
-from dataclasses import dataclass, field
-
-
-
-@dataclass
-class BQMOptimizationResult:
-    """Store a solver's binary sample and its corresponding energy."""
-
-    sample: Mapping[Hashable, int] | Sequence[int] = field(default_factory=dict)
-    energy: float = 0.0
+"""Compatibility import for the library-owned application result."""
+from qubo_solvers.backends.result import BQMOptimizationResult

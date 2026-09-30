@@ -12,9 +12,11 @@ import numpy
 import pandas
 import yaml
 
+from qubo_solvers import create_bqm_solver
+from qubo_solvers.backends.library_solver import LibrarySpinVectorLangevinBQMSolver as TorchSVLBQMSolver
 from margin_engine import MarginApplicationConfig
 from margin_calculator.optimization.optimization_solver.bqm_solver import (
-    BQMSolver, BatchBQMExecutionPolicy, TorchSVLBQMSolver,
+    BQMSolver, BatchBQMExecutionPolicy,
 )
 from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
 from margin_calculator.optimization.optimization_result import BQMOptimizationResult
@@ -47,7 +49,7 @@ class PCABackendTest(unittest.TestCase):
                         "pcaGridProvider": {"backend": {"type": "torch", "device": "cpu"}}},
                     "marginCalculator": {"type": "bqm",
                         "executionPolicy": {"type": "batch", "batchSize": 1, "prefetch": True},
-                        "solver": {"type": "torch_svl", "constructorParameters": {"device": "cpu"},
+                        "solver": {"type": "lib_spin_vector_langevin", "constructorParameters": {"device": "cpu"},
                                    "solverParameters": {"steps": 10, "runs": 4}}},
                 },
             }
@@ -152,8 +154,8 @@ class PCABackendTest(unittest.TestCase):
 class TorchPipelineTest(unittest.TestCase):
     def test_float32_resident_coefficients_rank_original_float64_energy(self):
         import torch
-        from margin_calculator.optimization.optimization_solver.bqm_solver.torch_candidates import TorchCandidateAccumulator
-        from margin_calculator.optimization.optimization_solver.bqm_solver.torch_qubo import TorchQUBO
+        from qubo_solvers.backends.torch_candidates import TorchCandidateAccumulator
+        from qubo_solvers.backends.torch_qubo import TorchQUBO
         # Float32 collapses this difference; lexicographic ties would pick the wrong sample.
         p = QUBOProblem(numpy.array([-1.00000001, -1.]), numpy.array([], dtype=numpy.uint32),
                         numpy.array([], dtype=numpy.uint32), numpy.array([]), oneHotGroups=((0, 1),))
@@ -164,36 +166,24 @@ class TorchPipelineTest(unittest.TestCase):
         self.assertEqual(accumulator.result(), ((1, 0), p.energy((1, 0))))
 
     def test_svl_invalid_numeric_parameters(self):
-        for settings in ({"noise_chunk_size": 0}, {"temperature": float("nan")}, {"dt": float("inf")}):
+        for settings in ({"run_batch_size": 0}, {"temperature": float("nan")}, {"time_step": float("inf")}):
             with self.assertRaises(ValueError):
-                TorchSVLBQMSolver._getParameters(settings)
+                create_bqm_solver("lib_spin_vector_langevin")._getParameters(settings)
 
-    def test_raw_svl_samples_preserve_run_and_problem_batching(self):
-        collected = []
-        original = TorchSVLBQMSolver._runTrajectories
-
-        def capture(*args):
-            samples = original(*args)
-            collected.append(samples.cpu().numpy().copy())
-            return samples
-
-        params = {"steps": 19, "runs": 5, "noise_chunk_size": 8, "dtype": "float64", "seed": 13}
+    def test_library_svl_problem_batching_preserves_identity_seed(self):
+        solver = create_bqm_solver("lib_spin_vector_langevin", {"device": "cpu"})
+        params = {"steps": 19, "runs": 5, "run_batch_size": 2, "dtype": "float64", "seed": 13}
         problems = [problem(), problem(.2)]
-        with patch.object(TorchSVLBQMSolver, "_runTrajectories", staticmethod(capture)):
-            TorchSVLBQMSolver("cpu").solveMany(problems, params)
-            together = collected.pop()
-            TorchSVLBQMSolver("cpu").solveMany(problems, params | {"run_batch_size": 2})
-            split = numpy.concatenate(collected, axis=1)
-            collected.clear()
-            for p in problems:
-                TorchSVLBQMSolver("cpu").solve(p, params)
-            separate = numpy.concatenate(collected, axis=0)
-        numpy.testing.assert_array_equal(together, split)
-        numpy.testing.assert_array_equal(together, separate)
+        together = solver.solveMany(problems, params)
+        separate = [solver.solve(item, params) for item in problems]
+        self.assertEqual(together, separate)
+        self.assertEqual(together, solver.solveMany(problems, params))
+        for item, result in zip(problems, together):
+            self.assertEqual(result.energy, item.energy(result.sample))
 
     def test_candidate_accumulation_matches_full_selection(self):
         import torch
-        from margin_calculator.optimization.optimization_solver.bqm_solver.torch_candidates import TorchCandidateAccumulator
+        from qubo_solvers.backends.torch_candidates import TorchCandidateAccumulator
         p = QUBOProblem(numpy.array([-.7, .2, -.1]), numpy.array([0, 1], dtype=numpy.uint32),
                         numpy.array([1, 2], dtype=numpy.uint32), numpy.array([.5, -.4]),
                         oneHotGroups=((0, 1, 2),))
@@ -208,14 +198,14 @@ class TorchPipelineTest(unittest.TestCase):
 
     def test_memory_estimate_accounts_for_runs_and_noise(self):
         solver = TorchSVLBQMSolver()
-        small = solver.estimatedWorkingMemoryBytes(problem(), {"runs": 1, "noise_chunk_size": 1})
-        large = solver.estimatedWorkingMemoryBytes(problem(), {"runs": 16, "noise_chunk_size": 32})
+        small = solver.estimatedWorkingMemoryBytes(problem(), {"runs": 1, "run_batch_size": 1})
+        large = solver.estimatedWorkingMemoryBytes(problem(), {"runs": 16, "run_batch_size": 16})
         self.assertGreater(small, problem().numericMemoryBytes)
         self.assertGreater(large, small)
 
     def test_candidate_ties_and_original_diagonal_energy(self):
         import torch
-        from margin_calculator.optimization.optimization_solver.bqm_solver.torch_candidates import TorchCandidateAccumulator
+        from qubo_solvers.backends.torch_candidates import TorchCandidateAccumulator
         p = QUBOProblem(numpy.zeros(3), numpy.array([0, 0, 1], dtype=numpy.uint32),
                         numpy.array([0, 1, 0], dtype=numpy.uint32), numpy.array([-1., .5, -.5]), offset=2)
         rows = [[1, 1, 0], [1, 0, 0], [0, 0, 0]]
@@ -226,7 +216,7 @@ class TorchPipelineTest(unittest.TestCase):
 
 class PipelineSchedulingTest(unittest.TestCase):
     def test_torch_rejects_wrong_problem_types_before_memory_estimation(self):
-        from margin_calculator.optimization.optimization_solver.bqm_solver import TorchSBMBQMSolver
+        from qubo_solvers.backends.simulated_bifurcation import SimulatedBifurcationBQMSolver as TorchSBMBQMSolver
         with self.assertRaises(TypeError):
             TorchSBMBQMSolver(device="cpu").solveMany([None])
 

@@ -2,13 +2,28 @@
 
 ## Purpose
 
-This repository is a research-oriented portfolio margin and backtesting application. It acquires historical close prices, builds PCA-conditioned return/volatility stress states, and calculates the greatest portfolio loss either greedily or by encoding each state as a binary quadratic model (BQM/QUBO). The QUBO path supports classical samplers and simulated-bifurcation implementations on Python/Torch, native C++, optional CUDA, and an FPGA simulation/HLS kernel.
+This repository is a research-oriented portfolio margin and backtesting application. It acquires historical close prices, builds PCA-conditioned return/volatility stress states, and calculates the greatest portfolio loss either greedily or by encoding each state as a binary quadratic model (BQM/QUBO). The QUBO path executes through the library in `src/qubo_solvers`: 28 canonical solvers, comprising 17 native Torch algorithms and 11 specialized backends. Twenty-seven support GPU search kernels; the planar solver is CPU-only. The active library needs no native C++/CUDA/FPGA build.
 
 Use this file as the default guide for work anywhere in the repository. Keep it current when architecture, commands, configuration, or extension points change.
 
 ## Start Here
 
-The project is not installed as a Python package. Run Python code from the repository root with `src` on `PYTHONPATH`.
+The `solvers_testing` deployment branch ships source, configuration, tests and
+the offline 37-problem corpus. See `README.md` for clone/setup/run commands.
+Generated benchmark results, local environments, rejected downloads and
+unrelated synthetic market fixtures are excluded from this branch; keep them
+local. Historical workflows below may require separately supplied market data.
+
+Run Python code from the repository root with `src` on `PYTHONPATH`, or install
+the package with `python -m pip install -e ".[benchmark,application,dev]"`.
+Benchmark data remain in the checkout; see `SOLVER_LIBRARY.md` for the library API.
+
+This guide also preserves workflows from the broader historical application.
+Some referenced `config/`, experiment reports, and deployment scripts are absent
+from this solver-testing checkout. Treat those references as historical context,
+check that inputs exist before using them, and use the current library/benchmark
+commands below for solver work. Never infer current solver IDs or native build
+requirements from an archived experiment.
 
 ```bash
 python -m venv .venv
@@ -22,8 +37,9 @@ python run_backtest.py config/backtests/assets_00010.yaml --resume
 python plot_backtest.py backtest_results/<portfolio>/breaches.csv
 ```
 
-To run the selected eight-GPU Torch SBM benchmarks sequentially on the configured
-Vast.ai host and fetch each completed result into a timestamped local folder:
+Historical deployment workflow (launcher/assets may be absent here): run the
+selected eight-GPU Torch SBM benchmarks sequentially on a configured Vast.ai
+host and fetch completed results into a timestamped local folder:
 
 ```bash
 ./run_vast_torch_sbm_batch.sh
@@ -53,19 +69,82 @@ writing archives beneath `sweep_results/`; otherwise it orchestrates over SSH an
 fetches results locally. Set `EXECUTION_MODE=local` or `server` to override
 automatic detection.
 
-All paths in an application YAML file are resolved relative to that YAML file. Prefer copying `config/margin.example.yaml` and changing the copy. The parser is intentionally strict and rejects unknown keys.
+All paths in an application YAML file are resolved relative to that YAML file. Where the historical `config/margin.example.yaml` fixture is available, copy it before changes and migrate solver IDs/parameters. The current solver fragment is in `SOLVER_LIBRARY.md`. The parser is intentionally strict and rejects unknown keys.
 
-For native simulated bifurcation:
+For library validation and bounded GPU profiling on a prepared NVIDIA host:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+python -m pytest tests/qubo_solvers tests/test_library_bqm_solver.py tests/test_qubo_benchmark.py
+python -m qubo_benchmark validate
+python tools/profile_solver_gpu.py --device cuda:0 --solvers all --instances gka1e --output benchmark_results/gpu-native-profile.json
 ```
 
-Useful CMake options are `SBM_ENABLE_CUDA`, `SBM_BUILD_FPGA_SIM`, and `SBM_NATIVE_OPTIMIZATION`. See `SIMULATED_BIFURCATION.md` for solver algorithms, QUBO file format, accelerator details, and tuning parameters.
+`SOLVER_LIBRARY.md` is the current solver API, installation, migration, and device
+guide. The base package requires Torch; extras are `compact`, `benchmark`,
+`application`, and `dev`. A compatible CUDA-enabled Torch wheel and driver are
+required for GPU execution; CMake and a local CUDA compiler are not. Historical
+experiment/native-build documents describe earlier implementations, not current
+registry names or build requirements. Explicit CUDA requests never select CPU
+silently. Local CUDA validation remains pending when hardware is unavailable.
 
 ## Runtime Architecture
+
+### Fixed-budget runtime benchmark v2
+
+Use `README_BENCHMARKS.md` and `BENCHMARK_DEFINITIONS.txt` for the current runtime
+protocol. `python run_benchmark.py N DENSITY TIME_LIMIT` selects ALL matching
+prepared instances, 100 seeds (0-99), and the 23 GPU-capable canonical methods
+compatible with all 37 problems. Implementation lives in
+`src/qubo_benchmark/runtime`; frozen settings and the v2 catalog live in `configs`.
+The library's optional `observation.py` hooks provide deadline/candidate capture
+without changing mathematical updates. Never pass reference targets to solvers.
+Keep timing before reset/preprocessing and after completed immutable capture.
+
+Run `tests/test_runtime_benchmark.py`, the library tests, and
+`tests/test_qubo_benchmark.py` for changes to this path. Use only explicitly
+labeled representative/one-seed smoke commands during implementation. The grid
+runner has 36 configurations and must not be launched as a validation shortcut.
+Resume locks source/data/environment/configuration identities; do not edit
+numerical Python sources while a benchmark is running. Preserve atomic attempt
+journals and all failed attempts. The older 20-seed runner below is retained for
+historical compatibility and is not the v2 runtime protocol.
+
+### Offline QUBO benchmark catalog
+
+The independent 37-instance benchmark is in `src/qubo_benchmark`, with versioned
+inputs in `benchmark_data/qubo37`, configurations in `benchmark_configs`, and
+commands/provenance in `QUBO_BENCHMARK.md`. Run
+`PYTHONPATH=src python -m unittest discover -s tests -p test_qubo_benchmark.py -v`
+and `PYTHONPATH=src python -m qubo_benchmark validate` before benchmarking.
+`run` and tests are offline; do not add automatic downloads to them. Adapters
+must preserve existing solver algorithms and keep reference answers out of
+solver inputs. Full GPU runs use `benchmark_configs/full.json` or
+`full_compatible.json`: 23 compatible solvers on 37 instances and 20 seeds,
+17,020 trials. `full_all.json` schedules all 28 canonical entries, 20,720 trials,
+with explicit unsupported statuses for the two categorical, planar, and two
+bounded-treewidth methods. `smoke_all.json` checks all 28 on six instances: 168
+trials; the local run completed 138 successfully and recorded 30 unsupported,
+with no failures or scoring alarms and matching source identities. Full campaigns
+and GPU validation have not run locally. Optional CPU conditional
+rounding, local search, and block polishing are disabled in full configurations;
+host setup, source scoring, and structural preflight remain explicit.
+
+The complete numerical implementation belongs to `src/qubo_solvers`. Its registry
+owns 17 native tensor methods plus 11 specialized backends, with `lib_` names
+only. Nine duplicate entries were removed: seven implementation pairs and the
+three SBM entries consolidated as `lib_simulated_bifurcation` with `dynamics`
+set to `standard` or `adaptive`. Retired IDs fail with migration hints. Historical
+application module/class paths are import shims and must not regain kernels.
+Benchmarks and the application factory call `create_bqm_solver` directly.
+Compact types, candidate selection, execution helpers, and all backend kernels
+are library-owned. Preserve algorithm semantics and pair-once to symmetric-half
+objective conversion. Core tensor imports require only Torch; compact,
+benchmark, and application dependencies load at their respective boundaries.
+See `SOLVER_LIBRARY.md`. Run
+`python -m pytest tests/qubo_solvers tests/test_library_bqm_solver.py tests/test_qubo_benchmark.py`.
+CPU-only machines skip CUDA parametrizations; never claim those were tested.
+Editable installation is supported with `pip install -e ".[benchmark,application,dev]"`;
+benchmark datasets remain in the checkout and are never fetched at run time.
 
 The main calculation flow is:
 
@@ -86,7 +165,7 @@ MarginEngine
             |-> optional paired greedy comparison on the same state iterator
             -> optimization.PortfolioRiskStateBQMVisitor encodes QUBO
             -> BQMExecutionPolicy admits a BQMResourcePlan
-            -> BQMSolver consumes the same ordered shard plan
+            -> library-owned BQMSolver consumes the same ordered shard plan
             -> manager decodes the greatest loss
   -> CalculationOutcome (margin and immutable paired comparisons)
   -> MarginReport (outcome and calculation-local stage timings)
@@ -95,11 +174,14 @@ MarginEngine
 An optional `engine.numericalExecution: {type: torch, device: cuda:0}` selects
 `TorchReturnsExecution` after acquisition. It owns resident PCA, conditioning,
 correlation penalties, QUBO preparation, and same-device solving for one calculation.
-It supports returns grids and greedy/Torch calculators on one device. Host snapshots
-remain for seeds/scoring/repair; host caches, other risk families, and multi-GPU
-scheduling use the existing path when this block is omitted. When changing or
-benchmarking this path, read the resident-execution section of
-`SIMULATED_BIFURCATION.md` for lifetime, memory, and numerical parity limits.
+It supports returns grids and greedy/Torch calculators on one device. Eighteen
+solvers use device resident preparation (native 17 plus SBM); seven use an explicit
+source-snapshot path (five physics and two categorical backends). Planar and tree
+methods do not provide resident preparation. Host snapshots remain for
+seeds/scoring/repair; host caches, other risk families, and multi-GPU scheduling
+use the existing path when this block is omitted. Consult `solver_capabilities`
+and `SOLVER_LIBRARY.md` for current support; the historical resident-execution
+section of `SIMULATED_BIFURCATION.md` records lifetime and numerical background.
 
 `MarginApplicationConfig` in `src/margin_engine/yaml_application.py` is the public YAML composition boundary. It converts primitive, safely loaded YAML into typed configs and runtime collaborators. `MarginEngineConfig` then constructs an independent pipeline; avoid hidden global runtime state.
 
@@ -122,15 +204,15 @@ version while CSV column names remain compatible. `plot_backtest.py` renders a n
 - `src/data_manager/`: in-memory LRU caching, interval-aware missing-data lookup, and optional partitioned pickle backing storage.
 - `src/cache/`: small generic cache abstractions used by market data, PCA grids, and QUBO topology caches.
 - `src/risk_state_generator/`: exponentially weighted PCA, shock-grid construction, optional cross-asset compatibility/correlation factors, and portfolio risk-state visitors.
-- `src/margin_calculator/`: greedy and BQM margin strategies, compact QUBO representation, execution policies, and solver adapters.
+- `src/margin_calculator/`: greedy and BQM margin strategies, execution policies, and compatibility imports for library-owned solver/problem types.
 - `src/backtesting/`: rolling evaluation, breach/Basel results, exact coverage p-values, timing data, checkpoints, and CSV output.
-- `src/sbm/`, `include/sbm/`: native C++17 simulated-bifurcation model, solvers, CLI, and Python C ABI bridge.
-- `cuda/`: optional CUDA solver backend.
-- `fpga/`: Vitis HLS kernel and declarations; the default C++ build includes a software simulation.
-- `src/benchmark/`, `tools/`: native benchmarks and model conversion/summary utilities.
+- `src/qubo_solvers/`: canonical registry, 17 native tensor algorithms, problem/result contracts, and bounded-memory execution.
+- `src/qubo_solvers/backends/`: specialized algorithms, compact QUBO/result/base types, candidate selection, and Torch execution/resident helpers. Shared Torch bucket elimination implements both tree methods.
+- `src/qubo_benchmark/`, `benchmark_data/qubo37/`, `benchmark_configs/`: offline 37-instance benchmark, immutable inputs, validation, and canonical solver configurations.
+- `tools/`: profiling and experiment utilities; `profile_solver_gpu.py` profiles the native 17 with synchronized CUDA timing and independent objective scoring.
 - `src/market_to_qubo.py`: standalone analysis/export pipeline that builds scenario QUBOs and an HTML report from market folders. It is related to, but separate from, `MarginEngine` orchestration.
 - `options_margin_benchmark/`: ES/NQ ATP and CME benchmark portfolios, generated option-margin YAMLs, batch runner, result CSV, and matplotlib charts. Run its prepare script before regenerating results.
-- `tests/`: Python `unittest` suite and native `tests/sbm_tests.cpp`.
+- `tests/`: Python application tests and `tests/qubo_solvers/` library tests, including CPU/CUDA parametrizations and exact small-problem references.
 - `config/`: canonical application example and backtest configurations.
 - `synthetic_market/`, `vanguard_market/`: input datasets and portfolios. Treat these as data fixtures; do not mechanically reformat or regenerate them during unrelated work.
 
@@ -138,7 +220,7 @@ version while CSV column names remain compatible. `plot_backtest.py` renders a n
 
 ### Typed, provider-neutral boundaries
 
-Core services communicate with application types rather than third-party types. `DataRequest`, `RiskState`, `QUBOProblem`, `BQMOptimizationResult`, and `MarginReport` are the important boundaries. Keep pandas/yfinance/dimod/Torch/native-library details inside their adapters.
+Core services communicate with typed boundaries rather than third-party types. `DataRequest`, `RiskState`, library-owned `QUBOProblem` and `BQMOptimizationResult`, and `MarginReport` are the important boundaries. Keep pandas/yfinance/dimod/Torch details inside their owning adapters or solver library; the library must not import the application.
 
 ### Lazy and memory-aware processing
 
@@ -214,9 +296,15 @@ matches both interval endpoints and reports overlap/fallback diagnostics.
 `OptionScenarioValuator` uses the same pricing and carry conventions as calibration.
 Add a convention and register it with those services when supporting another option market. Implied volatility uses bounded, damped Newton-Raphson iterations; analytical vegas are used for European models and the pricing-model base class supplies a numerical vega for other models.
 
-### Optional native acceleration
+### Library-owned numerical execution
 
-The Python application must remain usable without a compiled native library by selecting another solver. `SBMBQMSolver` loads the shared library at runtime; Torch and D-Wave adapters are separate implementations. CPU, CUDA, Torch, and FPGA-simulation changes should retain the same QUBO convention and be compared by original QUBO energy, not only terminal dynamics.
+All solver selection passes through `qubo_solvers`; application shims must contain
+no alternate numerical implementations. CPU and GPU paths preserve the same QUBO
+convention and are compared by original energy, not terminal dynamics alone.
+There is no active C ABI/native-library dependency. GPU capability concerns
+search kernels: setup, original float64 scoring, optional one-hot repair, and
+explicit backend postprocessing may use CPU. Never conceal unavailable CUDA or
+unsupported resident/multi-device plans behind a fallback.
 
 ## Configuration Model
 
@@ -233,7 +321,7 @@ The root YAML contains `marginDate`, `portfolio`, `engine`, and optionally `back
 - Margin calculators are `greedy`, `state_aware_greedy`, and `bqm`.
 - A `bqm` calculator may define `comparison: {type: state_aware_greedy, pnlAnchor: market}` to compute a paired greedy margin from the exact same lazy risk-state stream.
 - BQM execution policies are `sequential` and `batch`.
-- Registered solvers include `simulated_annealing`, `random`, `steepest_descent`, `tabu`, the tree/planar adapters, `sbm`, `torch_sbm`, `adaptive_torch_sbm`, `torch_svl`, `torch_categorical`, `torch_transverse_route`, and `torch_exchange_cascade`. Torch solvers accept either one `device` or a `devices` list of explicitly indexed CUDA/ROCm GPUs; multi-device batches are sharded and executed concurrently.
+- The 28 canonical `lib_` solver IDs are listed in `SOLVER_LIBRARY.md` and `qubo_solvers.SOLVERS`. Old IDs are rejected. Select one explicit `device`, or a `devices` list only where supported; supported multi-device execution shards independent QUBOs. Check capabilities and planning validation instead of assuming every backend supports resident or multi-device execution.
 
 Constructor options belong under `solver.constructorParameters`; per-call solve options belong under `solver.solverParameters`. Do not blur those lifecycles. When adding or renaming YAML options, update the strict parser, typed config, `config/margin.example.yaml`, and parser tests together.
 
@@ -243,8 +331,8 @@ Constructor options belong under `solver.constructorParameters`; per-call solve 
 2. Keep changes localized to the owning layer. For example, provider quirks belong in a provider adapter; scheduling belongs in an execution policy; risk-state math belongs in the generator/state types.
 3. Add focused tests for success, invalid input, and the invariant most likely to regress. Use small deterministic arrays and stub collaborators; do not require network access in ordinary unit tests.
 4. If behavior is configurable, add the typed config and strict YAML parsing in the same change. Add a representative YAML test and update the example.
-5. Run the narrow tests first, then the complete Python and/or native suite. For numerical or solver changes, compare energy and decoded loss with a small deterministic reference problem.
-6. Update this guide and `SIMULATED_BIFURCATION.md` when commands, architecture, solver semantics, or supported configuration change.
+5. Run the narrow tests first, then the relevant complete Python suite. For numerical or solver changes, compare energy and decoded loss with a small deterministic reference problem. Run CUDA cases on actual hardware or report them as skipped.
+6. Update this guide and `SOLVER_LIBRARY.md` when commands, architecture, solver semantics, or supported configuration change. Update historical experiment documents only when their recorded workflow changes.
 
 Do not edit unrelated generated outputs, caches, benchmark results, or large market-data files. Never commit `.venv/`, `build/`, `.cache/`, `backtest_results/`, or ad hoc exported QUBOs. Avoid network-dependent tests unless they are explicitly marked/skipped like the existing yfinance integration coverage.
 
@@ -272,11 +360,19 @@ Keep contract identity in `portfolio.derivatives`, valuation formulas and market
 
 ### Add a BQM solver
 
-Subclass `BQMSolver`, return `BQMOptimizationResult`, and override `solveMany` only when real batching is supported. Respect variable ordering, original QUBO energy, binary output, `iterOneHotGroups()`, stable `seedOffset`, series lifecycle hooks, and the constructor/solve parameter split. Register a stable snake-case name with `BQMSolverFactory`, export the module so registration occurs, add factory and deterministic energy tests, and add YAML coverage. A solver must not mutate `QUBOProblem` arrays.
+Implement the algorithm in `src/qubo_solvers`, either under the native `Solver`
+contract or as a specialized backend using its library-owned `BQMSolver` base.
+Return `BQMOptimizationResult` at the compact boundary and override `solveMany`
+only when real batching is supported. Respect variable ordering, original QUBO
+energy, binary output, `iterOneHotGroups()`, stable `seedOffset`, series lifecycle
+hooks, and the constructor/solve parameter split. Register one canonical `lib_`
+ID and its capabilities in the library; the application factory delegates there.
+Add deterministic energy, registry, unsupported-device/structure, and YAML tests.
+Do not mutate `QUBOProblem` arrays or introduce a second application kernel.
 
 ### Categorical one-hot solver
 
-`torch_categorical` searches category selections directly with graph-colored
+`lib_categorical` searches category selections directly with graph-colored
 heat-bath annealing. It requires disjoint one-hot groups covering every variable;
 uncovered variables are rejected. Each update remains feasible, so it uses no
 candidate repair. Within-group off-diagonal terms vanish and common linear group
@@ -284,71 +380,95 @@ shifts are removed for dynamics; final ranking uses the original float64 QUBO.
 `steps` counts complete color sweeps, and temperatures use objective energy units.
 Problems execute sequentially per device shard; trajectories are batched. Resident
 execution rebuilds categorical topology from the authoritative host snapshot.
-When changing this solver, run `tests.test_torch_categorical` and compare with
-`tools/benchmark_one_hot_feasibility.py`; see
-`docs/benchmarks/one_hot_feasibility_20260909.md` for measurements and limits.
+When changing this solver, run `tests/qubo_solvers/test_backend_devices.py` and
+registry/compact facade tests, including feasible grouped problems on actual
+CUDA hardware. The historical `tests.test_torch_categorical`,
+`tools/benchmark_one_hot_feasibility.py`, and
+`docs/benchmarks/one_hot_feasibility_20260909.md` belong to the earlier application
+checkout and are not current local commands or measured results.
 
 ### Transverse-route solver
 
-`torch_transverse_route` integrates normalized angular dynamics with Euler or
-Heun and retains initial, periodic and final binary candidates. Source-energy
-scoring and one-hot repair use the shared candidate policy. When changing its
-equations, normalization, buffering or CUDA graphs, run
-`tests.test_torch_transverse_route` on CPU and CUDA and compare with
-`tools/benchmark_transverse_route.py`. Read the transverse-route section of
-`SIMULATED_BIFURCATION.md` for parameter aliases, memory bounds, seed behavior
-and the resident host-snapshot fallback; measurements are in
-`docs/benchmarks/transverse_route.md`.
+`lib_transverse_route` uses the native tensor implementation in
+`src/qubo_solvers/transverse_route.py`. Keep its angular update equations,
+normalization, schedule, and seed behavior intact. Source-energy scoring and
+one-hot repair use the library candidate policy. Direct constructor settings
+include `max_steps`, `time_step`, and `feature_strength`; the compact facade maps
+`steps` to `max_steps`. Use native library tests and `test_gpu_execution.py` on
+CPU/CUDA, then synchronized `tools/profile_solver_gpu.py` measurements. Older
+`torch_transverse_route` experiment documents describe a retired implementation;
+do not reintroduce its kernels, defaults, or CUDA-graph assumptions.
 
 ### Exchange-field cascade solver
 
-`torch_exchange_cascade` implements Gaussian node-field exchange with float32
-unit-spin and order-field dynamics, followed by a fixed terminal frame. Before
-changing its propagators, schedule, normalization, terminal controller or GPU
-batching, read `docs/benchmarks/exchange_field_cascade.md`. Run
-`tests.test_torch_exchange_cascade` on CPU and CUDA; use
-`tools/benchmark_exchange_cascade.py` for synchronized full-solve measurements.
-Original scoring/repair stays float64. Multiple GPUs shard independent QUBOs;
-one QUBO uses one GPU. The complete configuration is
-`config/exchange_cascade.example.yaml`.
+`lib_exchange_cascade` owns Gaussian field exchange in
+`src/qubo_solvers/exchange_cascade.py`, with float32/float64 tensor support.
+Preserve its analytical propagator, unit-spin/order-field dynamics, schedules,
+and terminal frame. Its scalar degree scale stays on device. Original compact
+scoring/repair stays float64. Run native library and GPU execution tests and use
+`tools/profile_solver_gpu.py` for synchronized measurements. Multiple GPUs shard
+independent QUBOs where supported; one QUBO uses one GPU. Historical exchange
+reports are provenance, not an alternate implementation or current parameter
+contract.
 
-### Change native SBM code
+### Simulated bifurcation and exact tree methods
 
-Keep public declarations in `include/sbm/` aligned with implementations and the C ABI in `src/sbm/python_api.cpp`. Test the native library with CTest and exercise the Python adapter when its ABI changes. Guard optional backends with existing CMake definitions. Changes shared with HLS must remain synthesizable in the HLS path; avoid unsupported dynamic allocation or library facilities there.
+`lib_simulated_bifurcation` has one library-owned implementation with `standard`
+and `adaptive` dynamics; do not restore separate CPU/native/Torch solver copies.
+Preserve per-problem seeds, candidate scoring, memory planning, and resident
+execution. Defaults of optional adaptive CPU polishing differ from standard
+dynamics, so benchmark settings must resolve them explicitly.
+
+Both tree IDs share `backends/tree_decomposition.py`: CPU ordering and structural
+preflight, then Torch factor tables and backtracking on the requested device.
+The width ceiling is 25, and a configured table-memory budget must be checked
+before exponential allocations. `elimination_preflight` is callable offline,
+before GPU initialization. Exact minimization and Boltzmann sampling have
+independent exhaustive tests in `tests/qubo_solvers/test_tree_decomposition.py`.
+Use float64 for exact references; heuristic width failures do not prove minimum
+graph treewidth. Preserve explicit device failure and independent original
+energy scoring.
 
 ## Testing and Verification
 
-For the complete Biq Mac four-Torch-solver random parameter benchmark, its objective
-conventions, resume identity, timing definitions, and status/fetch commands, read
-`docs/benchmarks/biqmac_random25_20260911.md`. The runner is
-`tools/benchmark_biqmac_random.py`; validate changes with `tests.test_biqmac_random`.
+The historical Biq Mac four-Torch-solver experiment referenced
+`docs/benchmarks/biqmac_random25_20260911.md`, `tools/benchmark_biqmac_random.py`,
+and `tests.test_biqmac_random`; these are absent from this checkout. The current
+37-instance pipeline is `qubo_benchmark`, with conventions and provenance in
+`QUBO_BENCHMARK.md` and tests in `tests/test_qubo_benchmark.py`.
 
-Python tests use the standard library test runner:
+Run the Python suite with pytest to include library parametrizations; targeted
+application unittest commands remain supported:
 
 ```bash
+PYTHONPATH=src python -m pytest tests
 PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py'
 PYTHONPATH=src python -m unittest tests.test_margin_calculator
 ```
 
 The full suite requires dependencies from `requirements.txt`. The yfinance integration test is opt-in through its environment guard; normal tests should remain offline and deterministic.
 
-Native tests and an optional optimized build:
+Focused library and offline benchmark validation:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSBM_NATIVE_OPTIMIZATION=ON
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+PYTHONPATH=src python -m pytest tests/qubo_solvers tests/test_library_bqm_solver.py tests/test_qubo_benchmark.py
+PYTHONPATH=src python -m qubo_benchmark validate
+PYTHONPATH=src python -m qubo_benchmark run --config benchmark_configs/smoke_all.json --output benchmark_results/runs/library-smoke
 ```
 
-For configuration changes, also smoke-test a small local/synthetic YAML. For backtesting/reporting changes, validate both CSV schemas and plotting. For performance work, first prove numerical equivalence on a small fixed seed, then use the programs under `src/benchmark/` or `tools/`; do not weaken correctness tests to accommodate a faster result.
+For configuration changes, also smoke-test a small local/synthetic YAML. For backtesting/reporting changes, validate both CSV schemas and plotting. For performance work, first prove numerical equivalence on a small fixed seed, then use the programs under `tools/`; do not weaken correctness tests to accommodate a faster result.
 
-For Torch SBM/SVL dynamics changes, run `tests.test_torch_dynamics` on CPU and
-the target GPU, then use `tools/benchmark_torch_solvers.py` with identical
-arguments on both revisions. It synchronizes complete solves and can export
-allocation/kernel traces. See `SIMULATED_BIFURCATION.md` for the command and
-`docs/benchmarks/torch_solver_gpu_20260909.md` for the buffer-reuse and sparse-repair
-measurements. For PCA/risk precision changes, run `tools/benchmark_risk_precision.py`
-and inspect `docs/benchmarks/gpu_risk_float32_20260909.md`. Repair's indexed field updates rely on the unique row indices
+For native tensor changes, run `tests/qubo_solvers` and compact facade tests on
+CPU and the target GPU, then use `tools/profile_solver_gpu.py` with identical
+arguments on both revisions. The tool covers native 17; use the offline benchmark
+runner for specialized backends such as SBM. It separates resident and complete
+transfer-inclusive timing, synchronizes CUDA, and can export operator allocation
+profiles. Native candidate selection removes scalar extraction, but sequential
+SA/Gibbs updates and greedy stopping synchronization remain limitations. Never
+claim CUDA accuracy or speedup from CPU-only tests. Historical PCA/risk precision
+measurements referenced `tools/benchmark_risk_precision.py` and
+`docs/benchmarks/gpu_risk_float32_20260909.md`; those artifacts are absent here.
+Repair's indexed field updates rely on the unique row indices
 of its canonical CSC model; preserve duplicate-term aggregation when changing it.
 
 Option benchmark generation and execution:
@@ -368,7 +488,7 @@ PYTHONPATH=src python options_margin_benchmark/plot_results.py
 - Keep optional heavy imports local where practical so selecting one backend does not require every accelerator runtime.
 - Raise specific `TypeError` for wrong kinds and `ValueError` for invalid values/configuration. Error messages should identify the failing path or invariant.
 - Preserve public `__init__.py` exports when introducing a public type.
-- In C++, retain C++17 compatibility, RAII, contiguous buffers, explicit size validation, and compile-time backend guards.
+- Keep solver kernels and compact numerical helpers in the library; compatibility modules may only delegate or re-export. Do not add native build requirements to the current Torch execution path.
 
 ## Experiment Report Placement
 
@@ -394,13 +514,14 @@ Do not claim the full suite passed if collection failed or dependencies were abs
 
 ### Categorical Transverse Route
 
-`torch_categorical_trf` is an experimental categorical mirror-flow variant, not
+`lib_categorical_trf` is an experimental categorical mirror-flow variant, not
 binary TRF with repair disabled. It requires complete one-hot groups and emits
 feasible category selections without descent/repair. Before changing its flow,
-normalization, discretization or benchmarking, read
-`docs/benchmarks/categorical_trf.md` for the equations and current validation gaps.
-The full Group 1 example is
-`experiments/group1_categorical_trf_20260910/categorical_trf.yaml`.
+normalization, discretization or benchmarking, inspect the library implementation
+and grouped-problem tests in `tests/qubo_solvers/test_backend_devices.py`.
+`docs/benchmarks/categorical_trf.md` and
+`experiments/group1_categorical_trf_20260910/categorical_trf.yaml` are historical
+references absent from this checkout, not current validation evidence.
 
 For running, resuming, fetching, or interpreting the 200-portfolio Group 1
 TRF radius/EW-decay Cartesian experiment, read

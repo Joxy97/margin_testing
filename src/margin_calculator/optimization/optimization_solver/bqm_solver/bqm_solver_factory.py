@@ -1,42 +1,22 @@
-"""Factory for binary quadratic model solvers."""
-
+"""Application factory compatibility boundary for the central library registry."""
 from typing import Any, ClassVar, Mapping
-
+from qubo_solvers.registry import _CUSTOM_BQM_SOLVERS
 from .bqm_solver import BQMSolver
 
-
 class BQMSolverFactory:
-    """Create registered BQM solvers from string names."""
-
-    _solvers: ClassVar[dict[str, type[BQMSolver]]] = {}
-
-    @classmethod
-    def registerSolver(
-        cls,
-        name: str,
-        solverClass: type[BQMSolver],
-    ) -> None:
-        """Associate ``name`` with a concrete BQM solver class."""
-        cls._solvers[name] = solverClass
+    # Only caller extensions live here; built-ins have a single library owner.
+    _solvers: ClassVar[dict[str,type[BQMSolver]]] = _CUSTOM_BQM_SOLVERS
 
     @classmethod
-    def createBQMSolver(
-        cls,
-        name: str,
-        parameters: Mapping[str, Any] | None = None,
-    ) -> BQMSolver:
-        """Create the solver registered under ``name``."""
-        try:
-            solver_class = cls._solvers[name]
-        except KeyError as error:
-            raise ValueError(f"Unknown BQM solver: {name!r}") from error
-        return solver_class(**dict(parameters or {}))
+    def registerSolver(cls, name, solverClass):
+        from qubo_solvers.registry import register_bqm_solver
+        register_bqm_solver(name, solverClass)
 
     @classmethod
-    def create(
-        cls,
-        name: str,
-        parameters: Mapping[str, Any] | None = None,
-    ) -> BQMSolver:
-        """Create a solver; shorthand for :meth:`createBQMSolver`."""
+    def createBQMSolver(cls, name, parameters=None):
+        from qubo_solvers import create_bqm_solver
+        return create_bqm_solver(name, parameters)
+
+    @classmethod
+    def create(cls, name, parameters=None):
         return cls.createBQMSolver(name, parameters)

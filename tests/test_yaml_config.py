@@ -15,10 +15,8 @@ from margin_calculator import (
     BatchBQMExecutionPolicy,
     GreedyMarginCalculatorConfig,
 )
-from margin_calculator.optimization.optimization_solver.bqm_solver import (
-    TorchSBMBQMSolver,
-    TorchSVLBQMSolver,
-)
+from qubo_solvers.backends.simulated_bifurcation import SimulatedBifurcationBQMSolver as TorchSBMBQMSolver
+from qubo_solvers.backends.library_solver import LibrarySpinVectorLangevinBQMSolver as TorchSVLBQMSolver
 from margin_engine import MarginApplicationConfig, MarginReport
 from risk_state_generator import (
     CorrelatedReturnsVolaGridRiskStateGeneratorConfig,
@@ -237,7 +235,7 @@ class YamlConfigurationTest(unittest.TestCase):
         calculator = application.engine.marginCalculator
         generator = application.engine.riskStateGenerator
         self.assertIsInstance(calculator, BQMMarginCalculatorConfig)
-        self.assertEqual(calculator.solver.solverType, "torch_svl")
+        self.assertEqual(calculator.solver.solverType, "lib_spin_vector_langevin")
         self.assertEqual(
             calculator.solver.constructorParameters,
             {"device": "auto"},
@@ -245,7 +243,7 @@ class YamlConfigurationTest(unittest.TestCase):
         self.assertEqual(calculator.solver.solverParameters["runs"], 64)
         self.assertEqual(
             calculator.solver.solverParameters["integrator"],
-            "weak_order_2",
+            "heun",
         )
         self.assertEqual(calculator.comparisonPnlAnchor, "market")
         self.assertEqual(
@@ -328,7 +326,7 @@ class YamlConfigurationTest(unittest.TestCase):
                             "marginCalculator": {
                                 "type": "bqm",
                                 "solver": {
-                                    "type": "torch_sbm",
+                                    "type": "lib_simulated_bifurcation",
                                     "constructorParameters": {"device": "cpu"},
                                     "solverParameters": {
                                         "steps": 25,
@@ -364,7 +362,7 @@ class YamlConfigurationTest(unittest.TestCase):
                             "marginCalculator": {
                                 "type": "bqm",
                                 "solver": {
-                                    "type": "torch_sbm",
+                                    "type": "lib_simulated_bifurcation",
                                     "constructorParameters": {
                                         "devices": ["cuda:0", "cuda:1"]
                                     },
@@ -396,14 +394,14 @@ class YamlConfigurationTest(unittest.TestCase):
                             "marginCalculator": {
                                 "type": "bqm",
                                 "solver": {
-                                    "type": "torch_svl",
+                                    "type": "lib_spin_vector_langevin",
                                     "constructorParameters": {
                                         "devices": ["cuda:0", "cuda:1"]
                                     },
                                     "solverParameters": {
                                         "steps": 25,
                                         "runs": 4,
-                                        "integrator": "weak_order_2",
+                                        "integrator": "heun",
                                     },
                                 },
                             }
@@ -421,7 +419,7 @@ class YamlConfigurationTest(unittest.TestCase):
         self.assertIsInstance(solver, TorchSVLBQMSolver)
         self.assertEqual(solver.requestedDevices, ("cuda:0", "cuda:1"))
         self.assertEqual(
-            calculator.solver.solverParameters["integrator"], "weak_order_2"
+            calculator.solver.solverParameters["integrator"], "heun"
         )
 
     def test_rejects_unknown_yaml_keys(self) -> None:

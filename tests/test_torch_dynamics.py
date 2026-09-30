@@ -6,11 +6,8 @@ import unittest
 
 import numpy
 
-from margin_calculator.optimization.optimization_solver.bqm_solver import (
-    TorchSBMBQMSolver,
-    TorchSVLBQMSolver,
-)
-from margin_calculator.optimization.optimization_solver.bqm_solver.torch_execution import (
+from qubo_solvers.backends.simulated_bifurcation import SimulatedBifurcationBQMSolver as TorchSBMBQMSolver
+from qubo_solvers.backends.torch_execution import (
     _MAX_TORCH_SEED,
     _RUN_SEED_STRIDE,
 )
@@ -27,7 +24,8 @@ class _CaptureTorch:
         return getattr(self.torch, name)
 
     def sign(self, values, **kwargs):
-        self.state = values.clone()
+        if "out" in kwargs:
+            self.state = values.clone()
         return self.torch.sign(values, **kwargs)
 
     def sin(self, values, **kwargs):
@@ -38,7 +36,6 @@ class _CaptureTorch:
 
 def reference(torch, solver, matrix, field, scales, offsets, seeds, width, runStart, p, device):
     """Use the same random streams, then integrate independently in NumPy."""
-    svl = solver is TorchSVLBQMSolver
     positions = torch.empty((int(offsets[-1]), width), dtype=torch.float64, device=device)
     momenta = torch.zeros_like(positions)
     generators = []
@@ -46,56 +43,20 @@ def reference(torch, solver, matrix, field, scales, offsets, seeds, width, runSt
         for run in range(width):
             seed = (p["seed"] + int(seeds[index]) + _RUN_SEED_STRIDE * (runStart + run)) % _MAX_TORCH_SEED
             generator = torch.Generator(device=device).manual_seed(seed)
-            if svl:
-                positions[start:stop, run].normal_(0, 1e-3, generator=generator)
-            else:
-                positions[start:stop, run].uniform_(-p["initial_scale"], p["initial_scale"], generator=generator)
-                momenta[start:stop, run].uniform_(-p["initial_scale"], p["initial_scale"], generator=generator)
+            positions[start:stop, run].uniform_(-p["initial_scale"], p["initial_scale"], generator=generator)
+            momenta[start:stop, run].uniform_(-p["initial_scale"], p["initial_scale"], generator=generator)
             generators.append((start, stop, run, generator))
     x, v = positions.cpu().numpy().copy(), momenta.cpu().numpy().copy()
-    if not svl:
-        for step in range(p["steps"]):
-            old_v = v.copy()
-            force = (matrix @ numpy.where(x >= 0, 1., -1.) + field) * scales
-            force += (p["a0"] * step / p["steps"] - p["a0"]) * x
-            v += p["dt"] * force
-            x += p["a0"] * p["dt"] * v
-            v[numpy.abs(x) > 1.] = 0.
-            x = numpy.clip(x, -1., 1.)
-            v += p["gamma"] * p["dt"] * old_v
-        return x, (x >= 0).astype(numpy.uint8)
-
-    noise_scale = math.sqrt(2 * p["damping"] * p["temperature"] * p["dt"]) / p["mass"]
-    chunk = min(p["noise_chunk_size"], p["steps"]) if noise_scale else 1
-    noise = numpy.zeros((chunk, *x.shape))
-
-    def acceleration(values, velocities, step):
-        fraction = min(step / max(p["steps"] - 1, 1), 1.)
-        transverse = p["transverse_field_initial"] + fraction * (p["transverse_field_final"] - p["transverse_field_initial"])
-        scale = p["problem_scale_initial"] + fraction * (p["problem_scale_final"] - p["problem_scale_initial"])
-        force = -transverse * numpy.sin(values) + scale * numpy.cos(values) * (matrix @ numpy.sin(values) + field)
-        return (force - p["damping"] * velocities) / p["mass"]
-
     for step in range(p["steps"]):
-        if noise_scale and step % chunk == 0:
-            for start, stop, run, generator in generators:
-                noise[:, start:stop, run] = torch.randn(
-                    (chunk, stop - start), generator=generator, dtype=torch.float64, device=device
-                ).cpu().numpy()
-            noise *= noise_scale
-        kick = noise[step % chunk]
-        first = acceleration(x, v, step)
-        if p["integrator"] == "euler_maruyama":
-            x += p["dt"] * v
-            v += p["dt"] * first + kick
-        else:
-            predicted_x = x + p["dt"] * v
-            predicted_v = v + p["dt"] * first + kick
-            second = acceleration(predicted_x, predicted_v, step + 1)
-            x += .5 * p["dt"] * (v + predicted_v)
-            v += .5 * p["dt"] * (first + second) + kick
-        x %= 2 * math.pi
-    return x, (numpy.sin(x) >= 0).astype(numpy.uint8)
+        old_v = v.copy()
+        force = (matrix @ numpy.where(x >= 0, 1., -1.) + field) * scales
+        force += (p["a0"] * step / p["steps"] - p["a0"]) * x
+        v += p["dt"] * force
+        x += p["a0"] * p["dt"] * v
+        v[numpy.abs(x) > 1.] = 0.
+        x = numpy.clip(x, -1., 1.)
+        v += p["gamma"] * p["dt"] * old_v
+    return x, (x >= 0).astype(numpy.uint8)
 
 
 @unittest.skipUnless(find_spec("torch"), "requires torch")
@@ -110,9 +71,6 @@ class TorchDynamicsTest(unittest.TestCase):
         scales = numpy.array([.3, .3, .3, .5, .5])[:, None]
         offsets, seeds = numpy.array([0, 3, 5]), numpy.array([17, 31], dtype=numpy.uint64)
         cases = [(TorchSBMBQMSolver, {"gamma": gamma, "dt": .7, "initial_scale": .8}) for gamma in (0., .2)]
-        cases += [(TorchSVLBQMSolver, {"integrator": integrator, "temperature": temperature,
-                                       "noise_chunk_size": 8, "dt": .07, "mass": 1.3})
-                  for integrator in ("euler_maruyama", "weak_order_2") for temperature in (0., .03)]
         for solver, settings in cases:
             for empty in (False, True):
                 for steps in (1, 19):
@@ -123,7 +81,7 @@ class TorchDynamicsTest(unittest.TestCase):
                         expected_state, expected_samples = reference(
                             torch, solver, matrix, field, scales, offsets, seeds, 3, 2, p, device)
                         capture = _CaptureTorch(torch)
-                        samples = solver._runTrajectories(
+                        samples = solver(device=device)._runTrajectories(
                             capture, torch.tensor(matrix, device=device).to_sparse_csr(),
                             torch.tensor(field, device=device), torch.tensor(scales, device=device),
                             offsets, seeds, 3, 2, p, torch.float64, torch.device(device))

@@ -37,9 +37,12 @@ def plot(experiment: Path) -> None:
 
     panels = (
         ("QUBO methods after repair", (
-            ("torch_sbm", "SBM", "#2563eb", "-"),
-            ("torch_svl", "SVL", "#e57900", "--"),
-            ("torch_transverse_route", "TRF", "#7c3aed", "-."),
+            ("lib_simulated_bifurcation", "SBM", "#2563eb", "-"),
+            ("lib_spin_vector_langevin", "SVL", "#e57900", "--"),
+            ("lib_transverse_route", "TRF", "#7c3aed", "-."),
+            ("torch_sbm", "SBM (legacy)", "#2563eb", "-"),
+            ("torch_svl", "SVL (legacy)", "#e57900", "--"),
+            ("torch_transverse_route", "TRF (legacy)", "#7c3aed", "-."),
             ("combined", "Combined maximum", "#15803d", ":"))),
         ("Benchmark methods", (
             ("linear_analytic", "Linear analytic", "#2563eb", "-"),
@@ -51,6 +54,8 @@ def plot(experiment: Path) -> None:
     timeline = plotted.index
     for axis, (title, methods) in zip(axes, panels):
         for column, label, color, style in methods:
+            if column not in plotted:
+                continue
             axis.plot(timeline, plotted[column]*100, label=label, color=color, linestyle=style, lw=1.8)
         axis.fill_between(timeline, loss*100, 0., color="#334155", alpha=.16)
         axis.plot(timeline, loss*100, color="#111827", lw=1.1, label="Realized loss (clipped at 0)", zorder=5)

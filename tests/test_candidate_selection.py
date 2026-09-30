@@ -9,7 +9,7 @@ from margin_calculator.optimization.optimization_problem.qubo_problem import QUB
 
 class CandidateSelectionTest(unittest.TestCase):
     def test_sparse_repair_matches_dense_descent_for_every_binary_sample(self):
-        from margin_calculator.optimization.optimization_solver.bqm_solver.candidate_selection import CandidateSelection
+        from qubo_solvers.backends.candidate_selection import CandidateSelection
 
         groups = ((5, 0, 3), (6, 2), (7, 1))  # Noncontiguous groups; variable 4 is free.
         rng = numpy.random.default_rng(27)
@@ -58,7 +58,7 @@ class CandidateSelectionTest(unittest.TestCase):
                     self.assertEqual(actual[4], sample[4])
 
     def test_later_feasible_chunk_supersedes_a_lower_energy_repair(self):
-        from margin_calculator.optimization.optimization_solver.bqm_solver.candidate_selection import CandidateSelection
+        from qubo_solvers.backends.candidate_selection import CandidateSelection
         problem = QUBOProblem(linear=[-2., -1.], quadraticHeads=[],
                               quadraticTails=[], quadraticBiases=[], oneHotGroups=((0, 1),))
         selection = CandidateSelection(problem)
@@ -68,7 +68,7 @@ class CandidateSelectionTest(unittest.TestCase):
         self.assertEqual(selection.result(), ((0, 1), -1.))
 
     def test_feasible_candidates_are_ranked_by_source_energy(self):
-        from margin_calculator.optimization.optimization_solver.bqm_solver.candidate_selection import CandidateSelection
+        from qubo_solvers.backends.candidate_selection import CandidateSelection
         problem = QUBOProblem(linear=numpy.array([-2., -1.]), quadraticHeads=[],
                               quadraticTails=[], quadraticBiases=[], oneHotGroups=((0, 1),))
         selection = CandidateSelection(problem)

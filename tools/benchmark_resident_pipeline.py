@@ -73,7 +73,7 @@ def main():
                         "ew_window": window, "components": 1, "scenariosPerComponents": [3],
                         "nZBins": 3, "allowEmptyBinFallback": True},
                     "marginCalculator": {"type": "bqm", "comparison": {"type": "state_aware_greedy"},
-                        "solver": {"type": "torch_sbm", "constructorParameters": {"device": "cpu"},
+                        "solver": {"type": "lib_simulated_bifurcation", "constructorParameters": {"device": "cpu"},
                             "solverParameters": {"steps": args.steps, "runs": args.runs, "seed": 24,
                                                  "dtype": args.solver_dtype, "run_batch_size": min(8, args.runs)}},
                         "executionPolicy": {"type": "batch", "batchSize": 2, "maxBatchBytes": 256 * 1024 * 1024}},

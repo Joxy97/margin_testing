@@ -14,7 +14,7 @@ from option_pricing import AmericanEquityBinomialPricingModel, OptionBook, Vanil
 from portfolio import DerivativePosition, EquityOptionContract, Portfolio
 from risk_state_generator import OptionFactorStressModel, ReturnsPCAGrid, ReturnsPCAKey
 from margin_calculator.optimization import FactorStressQUBOConfig, solveOptionFactorStress
-from margin_calculator.optimization.optimization_solver.bqm_solver import BQMSolverFactory
+from qubo_solvers import create_bqm_solver
 
 
 def main():
@@ -40,8 +40,8 @@ def main():
     grid = ReturnsPCAGrid.construct(ReturnsPCAKey(instruments, 60, horizon, .93, 2), prices)
     model = OptionFactorStressModel.fromPCAGrid(grid, portfolio, options)
     config = FactorStressQUBOConfig(bitsPerCoordinate=3, radius=3.)
-    parameters = {"num_reads": 16, "num_sweeps": 500, "seed": 19}
-    result = solveOptionFactorStress(model, BQMSolverFactory.create("simulated_annealing"),
+    parameters = {"runs": 16, "steps": 500, "seed": 19}
+    result = solveOptionFactorStress(model, create_bqm_solver("lib_simulated_annealing"),
         config=config, solverParameters=parameters)
     references = []
     for index, (position, context) in enumerate(zip(options.positions, options.contexts)):
@@ -58,7 +58,7 @@ def main():
         "scope": "synthetic frozen-book equity/index vanilla example; greatest model loss found",
         "valuation_date": str(today), "horizon_date": str(horizon),
         "calibration_end": str(grid.calibrationEndDate),
-        "configuration": asdict(config), "solver": "simulated_annealing", "solver_parameters": parameters,
+        "configuration": asdict(config), "solver": "lib_simulated_annealing", "solver_parameters": parameters,
         "calibrations": [asdict(item) for item in options.calibrations],
         "horizon_domain": model.domainDiagnostics(config.radius), "residual_alignment": model.residualAlignment,
         "margin_found": result.margin, "full_model_pnl": result.pnl,

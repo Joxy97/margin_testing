@@ -19,13 +19,11 @@ import numpy
 import torch
 
 from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
-from margin_calculator.optimization.optimization_solver.bqm_solver import (
-    TorchSBMBQMSolver,
-    TorchSVLBQMSolver,
-)
-from margin_calculator.optimization.optimization_solver.bqm_solver.candidate_selection import CandidateSelection
-from margin_calculator.optimization.optimization_solver.bqm_solver.torch_candidates import TorchCandidateAccumulator
-from margin_calculator.optimization.optimization_solver.bqm_solver.torch_execution import TorchExecution
+from qubo_solvers import create_bqm_solver
+from qubo_solvers.backends.candidate_selection import CandidateSelection
+from qubo_solvers.backends.torch_candidates import TorchCandidateAccumulator
+from qubo_solvers.backends.torch_execution import TorchExecution
+from benchmark_biqmac import librarySourceHashes
 
 
 def makeProblems(variables: int, count: int, degree: int, oneHot: bool) -> list[QUBOProblem]:
@@ -53,11 +51,13 @@ def makeProblems(variables: int, count: int, degree: int, oneHot: bool) -> list[
 
 def measure(solver, problems, parameters, warmups, repeats, trace):
     device = torch.device(solver.device)
-    gpu = device.type == "cuda"
+    devices = tuple(torch.device(item) for item in getattr(solver, 'devices', (solver.device,)))
+    gpu_devices = tuple(item for item in devices if item.type == 'cuda')
+    gpu = bool(gpu_devices)
 
     def synchronize():
-        if gpu:
-            torch.cuda.synchronize(device)
+        for item in gpu_devices:
+            torch.cuda.synchronize(item)
 
     synchronize()
     start = perf_counter()
@@ -67,8 +67,8 @@ def measure(solver, problems, parameters, warmups, repeats, trace):
     for _ in range(warmups):
         solver.solveMany(problems, parameters)
     synchronize()
-    if gpu:
-        torch.cuda.reset_peak_memory_stats(device)
+    for item in gpu_devices:
+        torch.cuda.reset_peak_memory_stats(item)
     timings = []
     results = None
     for _ in range(repeats):
@@ -77,7 +77,7 @@ def measure(solver, problems, parameters, warmups, repeats, trace):
         results = solver.solveMany(problems, parameters)
         synchronize()
         timings.append(perf_counter() - start)
-    peak = torch.cuda.max_memory_allocated(device) if gpu else None
+    peak = {str(item): torch.cuda.max_memory_allocated(item) for item in gpu_devices} or None
     signatures = []
     for problem, result in zip(problems, results):
         sample = numpy.asarray(result.sample)
@@ -116,7 +116,7 @@ def main():
     parser.add_argument("--runs", type=int, default=16)
     parser.add_argument("--run-batch-size", type=int)
     parser.add_argument("--dtype", choices=["float32", "float64"], default="float32")
-    parser.add_argument("--integrator", choices=["euler_maruyama", "weak_order_2"], default="euler_maruyama")
+    parser.add_argument("--integrator", choices=["euler", "heun"], default="heun")
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--threads", type=int, default=1)
@@ -129,7 +129,7 @@ def main():
     if args.run_batch_size is not None and args.run_batch_size <= 0:
         parser.error("run-batch-size must be positive")
     torch.set_num_threads(args.threads)
-    resolved = TorchSBMBQMSolver(args.device).device
+    resolved = create_bqm_solver('lib_simulated_bifurcation', {'device': args.device}).device
     device = torch.device(resolved)
     metadata = {"python": platform.python_version(), "platform": platform.platform(),
                 "torch": torch.__version__, "numpy": numpy.__version__,
@@ -142,21 +142,23 @@ def main():
         cls.__name__: hashlib.sha256(Path(inspect.getfile(cls)).read_bytes()).hexdigest()
         for cls in (TorchExecution, TorchCandidateAccumulator, CandidateSelection)
     }
+    metadata["library_source_sha256"] = librarySourceHashes()
     measurements = []
     for variables in args.variables:
         problems = makeProblems(variables, args.problems, args.degree, args.one_hot)
-        for name, solverClass in (("sbm", TorchSBMBQMSolver), ("svl", TorchSVLBQMSolver)):
+        for name in ('lib_simulated_bifurcation', 'lib_spin_vector_langevin'):
+            solver = create_bqm_solver(name, {'device': resolved})
             parameters = {"steps": args.steps, "runs": args.runs, "seed": 13,
                           "dtype": args.dtype, "run_batch_size": args.run_batch_size}
-            if name == "svl":
+            if name == 'lib_spin_vector_langevin':
                 parameters["integrator"] = args.integrator
             trace = args.trace_directory / f"{name}-{variables}.json" if args.trace_directory else None
-            result = measure(solverClass(resolved), problems, parameters, args.warmups, args.repeats, trace)
+            result = measure(solver, problems, parameters, args.warmups, args.repeats, trace)
             result.update({"solver": name, "variables": variables,
                            "interactions": [problem.interactionCount for problem in problems],
                            "input_seeds": [int(problem.seedOffset) for problem in problems],
-                           "parameters": solverClass._getParameters(parameters),
-                           "source_sha256": hashlib.sha256(Path(inspect.getfile(solverClass)).read_bytes()).hexdigest()})
+                           "parameters": solver._getParameters(parameters),
+                           "source_sha256": hashlib.sha256(Path(inspect.getfile(type(solver))).read_bytes()).hexdigest()})
             measurements.append(result)
             print(f"{name} variables={variables}: {result['median_seconds']:.6f}s", flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)

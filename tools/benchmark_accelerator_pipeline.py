@@ -1,4 +1,4 @@
-"""Compare PCA backends and SVL noise buffering on deterministic local inputs.
+"""Compare PCA backends and library SVL restart batching on local inputs.
 
 Run with PYTHONPATH=src; --device cuda:0 enables synchronized GPU timing.
 """
@@ -12,7 +12,7 @@ import numpy
 import torch
 
 from risk_state_generator import NumpyPCABackend, TorchPCABackend
-from margin_calculator.optimization.optimization_solver.bqm_solver import TorchSVLBQMSolver
+from qubo_solvers import create_bqm_solver
 from margin_calculator.optimization.optimization_problem.qubo_problem import QUBOProblem
 
 
@@ -56,16 +56,16 @@ def main():
         rng.normal(size=64), numpy.arange(63, dtype=numpy.uint32),
         numpy.arange(1, 64, dtype=numpy.uint32), rng.normal(size=63)
     ) for _ in range(4)]
-    solver = TorchSVLBQMSolver(args.device)
+    solver = create_bqm_solver('lib_spin_vector_langevin', {'device': args.device})
     parameters = {"steps": args.steps, "runs": args.runs, "seed": 13}
     results = {
         "device": args.device, "torch_version": torch.__version__,
         "pca_numpy_seconds": timed(lambda: numpy_backend.fit(values, weights, components)),
         "pca_torch_seconds": timed(lambda: torch_backend.fit(values, weights, components)),
-        "svl_noise_1_seconds": timed(lambda: solver.solveMany(problems, parameters | {"noise_chunk_size": 1})),
-        "svl_noise_16_seconds": timed(lambda: solver.solveMany(problems, parameters | {"noise_chunk_size": 16})),
+        "svl_batch_1_seconds": timed(lambda: solver.solveMany(problems, parameters | {"run_batch_size": 1})),
+        "svl_batch_all_seconds": timed(lambda: solver.solveMany(problems, parameters | {"run_batch_size": args.runs})),
     }
-    results["noise_buffering_speedup"] = results["svl_noise_1_seconds"] / results["svl_noise_16_seconds"]
+    results["restart_batch_speedup"] = results["svl_batch_1_seconds"] / results["svl_batch_all_seconds"]
     print(json.dumps(results, indent=2))
 
 

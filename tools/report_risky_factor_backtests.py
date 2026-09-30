@@ -11,7 +11,7 @@ from scipy.stats import binomtest
 
 from benchmark_factor_stress import writeJson
 from report_factor_sweep import writeCsv
-from sweep_factor_stress import SOLVERS, buildTrial, loadModel
+from sweep_factor_stress import buildTrial, loadModel
 from risky_factor_portfolios import breachUpperBound
 
 
@@ -24,7 +24,7 @@ def dailyRows(days, trials, configurations):
                          and (analysis == "primary_best3" or r["repeat"] == 0)]
                 reference = next(r for r in day["references"] if r["method"] == "exact_repricing_continuous"
                                  and r["coverage"] == config["coverage"])
-                for solver in (*SOLVERS, "combined"):
+                for solver in (*sorted({r["solver"] for r in group}), "combined"):
                     selected = group if solver == "combined" else [r for r in group if r["solver"] == solver]
                     winner = min(selected, key=lambda r: (-r["repaired_margin"], r["id"]))
                     margin = winner["repaired_margin"]
@@ -144,9 +144,9 @@ def plotPortfolio(root, identifier):
     primary = frame[frame.analysis == "primary_best3"]
     greedy = loadGreedy(directory, primary)
     fig, axis = plt.subplots(figsize=(13, 5), layout="constrained")
-    for solver in (*SOLVERS, "combined"):
+    for solver in sorted(set(primary.solver)):
         data = primary[primary.solver == solver].sort_values("date")
-        axis.plot(pd.to_datetime(data.date), data.margin*100, label=solver.replace("torch_", ""), lw=1.2)
+        axis.plot(pd.to_datetime(data.date), data.margin*100, label=solver, lw=1.2)
     data = primary[primary.solver == "combined"].sort_values("date")
     if greedy is not None:
         axis.plot(pd.to_datetime(greedy.date), greedy.margin*100, label="Greedy PCA (105 scenarios)",
