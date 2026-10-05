@@ -4,25 +4,31 @@ import shutil
 import signal
 import time
 import uuid
+from contextlib import closing
+from itertools import groupby
 from .common import ROOT,CONFIG,SCHEMA,utc,digest,atomic,read,table,flattened,DirectoryLock,source_identity
 from .selection import preflight
 from .storage import RUN_FIELDS,plan,load_attempts,primary,commit,materialize,check_resume_exports
 from .metrics import evaluate
 from .supervisor import trial
+from .pool import SeedPool
 
 def initialize(prepared,output_root):
     core=prepared['core'];test_id=uuid.uuid4().hex[:12]
     stamp=utc().replace(':','').replace('-','').replace('.','')[:15]
-    name=f"n{core['n']}_{core['density']}_t{core['budget_s']:.3f}s_{core['instance_mode']}_{stamp}_{test_id}".replace('.','p')
+    policy=core['protocol']['execution']
+    name=f"n{core['n']}_{core['density']}_t{core['budget_s']:.3f}s_{core['instance_mode']}_w{policy['seed_workers']}_{policy['worker_mode']}_{stamp}_{test_id}".replace('.','p')
     directory=Path(output_root)/name;directory.mkdir(parents=True,exist_ok=False)
     campaign=digest(dict(solvers=core['solvers'],seeds=core['seeds'],protocol=core['protocol'],
                         reference=core['reference_snapshot_sha256'],environment=core['environment_hash'],
                         code=core['source']['code_snapshot_hash']))
     experiment=dict(schema_version=SCHEMA,test_id=test_id,campaign_id=campaign,created_at=utc(),
                     identity=prepared['identity'],core=core,environment=prepared['environment'],
-                    execution_plan=plan(core),label='STANDARD' if core['standard'] else 'NONSTANDARD SMOKE')
+                    execution_plan=plan(core),label=('STANDARD' if core['standard'] else 'NONSTANDARD SMOKE')+
+                    (' PARALLEL SHARED-DEVICE' if policy['seed_workers']>1 else ' ISOLATED LATENCY'))
     atomic(directory/'experiment.json',experiment)
     atomic(directory/'environment.json',prepared['environment'])
+    atomic(directory/'worker_capacity.json',prepared['capacity'])
     atomic(directory/'reference_snapshot.json',prepared['catalog'])
     atomic(directory/'solver_configuration.json',prepared['configuration'])
     atomic(directory/'seeds.json',core['seeds'])
@@ -60,13 +66,17 @@ def assemble(experiment,item,scheduled,outcome,attempt_number,session,audit_star
         raw_source_sha256=item['raw_source_sha256'],normalized_problem_sha256=item['normalized_problem_sha256'],
         catalog_sha256=core['catalog_sha256'],reference_snapshot_sha256=core['reference_snapshot_sha256'],
         index_mapping_id=digest(meta['source_labels']),objective_offset=problem.offset,
-        solver_version='0.1.0',adapter_version='runtime-v2',**core['source'],
+        solver_version='0.1.0',adapter_version='runtime-v3',**core['source'],
         parameters_hash=digest(p),parameters_json=p,execution_policy_hash=digest(core['protocol']['execution']),
         rng_backend='Python Random; NumPy legacy + explicit per-trajectory Generators; Torch local Generators',
-        initialization_policy='fresh process; reseed after infrastructure warmup; native algorithm initialization; compact seedOffset=0',
+        initialization_policy='fresh solver object and reseeded RNGs inside solve clock; immutable input cache; compact seedOffset=0',
         initialization_hash=done.get('initialization_hash'),seed_effective=True,
         deterministic_mode='stochastic seeded; wall-clock truncation and CUDA arithmetic are not bitwise reproducibility guarantees',
         population_size=p['runs'],replicas=p.get('replicas'),internal_batch_size=p.get('run_batch_size'),
+        worker_mode=core['protocol']['execution']['worker_mode'],
+        seed_workers=core['protocol']['execution']['seed_workers'],
+        execution_mode=core['protocol']['execution']['execution_mode'],
+        worker_trial_index=done.get('worker_trial_index'),
         restarts=p['runs'],cpu_threads=core['protocol']['execution']['cpu_threads'],
         requested_device=core['requested_device'],actual_device=core['actual_device'],backend='torch',precision=p['dtype'],
         hardware_id=experiment['environment']['hardware_id'],environment_hash=core['environment_hash'],
@@ -106,6 +116,7 @@ def assemble(experiment,item,scheduled,outcome,attempt_number,session,audit_star
     for field in ('gpu_allocated_start_bytes','gpu_allocated_peak_bytes','gpu_reserved_start_bytes','gpu_reserved_peak_bytes'):
         row[field]=done.get(field)
     for field in ('matrix_storage_format','matrix_storage_bytes'):row[field]=outcome['setup'].get(field)
+    for field in ('worker_id','worker_pid','worker_reused','input_cache_hit'):row[field]=outcome['setup'].get(field)
     row.update(done.get('preparation',{}))
     if row['resolved_structure_json'] is None:
         row['resolved_structure_json']=dict(original_variables=problem.n,
@@ -135,7 +146,7 @@ def execute(prepared,args):
             core=experiment['core'];session=uuid.uuid4().hex
             items={i['entry']['instance_id']:i for i in prepared['selected']}
             registry=prepared['registry'];eligible=sum(r['status']=='runnable' for r in registry)
-            current=None
+            current=None;active_seeds=[];policy=core['protocol']['execution']
             def progress(phase):
                 selected=primary(attempts);terminal=len(selected);total=len(experiment['execution_plan'])
                 successes=sum(a['run']['success_1pct'] for a in selected.values())
@@ -151,6 +162,8 @@ def execute(prepared,args):
                     unavailable_solvers=sum(r['status']=='unavailable' for r in registry),
                     excluded_solvers=sum(r['status']=='excluded' for r in registry),
                     output=str(directory.resolve()),current=current,latest_gap_percent=gaps[-1] if gaps else None,
+                    active_seeds=list(active_seeds),seed_workers=policy['seed_workers'],
+                    execution_mode=policy['execution_mode'],worker_mode=policy['worker_mode'],
                     best_gap_percent=min(gaps) if gaps else None,current_instance_terminal=len(own),
                     current_solver_terminal=sum(a['run']['solver_id']==current['solver_id'] for a in selected.values()) if current else 0)
                 atomic(directory/'status.json',status)
@@ -158,6 +171,7 @@ def execute(prepared,args):
                       f"solver {list(core['solvers']).index(current['solver_id'])+1}/{len(core['solvers'])} {current['solver_id']} | "
                       f"instance {list(items).index(current['instance_id'])+1}/{len(items)} {current['instance_id']} | "
                       f"seed run {current['seed_index']+1}/{len(core['seeds'])} seed={current['seed']} | "
+                      f"workers={policy['seed_workers']} active seeds={active_seeds} | "
                       f"latest gap={status['latest_gap_percent']}% best gap={status['best_gap_percent']}% | "
                       f"hits {successes}/{terminal} {'FINAL' if terminal==total else 'PROVISIONAL'}") if current else f"{phase}: {terminal}/{total}"
                 print(line,flush=True)
@@ -167,36 +181,54 @@ def execute(prepared,args):
             selected=primary(attempts)
             todo=[r for r in experiment['execution_plan'] if r['run_id'] not in selected or
                   (args.retry_failed and selected[r['run_id']]['run']['result_status']!='completed')]
-            for current in todo:
-                if interrupted[0]:break
-                trial_started=time.perf_counter()
-                if source_identity()['code_snapshot_hash']!=core['source']['code_snapshot_hash']:
-                    progress('source_changed');raise ValueError('Source changed during campaign; no new trial scheduled')
-                progress('starting')
-                number=1+sum(a['run']['run_id']==current['run_id'] for a in attempts)
-                item=items[current['instance_id']];policy=core['protocol']['execution']
-                job=dict(solver=current['solver_id'],seed=current['seed'],budget=core['budget_s'],
-                    parameters=core['solvers'][current['solver_id']],npz=item['npz'],device=core['actual_device'],
+            def job_for(scheduled):
+                return dict(solver=scheduled['solver_id'],seed=scheduled['seed'],budget=core['budget_s'],
+                    parameters=core['solvers'][scheduled['solver_id']],npz=items[scheduled['instance_id']]['npz'],device=core['actual_device'],
                     **{k:policy[k] for k in ('cpu_threads','watchdog_grace_s','setup_timeout_s',
                                             'memory_sampling_interval_s','heartbeat_interval_s')})
-                outcome=trial(job,progress,lambda:interrupted[0])
-                if source_identity()['code_snapshot_hash']!=core['source']['code_snapshot_hash']:
-                    outcome['done'].update(error='code_changed',error_message='Source changed during trial')
-                    interrupted[0]=True
-                payload=assemble(experiment,item,current,outcome,number,session,time.perf_counter())
-                payload['run']['trial_end_to_end_s']=time.perf_counter()-trial_started
-                serial_start=time.perf_counter();commit(directory,payload);attempts.append(payload)
-                materialize(directory,experiment,attempts)
-                serialization=time.perf_counter()-serial_start
-                atomic(directory/'finalization'/f"{payload['run']['attempt_id']}.json",
-                       dict(serialization_s=serialization,trial_end_to_end_s=time.perf_counter()-trial_started,
-                            note='includes atomic attempt commit and CSV export; excludes this finalization file and progress update'))
-                if outcome['done'].get('error')=='interrupted':interrupted[0]=True
-                if outcome['abort_gpu']:
-                    interrupted[0]=True
-                    progress('gpu_worker_lost_resume_required');break
-                progress('trial_saved')
-                if interrupted[0]:break
+            pool=None if policy['worker_mode']=='fresh' and policy['seed_workers']==1 else SeedPool(
+                policy['seed_workers'],policy['worker_mode'],lambda:interrupted[0])
+            def outcomes():
+                nonlocal current,active_seeds
+                wave_id=0
+                for _,group in groupby(todo,key=lambda r:(r['solver_id'],r['instance_id'])):
+                    rows=list(group)
+                    for start in range(0,len(rows),policy['seed_workers']):
+                        if interrupted[0]:return
+                        if source_identity()['code_snapshot_hash']!=core['source']['code_snapshot_hash']:
+                            progress('source_changed');raise ValueError('Source changed during campaign; no new trial scheduled')
+                        wave=rows[start:start+policy['seed_workers']];wave_id+=1
+                        current=wave[0];active_seeds=[r['seed'] for r in wave];progress('starting')
+                        if pool is None:
+                            began=time.perf_counter();outcome=trial(job_for(current),progress,lambda:interrupted[0])
+                            yield current,outcome,began,wave_id,1
+                        else:
+                            with closing(pool.wave([job_for(r) for r in wave],progress)) as stream:
+                                for index,outcome in stream:
+                                    yield wave[index],outcome,outcome['parent_trial_started'],wave_id,len(wave)
+            try:
+                with closing(outcomes()) as stream:
+                    for current,outcome,trial_started,wave_id,wave_size in stream:
+                        if source_identity()['code_snapshot_hash']!=core['source']['code_snapshot_hash']:
+                            outcome['done'].update(error='code_changed',error_message='Source changed during trial')
+                            interrupted[0]=True
+                        number=1+sum(a['run']['run_id']==current['run_id'] for a in attempts)
+                        payload=assemble(experiment,items[current['instance_id']],current,outcome,number,session,time.perf_counter())
+                        payload['run'].update(trial_end_to_end_s=time.perf_counter()-trial_started,wave_id=wave_id,wave_size=wave_size)
+                        serial_start=time.perf_counter();commit(directory,payload);attempts.append(payload)
+                        materialize(directory,experiment,attempts)
+                        serialization=time.perf_counter()-serial_start
+                        atomic(directory/'finalization'/f"{payload['run']['attempt_id']}.json",
+                               dict(serialization_s=serialization,trial_end_to_end_s=time.perf_counter()-trial_started,
+                                    note='includes readiness barrier, audit, commit and CSV export; excludes pool shutdown and this finalization file'))
+                        if current['seed'] in active_seeds:active_seeds.remove(current['seed'])
+                        if outcome['done'].get('error')=='interrupted':interrupted[0]=True
+                        if outcome['abort_gpu']:
+                            interrupted[0]=True;progress('gpu_worker_lost_resume_required')
+                        progress('trial_saved')
+                        # Drain every dispatched seed before stopping; unstarted seeds remain pending.
+            finally:
+                if pool is not None:atomic(directory/'worker_sessions'/f'{session}.json',pool.close())
             materialize(directory,experiment,attempts)
             if len(primary(attempts))<len(experiment['execution_plan']):interrupted[0]=True
             unavailable=any(r['status']=='unavailable' for r in registry)

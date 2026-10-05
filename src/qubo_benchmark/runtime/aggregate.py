@@ -22,6 +22,8 @@ def main(argv=None):
         for attempt in attempts:
             runs.append(attempt['run'])
             link=dict(test_id=key,campaign_id=experiment['campaign_id'],
+                      execution_policy_hash=attempt['run']['execution_policy_hash'],
+                      execution_mode=attempt['run']['execution_mode'],seed_workers=attempt['run']['seed_workers'],
                       hardware_id=experiment['environment']['hardware_id'],
                       parameters_hash=attempt['run']['parameters_hash'],instance_id=attempt['run']['instance_id'],
                       solver_id=attempt['run']['solver_id'],requested_time_s=attempt['run']['requested_time_s'])
@@ -30,12 +32,15 @@ def main(argv=None):
     table(out/'summary.csv',rows);table(out/'runs.csv',runs)
     table(out/'trace.csv',trace);table(out/'solutions.csv',solutions)
     table(out/'quality.csv',[{k:r.get(k) for k in ('test_id','run_id','attempt_id','instance_id','solver_id','hardware_id',
-        'parameters_hash','requested_time_s','best_objective_within_budget','signed_gap_percent','result_status')} for r in runs])
+        'parameters_hash','execution_policy_hash','execution_mode','seed_workers','worker_mode',
+        'requested_time_s','best_objective_within_budget','signed_gap_percent','result_status')} for r in runs])
     table(out/'timing.csv',[{k:r.get(k) for k in ('test_id','run_id','attempt_id','instance_id','solver_id','hardware_id',
-        'parameters_hash','requested_time_s','actual_solve_wall_s','ttt_1pct_s','ttt_reference_s','ttt_optimum_s',
+        'parameters_hash','execution_policy_hash','execution_mode','seed_workers','worker_mode',
+        'requested_time_s','actual_solve_wall_s','ttt_1pct_s','ttt_reference_s','ttt_optimum_s',
         'near_target_event','censor_time_s','near_target_time_status','result_status')} for r in runs])
     table(out/'memory.csv',[{k:r.get(k) for k in ('test_id','run_id','attempt_id','instance_id','solver_id','hardware_id',
-        'parameters_hash','n_variables','n_couplings','cpu_rss_peak_sampled_bytes','gpu_allocated_peak_bytes',
+        'parameters_hash','execution_policy_hash','execution_mode','seed_workers','worker_mode',
+        'n_variables','n_couplings','cpu_rss_peak_sampled_bytes','gpu_allocated_peak_bytes',
         'gpu_reserved_peak_bytes','result_status')} for r in runs])
     atomic(out/'aggregation.json',dict(experiments=len(seen),duplicate_copies_ignored=duplicates,
         partial_groups=sum(r['pending']>0 for r in rows),

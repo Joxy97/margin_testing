@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[3]
 CONFIG = ROOT/'configs'
-SCHEMA = 2
+SCHEMA = 3
 
 def utc():
     return datetime.now(timezone.utc).isoformat()

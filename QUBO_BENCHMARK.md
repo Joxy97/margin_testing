@@ -16,13 +16,13 @@ Run from `solvers_testing/margin_testing`. On the NVIDIA host first install a
 compatible CUDA-enabled Torch build, then the repository dependencies:
 
 ```bash
-python -m pip install -e '.[benchmark,application,dev]'
+python -m pip install -e '.[benchmark,dev]'
 export PYTHONPATH=src
 python -m qubo_benchmark list
 python -m qubo_benchmark solvers
 python -m qubo_benchmark download --offline
 python -m qubo_benchmark validate
-python -m pytest tests/qubo_solvers tests/test_library_bqm_solver.py tests/test_qubo_benchmark.py tests/test_solver_tool_migration.py
+python -m pytest tests/qubo_solvers tests/test_qubo_benchmark.py
 python -m qubo_benchmark run --config benchmark_configs/smoke_all.json --output benchmark_results/runs/local-smoke
 python -m qubo_benchmark summarize benchmark_results/runs/local-smoke
 ```
@@ -214,7 +214,7 @@ structural families, and solver variants, and retain every per-instance result.
 
 ## Git deployment
 
-Include `src/qubo_solvers`, application shims, benchmark code/configs/tests and
+Include `src/qubo_solvers`, benchmark code/configs/tests and
 the approximately 20 MB `benchmark_data/qubo37` bundle in the future commit.
 These paths are not ignored. `.gitattributes` preserves source bytes across
 Windows/Linux checkouts; no Git LFS dataset fetch is required. The library wheel

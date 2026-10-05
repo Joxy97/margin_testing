@@ -13,6 +13,7 @@ def trial(job,heartbeat,stop_requested):
     process=context.Process(target=execute,args=(child,stop,job))
     began=time.perf_counter();events=[];setup={};done={};origin=None;started=None
     rss_start=None;rss_peak=None;next_sample=0.;next_heartbeat=0.;forced=False;ready=False
+    solved=None;cleanup_origin=None
     process.start();child.close()
     try:
         while True:
@@ -45,12 +46,19 @@ def trial(job,heartbeat,stop_requested):
                     parent.send('go')
                 elif kind=='started':origin=message['origin_ns'];started=message['started_at_utc']
                 elif kind=='events':events.extend(message['events'])
+                elif kind=='solved':solved=message;cleanup_origin=time.perf_counter()
                 elif kind=='done':done=message;break
                 elif kind=='fatal':
                     done=dict(message,error='setup_error' if not ready else 'worker_error');break
             elif not process.is_alive():
                 done=dict(error='worker_crash',error_message=f'Worker exit code {process.exitcode}');break
             elapsed=(time.perf_counter_ns()-origin)/1e9 if origin else None
+            if solved is not None:
+                if now-cleanup_origin>job['setup_timeout_s']:
+                    forced=True;process.terminate();process.join(2)
+                    done=dict(solved,error='cleanup_timeout',error_message='Worker cleanup timed out after solver returned')
+                    break
+                continue
             if ((origin is not None and elapsed>job['budget']+job['watchdog_grace_s']) or
                 (origin is None and now-began>job['setup_timeout_s'])):
                 forced=True;stop.set();process.terminate();process.join(2)
@@ -70,7 +78,7 @@ def trial(job,heartbeat,stop_requested):
         parent.close()
     if stop_requested() or done.get('stop_reason')=='interrupted':done['error']='interrupted'
     return dict(events=events,done=done,setup=setup,started_at_utc=started,
-                finished_at_utc=utc(),cleanup_s=cleanup,
+                finished_at_utc=done.get('finished_at_utc',utc()),cleanup_s=cleanup+done.get('worker_cleanup_s',0.),
                 worker_end_to_end_s=time.perf_counter()-began,cpu_rss_start_bytes=rss_start,
                 cpu_rss_peak_sampled_bytes=rss_peak,
                 abort_gpu=job['device'].startswith('cuda') and (forced or done.get('error') in ('worker_crash','worker_error')))

@@ -5,10 +5,11 @@ import math
 import os
 import platform
 import socket
+import copy
 import subprocess
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from .common import ROOT,CONFIG,read,digest,filehash,source_identity
+from .common import ROOT,CONFIG,SCHEMA,read,digest,filehash,source_identity
 from ..catalog import DEFAULT_DATA,loadCatalog
 from ..pipeline import loadPrepared,readSource
 
@@ -83,7 +84,8 @@ def environment(requested='auto',require_gpu=False):
                 packages=packages,torch_cuda=torch.version.cuda,driver=driver,blas=blas,
                 cpu_threads=PROTOCOL['execution']['cpu_threads'],blas_thread_limit=PROTOCOL['execution']['cpu_threads'],tf32=False,
                 environment_allowlist={k:os.environ[k] for k in ('CUDA_VISIBLE_DEVICES','OMP_NUM_THREADS',
-                        'MKL_NUM_THREADS','NVIDIA_VISIBLE_DEVICES') if k in os.environ},
+                        'MKL_NUM_THREADS','NVIDIA_VISIBLE_DEVICES','CUDA_MPS_PIPE_DIRECTORY',
+                        'CUDA_MPS_ACTIVE_THREAD_PERCENTAGE') if k in os.environ},
                 container_image=None,container_image_reason='not available without an explicitly supplied deployment manifest')
 
 def inventory(settings,device='cpu'):
@@ -92,7 +94,7 @@ def inventory(settings,device='cpu'):
     rows=[]
     for name in SOLVERS:
         cap=solver_capabilities(name);eligible=name in GPU_SOLVERS
-        row=dict(solver_id=name,version='0.1.0',adapter_version='runtime-v2',backend=cap['backend'],
+        row=dict(solver_id=name,version='0.1.0',adapter_version='runtime-v3',backend=cap['backend'],
                  supported_devices='cpu,cuda' if cap['gpu'] else 'cpu',supported_precision=cap['precisions'],
                  eligible=eligible,status='excluded',reason=cap['restriction'],
                  seed_support=name not in ('lib_planar_graph','lib_tree_decomposition_solver'),deadline_support='cooperative checkpoints plus process watchdog' if eligible else None,
@@ -110,12 +112,44 @@ def inventory(settings,device='cpu'):
         rows.append(row)
     return rows
 
+def select_solvers(rows,selection='all'):
+    """Keep backend failures distinct from invalid explicit solver IDs."""
+    by_name={row['solver_id']:row for row in rows}
+    available=[row['solver_id'] for row in rows if row['status']=='runnable']
+    if selection=='all':
+        if available:return available
+        details='\n'.join(f"  {row['solver_id']}: {row['reason'] or row['status']}"
+                          for row in rows if row['status']=='unavailable')
+        raise ValueError('No eligible runnable solvers. Backend availability checks failed:\n'
+                         +(details or '  No eligible solver entries were discovered.')
+                         +'\nRun python run_benchmark.py --list-solvers for the inventory.'
+                         +'\nFor missing dependencies, install them in this same Python environment with:'
+                         +'\n  python -m pip install -e ".[benchmark]"')
+    requested=[name.strip() for name in selection.split(',')]
+    if any(not name for name in requested) or len(set(requested))!=len(requested):
+        raise ValueError('Solver IDs must be nonempty and unique')
+    unavailable=[name for name in requested if name not in available]
+    if unavailable:
+        details='\n'.join(f"  {name}: "+(by_name[name]['reason'] or by_name[name]['status']
+                         if name in by_name else 'unknown solver ID') for name in unavailable)
+        raise ValueError('Unavailable/ineligible solvers:\n'+details)
+    return requested
+
+
 def preflight(args):
     import numpy as np
     settings=read(args.config or CONFIG/'benchmark_solvers.json')
     if settings.get('schema_version')!=2:raise ValueError('Unsupported solver configuration schema')
     if any('seed' in p or 'device' in p for p in settings['solvers'].values()):
         raise ValueError('Seeds/devices belong to execution policy, not algorithm configuration')
+    env=environment(args.device,args.require_gpu);device=env['hardware']['device']
+    rows=inventory(settings['solvers'],device)
+    requested=select_solvers(rows,args.solvers)
+    workers=getattr(args,'seed_workers',1)
+    if isinstance(workers,bool) or not isinstance(workers,int) or not 1<=workers<=100:
+        raise ValueError('--seed-workers must be an integer from 1 through 100')
+    mode=getattr(args,'worker_mode','persistent')
+    if mode not in ('persistent','fresh'):raise ValueError('Invalid worker mode')
     catalog=read(CONFIG/'qubo_benchmark_catalog_200_500_1000_v2.json')
     if catalog['instances']!=loadCatalog()['instances']:
         raise ValueError('v2 catalog differs from validated prepared input catalog')
@@ -134,19 +168,23 @@ def preflight(args):
             normalized_problem_sha256=meta['normalized_sha256'],raw_source_sha256=meta['raw_source']['sha256'],
             n_couplings=int(off.sum()),nnz_diagonal=int((~off).sum()),
             nnz_matrix=int((~off).sum()+2*off.sum()),measured_density=meta['measured_interaction_density_percent']))
-    env=environment(args.device,args.require_gpu);device=env['hardware']['device']
-    rows=inventory(settings['solvers'],device)
-    available=[r['solver_id'] for r in rows if r['status']=='runnable']
-    requested=available if args.solvers=='all' else args.solvers.split(',')
-    if len(set(requested))!=len(requested) or not requested:raise ValueError('Solver IDs must be nonempty and unique')
-    if set(requested)-set(available):raise ValueError(f'Unavailable/ineligible solvers: {sorted(set(requested)-set(available))}')
-    if not available:raise ValueError('No eligible runnable solvers')
     schedule=seeds(args.runs,args.seed_start,args.seeds_file)
-    core=dict(schema_version=2,n=args.n,density=args.density,budget_s=budget(args.time_limit),
+    policy=copy.deepcopy(PROTOCOL)
+    policy['execution'].update(worker_mode=mode,seed_workers_requested=workers,
+        seed_workers=min(workers,len(schedule)),
+        execution_mode='parallel_shared_device' if min(workers,len(schedule))>1 else 'isolated_latency',
+        worker_policy=('persistent spawned workers; immutable input reuse; new solver and RNG/state per trial'
+                       if mode=='persistent' else 'fresh spawned worker per trial'))
+    capacity=worker_capacity(selected,{name:settings['solvers'][name] for name in requested},device,policy['execution'])
+    if min(workers,len(schedule))>capacity['maximum_workers_estimate']:
+        raise ValueError(f"Requested {min(workers,len(schedule))} concurrent seeds exceeds the estimated "
+                         f"memory-admitted maximum {capacity['maximum_workers_estimate']}. "
+                         'Reduce --seed-workers; solver parameters will not be changed.')
+    core=dict(schema_version=SCHEMA,n=args.n,density=args.density,budget_s=budget(args.time_limit),
          instance_mode='single' if args.instance_id else args.instances,
          instances=[{k:v for k,v in row.items() if k!='npz'} for row in selected],
          solvers={name:settings['solvers'][name] for name in requested},seeds=schedule,
-         protocol=PROTOCOL,protocol_sha256=filehash(CONFIG/'benchmark_protocol.json'),
+         protocol=policy,protocol_sha256=filehash(CONFIG/'benchmark_protocol.json'),
          definitions_sha256=filehash(ROOT/'BENCHMARK_DEFINITIONS.txt'),
          catalog_sha256=filehash(CONFIG/'qubo_benchmark_catalog_200_500_1000_v2.json'),
          reference_snapshot_sha256=digest(catalog),environment_hash=digest(env),
@@ -156,5 +194,35 @@ def preflight(args):
     identity=dict(core,source={'code_commit':core['source']['code_commit'],
                               'code_snapshot_hash':core['source']['code_snapshot_hash']})
     return dict(core=core,identity=digest(identity),environment=env,registry=rows,
-                selected=selected,catalog=catalog,configuration=settings,
+                selected=selected,catalog=catalog,configuration=settings,capacity=capacity,
                 total=len(selected)*len(requested)*len(schedule))
+
+
+def worker_capacity(selected,settings,device,policy):
+    """Conservative admission estimate, not an automatically tuned concurrency."""
+    import psutil
+    import torch
+    from ..model import Problem
+    from ..adapters import toSolverProblem
+    from qubo_solvers import create_bqm_solver
+    peak=0
+    for item in selected:
+        problem=toSolverProblem(Problem.load(item['npz']))
+        for name,parameters in settings.items():
+            solver=create_bqm_solver(name,{'device':'cpu'})
+            peak=max(peak,solver.estimatedWorkingMemoryBytes(problem,parameters))
+    fraction=policy['memory_admission_fraction']
+    host_free=psutil.virtual_memory().available
+    host_per_worker=policy['worker_host_reserve_bytes']+peak
+    limit=min(100,int(host_free*fraction)//host_per_worker)
+    gpu_free=None;gpu_per_worker=None
+    if device.startswith('cuda'):
+        gpu_free,_=torch.cuda.mem_get_info(device)
+        gpu_per_worker=policy['worker_cuda_reserve_bytes']+peak
+        limit=min(limit,int(gpu_free*fraction)//gpu_per_worker)
+    return dict(maximum_workers_estimate=max(0,limit),algorithm_working_bytes_estimate=peak,
+                host_available_bytes=host_free,host_per_worker_estimate=host_per_worker,
+                gpu_free_bytes=gpu_free,gpu_per_worker_estimate=gpu_per_worker,
+                memory_fraction=fraction,
+                note='Conservative allocation/context estimates, not measured peaks or optimal throughput. '
+                     'Actual CUDA context overhead and other workloads can still cause OOM; no automatic retuning.')

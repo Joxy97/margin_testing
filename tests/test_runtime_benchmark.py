@@ -129,7 +129,7 @@ def test_capture_timestamp_after_immutable_copy_and_clean_scope():
 
 def args_for(root):
     return resolve(parser().parse_args(['200','sparse','0.05','--instances','representative',
-        '--runs','2','--device','cpu','--solvers','lib_greedy_local_search','--output-root',str(root)]))
+        '--runs','2','--device','cpu','--worker-mode','fresh','--solvers','lib_greedy_local_search','--output-root',str(root)]))
 
 def fake_trial(job,heartbeat,stopped):
     heartbeat('solving')

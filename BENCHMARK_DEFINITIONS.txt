@@ -59,3 +59,18 @@ Persistence
 - Save results after every run.
 - Support safe resume without overwriting completed trials.
 - Copy this definitions file into each test result directory so each result package is self-describing.
+
+Worker execution extension (runtime schema 3)
+- Default execution: one persistent spawned worker; reuse framework/CUDA context and immutable input only.
+- Every seed creates a new solver object and resets RNG/state. Solver parameters and mathematical updates are unchanged.
+- Optional --seed-workers N runs up to N independent seeds of the same solver and instance in separate processes, in readiness-barrier waves.
+- Worker count is 1 to 100, subject to a conservative memory admission estimate. It is fixed in the execution/resume identity; no automatic parameter or concurrency tuning occurs.
+- Parallel results are labeled parallel_shared_device. Their per-trial wall times include resource contention; do not pool them with isolated_latency results.
+- --worker-mode fresh retains single-use processes for comparisons. Startup/warmup counts are recorded rather than charged to solver time.
+- The solver clock starts after all wave workers are ready, immediately before RNG reset, new algorithm state, preprocessing, search, decoding and completed host capture. Final device synchronization is timed.
+- Python/process startup, framework/context warmup, immutable input loading/native transfer, readiness waiting, independent scoring, cleanup and result writing are outside the requested solver budget.
+- Specialized compact-backend representation conversion and algorithm-dependent preparation remain inside solver time.
+- Quality credit requires a completed candidate capture within the requested budget. Cooperative stopping may overshoot; the watchdog grace is not extra quality budget.
+- Per-trial setup, cleanup and persistence durations are saved separately. Final persistent process shutdown is saved in worker_sessions/*.json, outside trial duration.
+- Per-worker GPU memory includes its cached input and allocator baseline, not other workers' allocations. Record concurrent worker count when interpreting memory.
+- Interrupted active seeds remain pending for resume; completed attempts are durably saved individually as they arrive.

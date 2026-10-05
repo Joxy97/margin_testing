@@ -17,15 +17,12 @@ benchmark = [
   "numpy>=1.26", "scipy>=1.11", "certifi>=2024.2.2",
   "dimod>=0.12.21,<0.13", "dwave-samplers>=1.6,<2", "networkx>=3",
 ]
-application = [
-  "numpy", "pandas", "scikit-learn", "dimod", "dwave-samplers",
-  "yfinance", "PyYAML", "scipy", "matplotlib",
-]
 dev = ["pytest>=8", "psutil>=7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 namespaces = false
+include = ["qubo_solvers*", "qubo_benchmark*"]
 
 [tool.setuptools.package-data]
 qubo_solvers = ["py.typed"]

@@ -11,6 +11,7 @@ measured_density n_couplings nnz_diagonal nnz_matrix matrix_storage_format matri
 raw_source_sha256 normalized_problem_sha256 catalog_sha256 reference_snapshot_sha256 index_mapping_id objective_offset
 solver_id solver_version adapter_version code_commit code_dirty code_snapshot_hash parameters_hash parameters_json
 execution_policy_hash seed_index seed rng_backend initialization_policy initialization_hash seed_effective
+worker_mode seed_workers execution_mode worker_id worker_pid worker_reused input_cache_hit worker_trial_index wave_id wave_size
 deterministic_mode population_size replicas internal_batch_size restarts cpu_threads requested_device actual_device
 backend precision hardware_id environment_hash warmup_id execution_order_index session_id requested_time_s timing_scope
 started_at_utc finished_at_utc trial_reset_init_s algorithm_preprocess_s actual_solve_wall_s gpu_elapsed_s
@@ -95,6 +96,8 @@ def summaries(experiment,attempts):
         all_attempts=[a for a in attempts if a['run']['run_id'] in ids]
         row=dict(schema_version=SCHEMA,test_id=experiment['test_id'],campaign_id=experiment['campaign_id'],
             solver_id=solver,instance_id=instance,budget_s=experiment['core']['budget_s'],
+            execution_policy_hash=digest(experiment['core']['protocol']['execution']),
+            **{k:experiment['core']['protocol']['execution'][k] for k in ('worker_mode','seed_workers','execution_mode')},
             hardware_id=experiment['environment']['hardware_id'],parameters_hash=digest(experiment['core']['solvers'][solver]),
             planned=total,terminal=terminal,pending=total-terminal,attempted=len(all_attempts),
             completed_valid=len(valid),failures=terminal-len(valid),skipped=0,

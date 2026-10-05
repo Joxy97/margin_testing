@@ -111,14 +111,19 @@ incomplete; there is no silent fallback, parameter reduction or OOM retuning.
 
 ## Timing, scoring and observation
 
-Each trial uses a fresh spawned worker and a readiness handshake. Imports,
+By default, trials reuse a persistent spawned worker with a readiness handshake.
+Only immutable input and infrastructure survive between trials; every seed gets
+a new solver object and reset RNG/state. Imports,
 including lazy SciPy linear-algebra/sparse dependencies,
 problem loading, canonical native-tensor conversion/transfer, context creation
 and an 8x8 zero-GEMM infrastructure warmup precede the solve clock. No useful
 instance optimization, target, reference witness or earlier seed is used in
 warmup. Specialized compact backends retain their conversion and algorithmic
 preprocessing inside the timed section; their transfer time is not separately
-isolated. Static worker-ready overhead is saved in `warmups.csv`.
+isolated. Native immutable device matrices are reused on a cache hit; the cache
+holds only the current input per worker. Static worker-ready overhead is saved
+in `warmups.csv`, with worker ID/PID, reuse and input-cache-hit fields.
+`--worker-mode fresh` retains a new process per seed for comparison.
 
 The monotonic nanosecond clock starts before RNG reset and algorithm state
 initialization. Python, NumPy and Torch RNGs are seeded, including local
@@ -177,13 +182,71 @@ before timed work. GPU process-wide sampled memory and GPU-event elapsed time
 are unavailable/null. Matrix storage bytes describe the primary matrix, not all
 solver memory. Preprocessing duration and total evaluation counts are not
 separately instrumented; their fields are null with explanatory metadata.
+Each worker's memory includes cached immutable input and its retained allocator
+baseline. These counters exclude allocations made by the other seed workers.
 
 `runs.csv` records pre-serialization end-to-end time. `finalization.csv`, joined
 by attempt_id, records measured serialization time and the full trial duration
-through journal/CSV persistence, including source checks, worker startup, solve,
-cleanup and independent audit. It excludes writing that finalization record and
-the subsequent progress display. A crash after the durable trial but before
+through journal/CSV persistence, including worker preparation, readiness waiting,
+solve, cleanup and independent audit. It excludes the pre-wave source check,
+writing that finalization record, and the subsequent progress display. Final
+persistent process shutdown is separately recorded in `worker_sessions/*.json`.
+Concurrent trial durations overlap; do not sum them as campaign elapsed time.
+A crash after the durable trial but before
 finalization leaves the overhead measurement unavailable, not guessed.
+
+## Parallel seeds and worker reuse
+
+The ordinary command still selects every matching instance, all 23 available
+eligible solvers, and seeds 0-99. It now reuses one warm worker by default.
+To run several independent seeds at a time on the same GPU:
+
+```bash
+python run_benchmark.py 200 sparse 0.05 --device cuda:0 --require-gpu --seed-workers 4 --dry-run
+python run_benchmark.py 200 sparse 0.05 --device cuda:0 --require-gpu --seed-workers 4
+```
+
+`--seed-workers` accepts 1-100. Preflight prints a memory-admitted maximum based
+on the selected solvers' working-memory estimates, current free RAM/VRAM, a
+1 GiB per-process host/GPU reserve and an 80% memory allowance. The saved
+`worker_capacity.json` describes this estimate. It is neither a guarantee that
+allocations fit nor a measurement of the fastest concurrency. Actual context
+size and external GPU workloads vary. Start with a small worker count; 100 is
+accepted only if the estimate admits it. No populations or solver parameters
+are reduced to fit more workers.
+
+Workers process waves of seeds for the same solver and instance. Each worker
+has independent RNGs, solver state, CUDA context, deadline, and watchdog. All
+workers finish input preparation before any solver clock starts in that wave.
+The supervisor keeps draining other workers while each completed trial is
+independently scored and atomically saved. Progress includes active seeds.
+
+The 0.05 seconds is **per seed's solver wall time**: reset, algorithm setup,
+search and completed candidate capture. It excludes Python startup, readiness
+waiting, scoring and result writing. Each of four simultaneous seeds gets its
+own 0.05-second budget. Device/CPU contention within that interval still counts.
+Cooperative checks cannot guarantee an exact hard return at 50 ms; late
+candidates receive no timed quality credit and actual overshoot is reported.
+
+Parallel results are labeled `PARALLEL SHARED-DEVICE` / `parallel_shared_device`.
+Single-worker runs are `isolated_latency`. Worker mode/count form part of result
+identity, CSV metadata and resume checks; changing either starts a new result
+directory. The directory name includes `_w4_persistent_`, for example. These
+latency distributions must be compared separately. Resume uses the original
+worker policy automatically:
+
+```bash
+python run_benchmark.py --resume results/EXACT_RESULT_DIRECTORY
+python monitor_benchmark.py results/EXACT_RESULT_DIRECTORY
+```
+
+Separate CUDA processes may time-share instead of overlapping GPU kernels.
+[NVIDIA MPS](https://docs.nvidia.com/deploy/mps/latest/index.html) can improve
+overlap on supported configurations; this runner does not configure the host
+MPS service. Multiprocess execution alone does not establish a GPU speedup.
+Run only one benchmark invocation per GPU. Schema-2 result files remain
+historical artifacts; strict source/protocol identity prevents resuming them
+with this schema-3 runner.
 
 ## Run, monitor and resume
 
@@ -233,12 +296,13 @@ a valid timed score.
 
 ```text
 results/
-  n200_sparse_t0p050s_all_<UTC>_<unique-id>/
+  n200_sparse_t0p050s_all_w1_persistent_<UTC>_<unique-id>/
     BENCHMARK_DEFINITIONS.txt
     experiment.json                 # frozen identity and complete plan
     experiment_metadata.csv
     environment.json
     environment.csv
+    worker_capacity.json            # admission estimate, not measured capacity
     reference_snapshot.json
     solver_configuration.json
     solver_registry.csv             # all 28, including exclusion reasons
@@ -253,6 +317,7 @@ results/
     finalization.csv
     attempts/<run-id>__0001.json     # durable authoritative records
     finalization/<attempt-id>.json
+    worker_sessions/<session-id>.json  # persistent process exit/shutdown records
     solvers/<solver-id>/
       parameters.json
       parameters.csv
@@ -264,7 +329,8 @@ results/
 ```
 
 `.lock` exists only while writing; `csv_recovery.log` appears when needed.
-Schema version is 2. CSV nulls are empty fields, not zero. Algorithm parameters
+Runtime result schema version is 3 (solver-parameter/catalog version remains 2).
+CSV nulls are empty fields, not zero. Algorithm parameters
 use SHA-256 of sorted compact canonical JSON; source/data/reference/execution
 identities are separately recorded. Raw and best-in-budget vectors are linked
 to trace events and retain independent objectives and capture times. No polished
@@ -312,8 +378,15 @@ None of these benchmark scripts manages cloud machines, billing or credentials.
 ## Tests and bounded smoke
 
 ```bash
-python -m pytest tests/test_runtime_benchmark.py tests/qubo_solvers tests/test_library_bqm_solver.py tests/test_qubo_benchmark.py -q
+python -m pytest tests/test_runtime_benchmark.py tests/test_runtime_workers.py tests/qubo_solvers tests/test_qubo_benchmark.py -q
 python run_benchmark.py 200 sparse 0.05 --instances representative --runs 1 --device cpu --output-root benchmark_results/runtime_smoke
+```
+
+For a focused worker/timing check without the full suite or full campaign:
+
+```bash
+python -m pytest tests/test_runtime_workers.py tests/test_runtime_benchmark.py -q
+python run_benchmark.py 200 sparse 0.05 --instances representative --runs 4 --solvers lib_random_search --seed-workers 2 --device cuda:0 --require-gpu --output-root benchmark_results/parallel_smoke
 ```
 
 Repeat that smoke command for the other five size/density pairs to invoke every
@@ -333,7 +406,7 @@ capture deadlines and independently reconstructs every saved best score.
 
 | Field | Meaning and inclusion |
 |---|---|
-| `static_setup_s` | Parent-observed worker startup through ready; includes imports, loading, native canonical conversion/transfer and warmup. |
+| `static_setup_s` | Parent-observed preparation through ready; first use includes startup, imports, loading, native transfer and warmup. Reused cache hits skip them. |
 | `transfer_s` | Native canonical tensor construction, device copy and synchronization; subset of static setup, not a pure PCIe measurement. Null for compact backends. |
 | `warmups.csv:warmup_s` | Zero-GEMM warmup; subset of setup. |
 | `trial_reset_init_s` | Timed prefix through global RNG reset. Algorithm-specific state initialization follows inside solve time. |
@@ -341,7 +414,7 @@ capture deadlines and independently reconstructs every saved best score.
 | `actual_solve_wall_s` | Complete timed section including reset, algorithm setup, search, observation, final capture and final synchronization. Watchdog rows use supervisor elapsed time. |
 | `post_budget_return_s` | Elapsed time from solve origin at an over-budget return; not an additional duration. |
 | `overshoot_s` | `max(0, actual_solve_wall_s - requested_time_s)`; a derived subset, never added to solve time. |
-| `cleanup_s` | Supervisor join/termination cleanup after collecting the outcome. |
+| `cleanup_s` | Worker state cleanup outside solve time, plus join/termination if retired. Final warm-pool shutdown is in worker_sessions. |
 | `audit_s` | Loading the canonical evaluator and independently scoring all captured candidates. |
 | `serialization_s` | Null in the immutable attempt row; measured in joined `finalization.csv`. |
 | `trial_end_to_end_s` | Inclusive overall duration; pre-serialization in runs, finalized through persistence in finalization. Do not add the constituent fields to it. |

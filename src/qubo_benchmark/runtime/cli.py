@@ -13,6 +13,8 @@ def parser():
     p.add_argument('--instance-id');p.add_argument('--runs',type=int)
     p.add_argument('--seed-start',type=int);p.add_argument('--seeds-file')
     p.add_argument('--config');p.add_argument('--device');p.add_argument('--solvers')
+    p.add_argument('--seed-workers',type=int,help='Concurrent seed processes, 1..100 (default 1)')
+    p.add_argument('--worker-mode',choices=['persistent','fresh'],help='Reuse warm workers (default) or spawn per trial')
     p.add_argument('--output-root',default='results');p.add_argument('--resume')
     p.add_argument('--retry-failed',action='store_true');p.add_argument('--dry-run',action='store_true')
     p.add_argument('--list-solvers',action='store_true');p.add_argument('--list-instances',action='store_true')
@@ -27,8 +29,11 @@ def resolve(args):
             instance_id=saved['instances'][0]['entry']['instance_id'] if saved['instance_mode']=='single' else None,
             runs=len(saved['seeds']),seed_start=0,seeds_file=str(root/'seeds.json'),
             config=str(root/'solver_configuration.json'),device=saved['requested_device'],
-            solvers=','.join(saved['solvers']))
-    else:defaults=dict(instances='all',runs=100,seed_start=0,device='auto',solvers='all')
+            solvers=','.join(saved['solvers']),
+            seed_workers=saved['protocol']['execution'].get('seed_workers_requested',1),
+            worker_mode=saved['protocol']['execution'].get('worker_mode','fresh'))
+    else:defaults=dict(instances='all',runs=100,seed_start=0,device='auto',solvers='all',
+                       seed_workers=1,worker_mode='persistent')
     for key,value in defaults.items():
         if getattr(args,key) is None:setattr(args,key,value)
     if args.retry_failed and not args.resume:raise ValueError('--retry-failed requires --resume')
@@ -60,6 +65,11 @@ def main(argv=None):
               f"{'STANDARD' if prepared['core']['standard'] else 'NONSTANDARD SMOKE'}",flush=True)
         print('Instances: '+', '.join(e['entry']['instance_id'] for e in prepared['selected']),flush=True)
         print('Solvers: '+', '.join(prepared['core']['solvers']),flush=True)
+        print(f"Workers: {prepared['core']['protocol']['execution']['seed_workers']} "
+              f"{args.worker_mode}; estimated memory-admitted maximum: "
+              f"{prepared['capacity']['maximum_workers_estimate']} (not a speedup guarantee)",flush=True)
+        print('Timing mode: '+prepared['core']['protocol']['execution']['execution_mode']+
+              '; budget covers solver reset, preprocessing, search and completed capture only',flush=True)
         if args.dry_run:return 0
         _,code=execute(prepared,args);return code
     except (ValueError,OSError,ImportError) as exc:

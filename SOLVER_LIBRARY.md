@@ -6,7 +6,10 @@ candidate selection, and execution helpers. There are **28 canonical solvers:
 27 also provide Torch GPU search kernels. Only `lib_planar_graph` is CPU-only.
 CUDA execution is prepared but has not been tested on this CPU-only machine.
 
-The application factory and benchmark adapters call this library. Historical
+This deployment branch contains the standalone library and benchmark adapters.
+The portfolio application and its integration tests remain on the earlier
+branch and are not required to run the benchmark. Historically, the
+application factory and benchmark adapters call this library. Historical
 application module/class imports are compatibility shims with no solver kernels.
 Old solver IDs are rejected with migration hints, rather than registered as
 additional algorithms. Nine duplicate entries were removed from the earlier 37:
@@ -21,12 +24,12 @@ for the interface you use:
 ```bash
 python -m pip install -e .
 python -m pip install -e ".[compact]"
-python -m pip install -e ".[benchmark,application,dev]"
+python -m pip install -e ".[benchmark,dev]"
 ```
 
 `compact` adds NumPy/SciPy for compact QUBOs and specialized Torch backends.
 `benchmark` also supplies offline validation and the planar backend's optional
-dependencies. `application` adds the portfolio/YAML dependencies; `dev` supplies
+dependencies. `dev` supplies
 pytest and process-memory profiling. These commands are alternatives or can be
 combined. The core has no direct application or NumPy dependency.
 
@@ -242,7 +245,7 @@ On the prepared NVIDIA host:
 
 ```bash
 python -m qubo_benchmark validate
-python -m pytest tests/qubo_solvers tests/test_library_bqm_solver.py tests/test_qubo_benchmark.py
+python -m pytest tests/qubo_solvers tests/test_qubo_benchmark.py
 python tools/profile_solver_gpu.py --device cuda:0 --solvers all --instances gka1e bqp500-1 bqp1000-1 --output benchmark_results/gpu-native-profile.json
 python -m qubo_benchmark run --config benchmark_configs/full_all.json --output benchmark_results/runs/full-library-all
 ```

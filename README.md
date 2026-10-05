@@ -2,14 +2,14 @@
 
 This branch contains the canonical 28-method solver library and the runtime
 benchmark for the 23 GPU-capable methods compatible with all 37 prepared QUBOs.
-The original application source and library adapters are retained. Generated
+This `solvers_testing2` branch ships the standalone library and benchmark. Generated
 benchmark results, environments, caches and unrelated market datasets are not
 part of this deployment branch.
 
 ## Clone and install
 
 ```bash
-git clone --depth 1 --single-branch --branch solvers_testing https://github.com/Joxy97/margin_testing.git
+git clone --depth 1 --single-branch --branch solvers_testing2 https://github.com/Joxy97/margin_testing.git
 cd margin_testing
 python -m venv .venv
 source .venv/bin/activate
@@ -45,6 +45,9 @@ python run_benchmark.py 200 sparse 0.05 --instances representative --runs 1 --de
 
 # Normal command: all matching instances, 100 seeds each, all 23 methods.
 python run_benchmark.py 200 sparse 0.05
+
+# Four concurrent seeds on one GPU; each seed gets one second of solver time.
+python run_benchmark.py 200 sparse 1 --seed-workers 4 --device cuda:0 --require-gpu
 ```
 
 The normal command automatically uses `cuda:0` when available, otherwise CPU.
@@ -65,7 +68,10 @@ python aggregate_benchmarks.py results --output analysis
 
 See [README_BENCHMARKS.md](README_BENCHMARKS.md) for all commands, protocol and
 output fields, and [SOLVER_LIBRARY.md](SOLVER_LIBRARY.md) for the library API.
-The historical application needs `pip install -e '.[application]'` in addition
-to benchmark dependencies. Its unrelated market fixtures are not shipped here.
+The historical portfolio application, unrelated tests/tools, market fixtures,
+local virtual environments and generated results are not shipped here. Use the
+shallow, single-branch clone above to avoid downloading historical Git objects.
+Warm workers are reused by default; parallelism is per selected GPU. See the
+benchmark README for memory admission, timing and separate multi-GPU invocations.
 Local CPU validation passed; GPU correctness/timing still needs a smoke test on
 the target hardware. Results from earlier local validation are not bundled.
