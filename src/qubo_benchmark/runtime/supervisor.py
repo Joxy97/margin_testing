@@ -13,7 +13,7 @@ def trial(job,heartbeat,stop_requested):
     process=context.Process(target=execute,args=(child,stop,job))
     began=time.perf_counter();events=[];setup={};done={};origin=None;started=None
     rss_start=None;rss_peak=None;next_sample=0.;next_heartbeat=0.;forced=False;ready=False
-    solved=None;cleanup_origin=None
+    solved=None;cleanup_origin=None;stopping=None
     process.start();child.close()
     try:
         while True:
@@ -46,12 +46,18 @@ def trial(job,heartbeat,stop_requested):
                     parent.send('go')
                 elif kind=='started':origin=message['origin_ns'];started=message['started_at_utc']
                 elif kind=='events':events.extend(message['events'])
+                elif kind=='stopping':stopping=message
                 elif kind=='solved':solved=message;cleanup_origin=time.perf_counter()
                 elif kind=='done':done=message;break
                 elif kind=='fatal':
                     done=dict(message,error='setup_error' if not ready else 'worker_error');break
             elif not process.is_alive():
                 done=dict(error='worker_crash',error_message=f'Worker exit code {process.exitcode}');break
+            # A completed result can be buffered behind captures while the parent
+            # is busy with progress/OS scheduling. Consume it before enforcing
+            # the watchdog; the immutable capture timestamps still decide credit.
+            if parent.poll():continue
+            now=time.perf_counter()
             elapsed=(time.perf_counter_ns()-origin)/1e9 if origin else None
             if solved is not None:
                 if now-cleanup_origin>job['setup_timeout_s']:
@@ -64,7 +70,8 @@ def trial(job,heartbeat,stop_requested):
                 forced=True;stop.set();process.terminate();process.join(2)
                 if process.is_alive():process.kill();process.join(2)
                 done=dict(error='watchdog_timeout' if origin else 'setup_timeout',
-                          error_message='Supervisor cutoff; no post-deadline quality credit',
+                          error_message=('Supervisor cutoff during '+('device drain' if stopping else 'solver work')+
+                                         '; no post-deadline quality credit'),
                           stop_reason='watchdog',actual_solve_wall_s=elapsed)
                 break
         cleanup_started=time.perf_counter()

@@ -30,22 +30,38 @@ class Observer:
     def capture(self,samples,raw=None,*,phase='checkpoint',iteration=None):
         # Do not decode a new candidate after a known cutoff.
         if phase!='final_returned':self.poll()
+        arrays=False
         if hasattr(samples,'detach'):
-            samples=samples.detach().clone().cpu().tolist()
+            captured=samples.detach().clone().cpu()
+            if hasattr(captured,'numpy'):
+                try:samples=captured.numpy();arrays=True
+                except TypeError:samples=captured.tolist()  # E.g. bfloat16 diagnostics.
+            else:samples=captured.tolist()
         else:samples=[list(row) for row in samples]
+        if arrays:
+            import numpy as np
+            # Validate before casting: fractional values and NaNs must remain
+            # invalid. Encoding a completed host copy in C avoids thousands of
+            # Python objects and per-bit conversions at every solver checkpoint.
+            valid=((samples==0)|(samples==1)).all(axis=1)
+            bitstrings=[(row.astype(np.uint8)+48).tobytes().decode('ascii') if yes
+                        else repr(row.tolist()) for row,yes in zip(samples,valid)]
+        else:
+            bitstrings=[''.join(str(int(v)) for v in row) if all(v in (0,1) for v in row)
+                        else repr(row) for row in samples]
         if hasattr(raw,'detach'):raw=raw.detach().cpu().reshape(-1).tolist()
         raw=[None]*len(samples) if raw is None else list(raw)
         batch=[]
-        for index,row in enumerate(samples):
+        for index,bits in enumerate(bitstrings):
             # Invalid values remain visible; no coercion of .5 or NaN into valid bits.
-            bits=''.join(str(int(v)) for v in row) if all(v in (0,1) for v in row) else repr(row)
             if phase!='final_returned' and bits in self.seen:continue
             self.seen.add(bits)
             value=raw[index] if index<len(raw) else None
             if isinstance(value,(int,float)) and not math.isfinite(value):value=None
             batch.append(dict(bitstring=bits,raw=value,phase=phase,iteration=iteration))
         if phase=='initial' and self.initialization_hash is None:
-            self.initialization_hash=hashlib.sha256(repr(samples).encode()).hexdigest()
+            initial=samples.tolist() if arrays else samples
+            self.initialization_hash=hashlib.sha256(repr(initial).encode()).hexdigest()
         # Timestamp after decoding, clone, CPU completion, text construction and hashing.
         elapsed=self.elapsed()
         for event in batch:event['elapsed_s']=elapsed
@@ -70,6 +86,10 @@ class WarmWorker:
         self.threads=job['cpu_threads'];self.worker_id=uuid.uuid4().hex
         self.pid=os.getpid();self.trials=0;self.cache_key=None
         self.source=self.compact=self.prepared=None
+        if self.device.startswith('cuda'):
+            # CUDA APIs which omit a device must address this worker's GPU,
+            # rather than silently creating a second context on cuda:0.
+            torch.cuda.set_device(self.device)
         torch.set_num_threads(self.threads)
         self.thread_limits=threadpool_limits(limits=self.threads)
         torch.backends.cuda.matmul.allow_tf32=False
@@ -155,6 +175,11 @@ class WarmWorker:
             error='oom' if isinstance(exc,(MemoryError,torch.OutOfMemoryError)) or 'out of memory' in str(exc).lower() else 'error'
             reason=error
         finally:
+            # Solver work has unwound, but queued device operations still belong
+            # to the measured solve. This marker lets supervision distinguish a
+            # device drain from a solver which never observes its deadline.
+            connection.send(dict(kind='stopping',stop_reason=reason,
+                solver_return_wall_s=observer.elapsed()))
             synchronize(torch,device)
         elapsed=observer.elapsed()
         if self.native and self.prepared.Q._version!=version:

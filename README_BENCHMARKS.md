@@ -8,7 +8,9 @@ python run_benchmark.py 200 sparse 0.05
 
 This selects **all three** validated 200-variable sparse instances, all 23
 eligible library solvers, and seeds 0 through 99 for every instance/solver:
-6,900 trials. No `--instances all` flag is necessary. The other group counts
+6,900 trials, distributed across **all visible CUDA GPUs** in one invocation.
+Persistent workers are reused, and a bounded pilot chooses concurrency before
+the first benchmark trial. No `--instances all` flag is necessary. The other group counts
 are 10, 10, 2, 10 and 2, respectively, for 200 dense, 500 sparse, 500 dense,
 1000 sparse and 1000 dense. All six groups contain 37 original problems.
 
@@ -18,8 +20,10 @@ not command duration: process startup, input validation, audit and persistence
 are separately recorded overhead.
 
 The supplied [BENCHMARK_DEFINITIONS.txt](BENCHMARK_DEFINITIONS.txt) is preserved
-verbatim and copied into every experiment. This README describes its execution
-details. The old `python -m qubo_benchmark run` interface remains available for
+verbatim and copied into every experiment. Its metric definitions remain in
+force. The schema-4 device scheduling and concurrency policy described here and
+saved in `experiment.json` supersede the file's historical schema-3 worker
+extension. The old `python -m qubo_benchmark run` interface remains available for
 historical experiments; it does **not** implement this 100-seed runtime protocol.
 
 ## Installation and offline data
@@ -104,14 +108,20 @@ to the algorithm; their fixed policy and actual matrix shape/storage are saved
 in `resolved_structure_json`. The source problem and scoring dimension remain
 unchanged.
 
-`--device auto` chooses CUDA when available, otherwise explicitly records CPU.
-`--device cuda:0 --require-gpu` fails if CUDA is unavailable. A missing eligible
+`--device auto` chooses every visible CUDA GPU, otherwise explicitly records CPU.
+`--require-gpu` forbids CPU fallback. `--device cuda:0` selects one GPU;
+`--devices cuda:0,cuda:2` selects a subset using the process's visible CUDA
+indices. Every selected GPU's identity is recorded. A missing eligible
 dependency/configuration is visible in the inventory and makes the campaign
-incomplete; there is no silent fallback, parameter reduction or OOM retuning.
+incomplete; there is no silent fallback, parameter reduction or mid-campaign
+OOM retuning.
 
 ## Timing, scoring and observation
 
-By default, trials reuse a persistent spawned worker with a readiness handshake.
+By default, trials reuse persistent spawned workers assigned to specific GPUs.
+An initial readiness barrier completes all worker startup before any timed
+trial begins. Thereafter each ready worker independently takes its next trial;
+there is no repeated global wave barrier.
 Only immutable input and infrastructure survive between trials; every seed gets
 a new solver object and reset RNG/state. Imports,
 including lazy SciPy linear-algebra/sparse dependencies,
@@ -142,18 +152,23 @@ Local iteration counters may restart between native trajectories; they are not
 fabricated total evaluation counts.
 
 Cooperative checks stop iterative work. The supervisor enforces an additional
-0.5-second cleanup grace for uninterruptible calls. The grace never extends the
+0.5-second return grace for uninterruptible solver calls. The grace never extends the
 quality deadline. A candidate captured after the deadline cannot improve the
 timed result. Actual elapsed time and overshoot are never clamped. A lost GPU
 worker aborts scheduling until explicit resume; no next trial is started while
-that worker could still be active. Run only one benchmark invocation per GPU.
+that worker could still be active. Supervisor messages are drained before
+checking the watchdog so a completed return queued in IPC is not mistaken for
+an active solve. A separate cleanup completion message keeps state disposal
+outside solver time. Run one scheduler invocation across the selected GPUs.
 
 These mechanisms correctly account for a 50 ms budget but cannot guarantee a
 candidate or a hard real-time return on every host. Mandatory matrix assembly,
 factorization/calibration, first-use kernels or decoding may exceed 50 ms before
 the first candidate exists. Such trials are `no_in_budget_candidate`. See
-`RUNTIME_BENCHMARK_VALIDATION.md` for observed local limitations. GPU timing
-remains unverified until the CUDA tests and smoke run pass on actual hardware.
+`RUNTIME_BENCHMARK_VALIDATION.md` for earlier local limitations and
+[MULTIGPU_VALIDATION.md](MULTIGPU_VALIDATION.md) for the four-RTX-3090 validation:
+92 focused tests passed; both bounded GPU smokes ran all 23 solvers. The 50 ms
+smoke correctly recorded 11 of 92 trials without an in-budget candidate.
 
 Every captured binary solution is independently scored in original normalized
 units as `offset + x.T @ Q @ x`, with symmetric Q and exact integer arithmetic
@@ -179,7 +194,10 @@ attempt in the primary statistics.
 CPU memory is worker-process-tree RSS sampled every 10 ms and can miss brief
 peaks. GPU memory is Torch allocated/reserved baseline and allocator peak, reset
 before timed work. GPU process-wide sampled memory and GPU-event elapsed time
-are unavailable/null. Matrix storage bytes describe the primary matrix, not all
+are unavailable/null in individual trial rows. Separate device-level telemetry
+records activity, total used memory and power where NVIDIA reports them; it
+includes other processes and is not a per-trial allocation counter or TFLOPS
+measurement. Matrix storage bytes describe the primary matrix, not all
 solver memory. Preprocessing duration and total evaluation counts are not
 separately instrumented; their fields are null with explanatory metadata.
 Each worker's memory includes cached immutable input and its retained allocator
@@ -188,65 +206,114 @@ baseline. These counters exclude allocations made by the other seed workers.
 `runs.csv` records pre-serialization end-to-end time. `finalization.csv`, joined
 by attempt_id, records measured serialization time and the full trial duration
 through journal/CSV persistence, including worker preparation, readiness waiting,
-solve, cleanup and independent audit. It excludes the pre-wave source check,
-writing that finalization record, and the subsequent progress display. Final
+solve, cleanup, result-queue waiting and independent audit. It excludes initial
+campaign preflight, writing that finalization record and the subsequent progress
+display. Final
 persistent process shutdown is separately recorded in `worker_sessions/*.json`.
 Concurrent trial durations overlap; do not sum them as campaign elapsed time.
 A crash after the durable trial but before
-finalization leaves the overhead measurement unavailable, not guessed.
+finalization leaves the overhead measurement unavailable, not guessed. Immutable
+trial JSON is committed first and new CSV rows are appended after every trial;
+the complete historical CSVs are not rewritten on every completion. Summaries
+refresh approximately every five seconds and at completion. Startup/resume and
+finalization rebuild projections from the authoritative journal. The scheduler
+bounds the result backlog and keeps compact trial metadata in memory; historical
+solution/trace payloads are read individually when rebuilding exports.
 
-## Parallel seeds and worker reuse
+## Multiple GPUs, parallel seeds and worker reuse
 
-The ordinary command still selects every matching instance, all 23 available
-eligible solvers, and seeds 0-99. It now reuses one warm worker by default.
-To run several independent seeds at a time on the same GPU:
-
-```bash
-python run_benchmark.py 200 sparse 0.05 --device cuda:0 --require-gpu --seed-workers 4 --dry-run
-python run_benchmark.py 200 sparse 0.05 --device cuda:0 --require-gpu --seed-workers 4
-```
-
-`--seed-workers` accepts 1-100. Preflight prints a memory-admitted maximum based
-on the selected solvers' working-memory estimates, current free RAM/VRAM, a
-1 GiB per-process host/GPU reserve and an 80% memory allowance. The saved
-`worker_capacity.json` describes this estimate. It is neither a guarantee that
-allocations fit nor a measurement of the fastest concurrency. Actual context
-size and external GPU workloads vary. Start with a small worker count; 100 is
-accepted only if the estimate admits it. No populations or solver parameters
-are reduced to fit more workers.
-
-Workers process waves of seeds for the same solver and instance. Each worker
-has independent RNGs, solver state, CUDA context, deadline, and watchdog. All
-workers finish input preparation before any solver clock starts in that wave.
-The supervisor keeps draining other workers while each completed trial is
-independently scored and atomically saved. Progress includes active seeds.
-
-The 0.05 seconds is **per seed's solver wall time**: reset, algorithm setup,
-search and completed candidate capture. It excludes Python startup, readiness
-waiting, scoring and result writing. Each of four simultaneous seeds gets its
-own 0.05-second budget. Device/CPU contention within that interval still counts.
-Cooperative checks cannot guarantee an exact hard return at 50 ms; late
-candidates receive no timed quality credit and actual overshoot is reported.
-
-Parallel results are labeled `PARALLEL SHARED-DEVICE` / `parallel_shared_device`.
-Single-worker runs are `isolated_latency`. Worker mode/count form part of result
-identity, CSV metadata and resume checks; changing either starts a new result
-directory. The directory name includes `_w4_persistent_`, for example. These
-latency distributions must be compared separately. Resume uses the original
-worker policy automatically:
+The normal command selects every matching instance, all 23 available eligible
+solvers and seeds 0-99. It discovers all visible GPUs and writes **one complete
+experiment directory** across those GPUs. Separate shell invocations or manual
+25-seed partitions are unnecessary.
 
 ```bash
-python run_benchmark.py --resume results/EXACT_RESULT_DIRECTORY
-python monitor_benchmark.py results/EXACT_RESULT_DIRECTORY
+# All visible GPUs; measured concurrency, with a default ceiling of four per GPU.
+python run_benchmark.py 200 sparse 1 --require-gpu
+
+# All visible GPUs; one persistent worker per GPU, no pilot calibration.
+python run_benchmark.py 200 sparse 1 --require-gpu --no-autotune
+
+# Two workers on each selected GPU: four concurrent workers total.
+python run_benchmark.py 200 sparse 1 --devices cuda:0,cuda:2 --seed-workers 2 --require-gpu
+
+# Inspect selection and admission without executing calibration or solvers.
+python run_benchmark.py 200 sparse 1 --require-gpu --dry-run
 ```
+
+`--seed-workers auto` is the default. On CUDA, the runner tests one, two and four
+workers per GPU, limited by available seeds, host/VRAM admission and the default
+`--max-auto-workers 4`. The pilot samples up to two selected solvers, preferring
+greedy search and simulated bifurcation, on the selected instance with the most
+couplings. It first warms workers, then measures completed trials per second.
+Pilot budgets are bounded to 0.1-0.5 seconds. Pilot seeds are outside the campaign
+schedule and pilot outcomes never enter benchmark quality statistics.
+
+A higher worker count is accepted only if the measured throughput improves by
+more than 10% without worker failures. Calibration stops at the first failed or
+unhelpful count and retains the last accepted count. A failing single-worker
+baseline stops preflight. This is a bounded sample, not proof of the global
+optimum or performance for every solver. Candidate quality is not used to tune
+concurrency. Solver parameters, internal populations and mathematical updates
+are never changed. CPU fallback starts with one worker and skips GPU calibration.
+
+`--seed-workers N` explicitly requests 1-100 workers **per selected device** and
+skips calibration. On four GPUs, `--seed-workers 4` requests 16 workers total.
+`--no-autotune` with auto workers keeps one per device. `--max-auto-workers N`
+changes the pilot ceiling; powers of two up to that ceiling are considered.
+The chosen counts are frozen before creating the experiment and restored on
+resume without new pilot trials. A dry run reports initial admission only.
+
+`worker_capacity.json` records per-device and aggregate admission estimates.
+They combine the selected algorithms' working-memory estimates, free RAM/VRAM,
+a 1 GiB per-process host/GPU reserve, and an 80% memory allowance. Host memory
+is shared across all GPUs. CPU affinity and Linux cgroup CPU/memory limits are
+checked, rather than treating the physical host's capacity as fully available.
+At least one CPU worker slot is allowed per selected GPU; this can still share
+a small container CPU quota. The estimate does not guarantee that allocations
+fit or establish an optimal count. Actual context size and external load vary.
+
+Workers retain their GPU assignment and cache only immutable input. A shared
+queue interleaves solver/instance groups, so different solvers and independent
+seeds can run at the same time. Workers prefer their current group to reuse
+inputs and take remaining seeds when other groups finish. Every logical
+solver/instance/seed trial is scheduled once. There is one startup readiness
+barrier; afterward workers need not wait for a slower peer before taking their
+next trial. Each process has independent RNGs, solver state, a deadline and a
+watchdog. The result queue is bounded; workers can continue while completed
+trials are independently scored and durably saved.
+
+The time limit remains **per seed's solver wall time**: reset, algorithm setup,
+search and completed candidate capture. It excludes process startup, readiness,
+scoring, cleanup and writing results. Each simultaneous seed receives its own
+full budget, but CPU/GPU contention within that interval counts. Increasing
+concurrency may reduce the search each seed completes in that budget. Late
+captures receive no timed quality credit, and actual overshoot is reported.
+
+Execution modes distinguish these comparisons:
+
+| Mode | Meaning |
+|---|---|
+| `isolated_latency` | One worker on one selected device. |
+| `multi_gpu_isolated` | One worker per GPU; GPUs run different trials, with shared host resources. |
+| `parallel_shared_device` | At least one GPU/device has multiple workers sharing its capacity. |
+
+These modes describe this runner's own workers, not exclusive ownership of the
+host. Do not pool their timing/quality distributions as if resource allocation
+were identical. Device identities, per-device worker counts and execution mode
+are recorded in resume identity and CSV metadata. The directory name includes
+`_g4_w8_persistent_`, for example, for four devices and eight total workers.
+Changing the selected devices or counts starts a new experiment.
 
 Separate CUDA processes may time-share instead of overlapping GPU kernels.
 [NVIDIA MPS](https://docs.nvidia.com/deploy/mps/latest/index.html) can improve
-overlap on supported configurations; this runner does not configure the host
-MPS service. Multiprocess execution alone does not establish a GPU speedup.
-Run only one benchmark invocation per GPU. Schema-2 result files remain
-historical artifacts; strict source/protocol identity prevents resuming them
-with this schema-3 runner.
+overlap on supported configurations; this runner does not configure host MPS.
+Small QUBOs may remain limited by launches, synchronization or CPU work. GPU
+activity is not achieved TFLOPS, and full theoretical utilization is not promised.
+GPU speedup must be measured on the target hardware; CPU tests cannot establish
+it. Use one scheduler invocation for the selected GPUs. Historical schema-2/3
+results remain preserved artifacts, but strict source/protocol identity prevents
+resuming them with this schema-4 runner.
 
 ## Run, monitor and resume
 
@@ -267,13 +334,27 @@ Use the exact directory printed after `Output:` in place of
 Progress includes solver/instance/seed position, overall completion, latest/best
 gap from committed trials, and provisional hit counts. Heartbeats continue
 through worker setup and solving; current-trial gaps appear after independent
-post-run scoring.
+post-run scoring. `status.json` also records active solver/instance/seed/device
+assignments and the latest `hardware_telemetry` snapshot. The background sampler
+uses `nvidia-smi` approximately every two seconds, matching device UUIDs where
+available. Missing/unsupported telemetry remains null with a reason and does
+not stop trials. Device activity includes other processes and does not measure
+achieved TFLOPS. The monitor reads saved status without creating a CUDA context.
 
 Resume restores the original solver/seed/configuration selection automatically:
 
 ```bash
 python run_benchmark.py --resume results/ACTUAL_TEST_DIRECTORY
 python run_benchmark.py --resume results/ACTUAL_TEST_DIRECTORY --retry-failed
+```
+
+It also restores the selected GPU inventory and frozen worker counts; calibration
+does not run again. Normal execution, monitoring and resume are therefore:
+
+```bash
+python run_benchmark.py 200 sparse 0.05
+python monitor_benchmark.py results/ACTUAL_TEST_DIRECTORY
+python run_benchmark.py --resume results/ACTUAL_TEST_DIRECTORY
 ```
 
 Resume rejects different source content/commit, data, references, hardware,
@@ -296,13 +377,15 @@ a valid timed score.
 
 ```text
 results/
-  n200_sparse_t0p050s_all_w1_persistent_<UTC>_<unique-id>/
+  n200_sparse_t0p050s_all_g4_w8_persistent_<UTC>_<unique-id>/
     BENCHMARK_DEFINITIONS.txt
     experiment.json                 # frozen identity and complete plan
     experiment_metadata.csv
     environment.json
     environment.csv
-    worker_capacity.json            # admission estimate, not measured capacity
+    worker_capacity.json            # per-device and aggregate memory/CPU admission
+    autotune.json                   # excluded pilot evidence and chosen counts, or skip reason
+    hardware_telemetry.csv           # sampled device activity/memory/power, not TFLOPS
     reference_snapshot.json
     solver_configuration.json
     solver_registry.csv             # all 28, including exclusion reasons
@@ -312,7 +395,7 @@ results/
     execution_plan.csv
     status.json
     progress.log
-    summary.csv                     # per instance/solver, never pooled
+    summary.csv                     # per instance/solver; refreshed about every 5 s and at completion
     warmups.csv
     finalization.csv
     attempts/<run-id>__0001.json     # durable authoritative records
@@ -329,7 +412,9 @@ results/
 ```
 
 `.lock` exists only while writing; `csv_recovery.log` appears when needed.
-Runtime result schema version is 3 (solver-parameter/catalog version remains 2).
+The example directory uses four devices and eight workers total; the actual
+counts depend on selection and calibration. Runtime result schema version is 4
+(solver-parameter/catalog version remains 2).
 CSV nulls are empty fields, not zero. Algorithm parameters
 use SHA-256 of sorted compact canonical JSON; source/data/reference/execution
 identities are separately recorded. Raw and best-in-budget vectors are linked
@@ -341,18 +426,22 @@ result is synthesized when the configured method did not produce one.
 ```bash
 python run_benchmark_grid.py --instances representative --dry-run
 python run_benchmark_grid.py --instances representative
-python run_benchmark_grid.py --device cuda:0 --require-gpu
-python run_benchmark_grid.py --device cuda:0 --require-gpu --resume results/campaign_ACTUAL_ID
+python run_benchmark_grid.py --require-gpu
+python run_benchmark_grid.py --require-gpu --resume results/campaign_ACTUAL_ID
 python aggregate_benchmarks.py results --output analysis
 ```
 
-The grid has 36 sequential configurations and calls the same public runner.
+The grid has 36 sequential configurations and calls the same public runner;
+within each configuration all selected GPUs run concurrent solver/seed work.
 Its default is all instances and 100 seeds: 510,600 trials with 23 solvers.
 Representative mode is explicitly limited coverage. The campaign manifest is
 immutable; resume requires the same grid arguments and environment. Child
 directories are `campaign_<id>/configuration_00/<test-directory>` through
 `configuration_35/`. Trial failures remain recorded and do not skip later grid
-configurations; preflight failures or interruption stop the grid. The full grid
+configurations; preflight failures or interruption stop the grid. Auto calibration
+is performed separately for each new configuration, so worker counts may differ
+between sizes/densities/budgets while mathematical solver parameters stay fixed.
+Each resumed child restores its saved counts. The full grid
 has **not** been executed during implementation.
 
 Aggregation writes `runs.csv`, `solutions.csv`, `trace.csv`, `summary.csv`,
@@ -365,7 +454,7 @@ For an optional Linux session that survives SSH disconnection:
 
 ```bash
 tmux new -s qubo-benchmark
-python run_benchmark.py 200 sparse 0.05 --device cuda:0 --require-gpu
+python run_benchmark.py 200 sparse 0.05 --require-gpu
 # Detach with Ctrl-b, then d; reconnect with: tmux attach -t qubo-benchmark
 tar -czf qubo-results.tar.gz results
 # From your own computer, copy from your existing host:
@@ -385,14 +474,16 @@ python run_benchmark.py 200 sparse 0.05 --instances representative --runs 1 --de
 For a focused worker/timing check without the full suite or full campaign:
 
 ```bash
-python -m pytest tests/test_runtime_workers.py tests/test_runtime_benchmark.py -q
-python run_benchmark.py 200 sparse 0.05 --instances representative --runs 4 --solvers lib_random_search --seed-workers 2 --device cuda:0 --require-gpu --output-root benchmark_results/parallel_smoke
+python -m pytest tests/test_runtime_workers.py tests/test_runtime_benchmark.py tests/test_runtime_devices.py -q
+python run_benchmark.py 200 sparse 0.05 --instances representative --runs 4 --solvers lib_random_search --no-autotune --require-gpu --output-root benchmark_results/multi_gpu_smoke
 ```
 
-Repeat that smoke command for the other five size/density pairs to invoke every
-eligible method on each representative. It is labeled `NONSTANDARD SMOKE` and
-is not a 100-seed scientific result. On NVIDIA hardware, use `--device cuda:0
---require-gpu` and run the same tests; locally skipped CUDA tests must then run.
+This smoke invokes only random search on one representative, using all visible
+GPUs and four seeds total. Remove `--solvers lib_random_search` to check every
+eligible method, or select another explicit method for a focused diagnostic.
+Repeating with other size/density pairs changes the representative. It is labeled `NONSTANDARD SMOKE` and
+is not a 100-seed scientific result. On NVIDIA hardware, use `--require-gpu`
+and run the same tests; locally skipped CUDA tests must then run.
 For a method without a 50 ms candidate, a separately labeled longer-budget
 smoke can verify scoring without altering the 50 ms result.
 
@@ -407,6 +498,8 @@ capture deadlines and independently reconstructs every saved best score.
 | Field | Meaning and inclusion |
 |---|---|
 | `static_setup_s` | Parent-observed preparation through ready; first use includes startup, imports, loading, native transfer and warmup. Reused cache hits skip them. |
+| `actual_device`, `workers_on_device`, `seed_workers` | Device executing this trial, frozen workers on that device, and total workers across the scheduler. |
+| `execution_mode`, `execution_policy_hash` | Resource-sharing label and frozen execution policy; preserve when comparing or aggregating results. |
 | `transfer_s` | Native canonical tensor construction, device copy and synchronization; subset of static setup, not a pure PCIe measurement. Null for compact backends. |
 | `warmups.csv:warmup_s` | Zero-GEMM warmup; subset of setup. |
 | `trial_reset_init_s` | Timed prefix through global RNG reset. Algorithm-specific state initialization follows inside solve time. |
@@ -437,5 +530,6 @@ hash uses UTF-8 encoding of Python `repr` of the first observed binary batch.
 GPU observation guidance used the local optimize-for-gpu skill. Attribution:
 Kassis, T., Agarwal, V., He, Y., Patel, D., and Brueckner, A. M. (2026),
 *Scientific Agent Skills: A Library of Procedural Knowledge for Research Agents*,
-https://doi.org/10.48550/arXiv.2609.00065. Local CPU tests establish no CUDA
-speedup or timing-performance claim.
+https://doi.org/10.48550/arXiv.2609.00065. The local memory-optimization skill also
+guided bounded queues and streamed result storage. Actual GPU evidence and its
+limits are recorded in [MULTIGPU_VALIDATION.md](MULTIGPU_VALIDATION.md).

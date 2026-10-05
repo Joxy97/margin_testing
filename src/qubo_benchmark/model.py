@@ -32,17 +32,47 @@ class Problem:
         for name, a in [('rows',r),('cols',c),('values',v)]:
             a = a.copy(); a.flags.writeable = False
             object.__setattr__(self, name, a)
+        # Scoring coefficients are immutable problem data, not solver state.
+        # Establish overflow safety once instead of walking every coefficient
+        # in Python for every independently audited candidate.
+        factors = np.where(self.rows == self.cols, 1, 2)
+        integer = self.values.dtype.kind in 'iu' and float(self.offset).is_integer()
+        bound = None
+        if integer:
+            offset = int(self.offset)
+            maximum = max(abs(int(v.min())), abs(int(v.max()))) if len(v) else 0
+            coarse_bound = abs(offset) + maximum * int(factors.sum(dtype=np.int64))
+            limit = np.iinfo(np.int64).max
+            if coarse_bound <= limit:
+                # The proof also makes conversion from unsigned and doubling
+                # safe, including narrow input types such as int8 and uint8.
+                coefficients = self.values.astype(np.int64) * factors
+                bound = abs(offset) + int(np.abs(coefficients).sum(dtype=np.int64))
+            else:
+                # Use Python integers for INT64_MIN, uint64 and large sums.
+                # Never take NumPy abs(INT64_MIN) or cast uint64 before proof.
+                coefficients = tuple(int(value)*int(factor) for value,factor in zip(self.values,factors))
+                bound = abs(offset) + sum(abs(value) for value in coefficients)
+                if bound <= limit:coefficients = np.asarray(coefficients,dtype=np.int64)
+        else:
+            offset = self.offset
+            coefficients = self.values.astype(np.float64) * factors
+        if isinstance(coefficients,np.ndarray):coefficients.flags.writeable = False
+        object.__setattr__(self,'_score_integer',integer)
+        object.__setattr__(self,'_score_offset',offset)
+        object.__setattr__(self,'_score_coefficients',coefficients)
+        object.__setattr__(self,'_score_absolute_bound',bound)
 
     def score(self, sample):
         x = binaryVector(sample, self.n)
-        factors = np.where(self.rows == self.cols, 1, 2)
         selected = x[self.rows] * x[self.cols]
-        if self.values.dtype.kind in 'iu' and float(self.offset).is_integer():
-            bound = abs(int(self.offset)) + sum(abs(int(v))*int(f) for v,f in zip(self.values,factors))
-            if bound <= np.iinfo(np.int64).max and self.values.dtype.kind != 'u':
-                return int(self.offset) + int(np.sum(self.values*factors*selected, dtype=np.int64))
-            return int(self.offset) + sum(int(v)*int(f)*int(s) for v,f,s in zip(self.values,factors,selected))
-        return float(self.offset + np.sum(self.values.astype(np.float64)*factors*selected))
+        coefficients = self._score_coefficients
+        if self._score_integer:
+            if isinstance(coefficients,np.ndarray):
+                return self._score_offset + int(np.dot(coefficients,selected))
+            return self._score_offset + sum(value for value,active in zip(coefficients,selected) if active)
+        # Keep the original float64 reduction order, including zero terms.
+        return float(self._score_offset + np.sum(coefficients*selected))
 
     def sparse(self):
         from scipy.sparse import coo_matrix

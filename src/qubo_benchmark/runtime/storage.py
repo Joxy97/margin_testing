@@ -1,9 +1,11 @@
 """Durable per-attempt records are authoritative; CSVs are repairable materializations."""
 from collections import defaultdict
 from pathlib import Path
+from contextlib import contextmanager, ExitStack
 import statistics
 import csv
-from .common import SCHEMA,atomic,read,digest,table,flattened,utc
+import os
+from .common import SCHEMA,atomic,read,digest,table,canonical,utc
 
 RUN_FIELDS = """
 schema_version campaign_id test_id run_id attempt_id instance_id problem_family n_variables density_category
@@ -12,6 +14,7 @@ raw_source_sha256 normalized_problem_sha256 catalog_sha256 reference_snapshot_sh
 solver_id solver_version adapter_version code_commit code_dirty code_snapshot_hash parameters_hash parameters_json
 execution_policy_hash seed_index seed rng_backend initialization_policy initialization_hash seed_effective
 worker_mode seed_workers execution_mode worker_id worker_pid worker_reused input_cache_hit worker_trial_index wave_id wave_size
+workers_on_device requested_devices_json
 deterministic_mode population_size replicas internal_batch_size restarts cpu_threads requested_device actual_device
 backend precision hardware_id environment_hash warmup_id execution_order_index session_id requested_time_s timing_scope
 started_at_utc finished_at_utc trial_reset_init_s algorithm_preprocess_s actual_solve_wall_s gpu_elapsed_s
@@ -37,6 +40,10 @@ independent_objective completed_elapsed_s within_budget valid solution_sha256"""
 TRACE_FIELDS="""schema_version run_id attempt_id event_index solution_id elapsed_s iteration evaluation_count phase
 solver_reported_energy independently_evaluated_objective independently_validated_best_so_far signed_gap
 signed_gap_percent near_target_hit reference_target_hit within_budget timestamp_kind valid""".split()
+WARMUP_FIELDS="""schema_version run_id attempt_id static_setup_s transfer_s warmup_s warmup_policy
+matrix_storage_format matrix_storage_bytes worker_id worker_pid worker_reused input_cache_hit
+worker_ready_wall_s device extra_json""".split()
+FINALIZATION_FIELDS=['attempt_id','serialization_s','trial_end_to_end_s','note','extra_json']
 
 def plan(core):
     rows=[]
@@ -53,15 +60,25 @@ def plan(core):
                                  seed_index=index,seed=seed,execution_order_index=len(rows)))
     return rows
 
-def load_attempts(directory):
-    records=[]
+def _read_attempt(path):
+    wrapper=read(path)
+    if wrapper.get('sha256')!=digest(wrapper['payload']):raise ValueError(f'Corrupt attempt journal: {path}')
+    payload=wrapper['payload']
+    if payload['run'].get('schema_version')!=SCHEMA or set(payload['run'])!=set(RUN_FIELDS):
+        raise ValueError(f'Attempt schema conflict: {path}')
+    return payload
+
+def iter_attempts(directory):
+    """Read and validate at most one complete solution/history payload at a time."""
     for path in sorted((Path(directory)/'attempts').glob('*.json')):
-        wrapper=read(path)
-        if wrapper.get('sha256')!=digest(wrapper['payload']):raise ValueError(f'Corrupt attempt journal: {path}')
-        payload=wrapper['payload']
-        if payload['run'].get('schema_version')!=SCHEMA or set(payload['run'])!=set(RUN_FIELDS):
-            raise ValueError(f'Attempt schema conflict: {path}')
-        records.append(payload)
+        yield _read_attempt(path)
+
+def compact_attempt(payload):
+    """Keep scientific run metadata in RAM; large traces live in the durable journal."""
+    return dict(run=payload['run'],attempt_number=payload['attempt_number'])
+
+def load_attempts(directory,compact=False):
+    records=[compact_attempt(a) if compact else a for a in iter_attempts(directory)]
     records.sort(key=lambda r:(r['run']['execution_order_index'],r['attempt_number']))
     return records
 
@@ -73,8 +90,11 @@ def primary(attempts):
         if row['result_status']!='interrupted':selected.setdefault(row['run_id'],item)
     return selected
 
+def _attempt_path(directory,payload):
+    return Path(directory)/'attempts'/f"{payload['run']['run_id']}__{payload['attempt_number']:04d}.json"
+
 def commit(directory,payload):
-    path=Path(directory)/'attempts'/f"{payload['run']['run_id']}__{payload['attempt_number']:04d}.json"
+    path=_attempt_path(directory,payload)
     if path.exists():raise ValueError('Attempt already committed; refusing overwrite')
     atomic(path,dict(sha256=digest(payload),payload=payload))
 
@@ -86,18 +106,21 @@ def statistics_fields(prefix,values):
 
 def summaries(experiment,attempts):
     selected=primary(attempts);groups=defaultdict(list)
+    attempts_by_group=defaultdict(list)
+    for attempt in attempts:
+        attempts_by_group[(attempt['run']['solver_id'],attempt['run']['instance_id'])].append(attempt)
     for row in experiment['execution_plan']:groups[(row['solver_id'],row['instance_id'])].append(row)
     result=[]
     for (solver,instance),scheduled in groups.items():
         records=[selected[r['run_id']]['run'] for r in scheduled if r['run_id'] in selected]
         valid=[r for r in records if r['result_status']=='completed']
         hits=sum(bool(r['success_1pct']) for r in valid);total=len(scheduled);terminal=len(records)
-        ids={r['run_id'] for r in scheduled}
-        all_attempts=[a for a in attempts if a['run']['run_id'] in ids]
+        all_attempts=attempts_by_group[(solver,instance)]
         row=dict(schema_version=SCHEMA,test_id=experiment['test_id'],campaign_id=experiment['campaign_id'],
             solver_id=solver,instance_id=instance,budget_s=experiment['core']['budget_s'],
             execution_policy_hash=digest(experiment['core']['protocol']['execution']),
             **{k:experiment['core']['protocol']['execution'][k] for k in ('worker_mode','seed_workers','execution_mode')},
+            actual_devices_json=sorted({r['actual_device'] for r in records if r.get('actual_device')}),
             hardware_id=experiment['environment']['hardware_id'],parameters_hash=digest(experiment['core']['solvers'][solver]),
             planned=total,terminal=terminal,pending=total-terminal,attempted=len(all_attempts),
             completed_valid=len(valid),failures=terminal-len(valid),skipped=0,
@@ -125,24 +148,107 @@ def summaries(experiment,attempts):
         result.append(row)
     return result
 
-def materialize(directory,experiment,attempts):
-    directory=Path(directory);summary=summaries(experiment,attempts)
+def _csv_row(row):
+    return {key:canonical(value) if isinstance(value,(dict,list,tuple)) else value
+            for key,value in row.items()}
+
+def _extensible_row(row,fields):
+    """Keep setup/diagnostic extensions without growing CSV headers mid-campaign."""
+    known={key:row.get(key) for key in fields if key!='extra_json'}
+    known['extra_json']={key:value for key,value in row.items() if key not in fields}
+    if row.get('extra_json'):known['extra_json'].update(row['extra_json'])
+    return known
+
+def append_csv(path,rows,fields):
+    """Append only new rows. A single campaign writer owns these repairable exports."""
+    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
+    exists=path.exists() and path.stat().st_size>0
+    if exists:
+        with path.open(newline='',encoding='utf-8') as handle:
+            if next(csv.reader(handle),None)!=fields:
+                raise ValueError(f'CSV header conflict; rebuild projections from journal: {path}')
+    with path.open('a',newline='',encoding='utf-8') as handle:
+        writer=csv.DictWriter(handle,fieldnames=fields,quoting=csv.QUOTE_ALL,extrasaction='raise')
+        if not exists:writer.writeheader()
+        for row in rows:writer.writerow(_csv_row(row))
+        handle.flush();os.fsync(handle.fileno())
+
+def _error_line(payload):
+    row=payload['run']
+    return f"{row['attempt_id']} {row['result_status']}: {row['error_message']}\n"
+
+def append_projection(directory,experiment,payload):
+    """Call once after commit; recovery always rebuilds CSVs from authoritative JSON.
+
+    Do not retry an interrupted append in place: some files may already contain
+    it. Resuming/rebuilding first repairs both missing rows and partial appends.
+    """
+    directory=Path(directory);solver=payload['run']['solver_id']
+    if solver not in experiment['core']['solvers']:raise ValueError('Unknown solver in attempt projection')
+    path=directory/'solvers'/solver
+    append_csv(path/'runs.csv',[payload['run']],RUN_FIELDS)
+    append_csv(path/'solutions.csv',payload['solutions'],SOLUTION_FIELDS)
+    append_csv(path/'trace.csv',payload['trace'],TRACE_FIELDS)
+    append_csv(directory/'warmups.csv',[_extensible_row(payload['warmup'],WARMUP_FIELDS)],WARMUP_FIELDS)
+    if payload['run']['result_status']!='completed':
+        with (path/'errors.log').open('a',encoding='utf-8') as handle:
+            handle.write(_error_line(payload));handle.flush();os.fsync(handle.fileno())
+
+def append_finalization(directory,attempt_id,info):
+    """Durably record measured overhead after the attempt/projection writes finish."""
+    directory=Path(directory)
+    atomic(directory/'finalization'/f'{attempt_id}.json',info)
+    append_csv(directory/'finalization.csv',
+        [_extensible_row(dict(attempt_id=attempt_id,**info),FINALIZATION_FIELDS)],FINALIZATION_FIELDS)
+
+def refresh_summaries(directory,experiment,attempts):
+    summary=summaries(experiment,attempts);directory=Path(directory)
     for solver in experiment['core']['solvers']:
-        own=[a for a in attempts if a['run']['solver_id']==solver];path=directory/'solvers'/solver
-        table(path/'runs.csv',[a['run'] for a in own],RUN_FIELDS)
-        table(path/'solutions.csv',[s for a in own for s in a['solutions']],SOLUTION_FIELDS)
-        table(path/'trace.csv',[t for a in own for t in a['trace']],TRACE_FIELDS)
-        table(path/'summary.csv',[s for s in summary if s['solver_id']==solver])
-        with (path/'errors.log').open('w',encoding='utf-8') as handle:
-            for a in own:
-                if a['run']['result_status']!='completed':
-                    handle.write(f"{a['run']['attempt_id']} {a['run']['result_status']}: {a['run']['error_message']}\n")
+        table(directory/'solvers'/solver/'summary.csv',[s for s in summary if s['solver_id']==solver])
     table(directory/'summary.csv',summary)
-    table(directory/'warmups.csv',[a['warmup'] for a in attempts])
-    # Durations are measured after the atomic attempt commit; never guessed in a row.
-    table(directory/'finalization.csv',[dict(attempt_id=a['run']['attempt_id'],**read(path))
-          for a in attempts if (path:=directory/'finalization'/f"{a['run']['attempt_id']}.json").exists()])
     return summary
+
+@contextmanager
+def csv_stream(path,fields):
+    """Atomic streaming replacement without retaining the table's rows in RAM."""
+    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
+    temp=path.with_name(path.name+'.tmp')
+    try:
+        with temp.open('w',newline='',encoding='utf-8') as handle:
+            writer=csv.DictWriter(handle,fieldnames=fields,quoting=csv.QUOTE_ALL,extrasaction='raise')
+            writer.writeheader()
+            yield lambda row:writer.writerow(_csv_row(row))
+            handle.flush();os.fsync(handle.fileno())
+        os.replace(temp,path)
+    finally:temp.unlink(missing_ok=True)
+
+def materialize(directory,experiment,attempts):
+    """Full projection repair at startup/finalization, never after every trial.
+
+    Compact records are hydrated one at a time, so resident memory is independent
+    of the campaign's total solution/history size.
+    """
+    directory=Path(directory)
+    with ExitStack() as stack:
+        writers={};errors={}
+        for solver in experiment['core']['solvers']:
+            path=directory/'solvers'/solver
+            writers[solver]={name:stack.enter_context(csv_stream(path/(name+'.csv'),fields))
+                for name,fields in (('runs',RUN_FIELDS),('solutions',SOLUTION_FIELDS),('trace',TRACE_FIELDS))}
+            errors[solver]=stack.enter_context((path/'errors.log').open('w',encoding='utf-8'))
+        warmup=stack.enter_context(csv_stream(directory/'warmups.csv',WARMUP_FIELDS))
+        finalization=stack.enter_context(csv_stream(directory/'finalization.csv',FINALIZATION_FIELDS))
+        for item in attempts:
+            payload=item if 'trace' in item else _read_attempt(_attempt_path(directory,item))
+            own=writers[payload['run']['solver_id']]
+            own['runs'](payload['run'])
+            for row in payload['solutions']:own['solutions'](row)
+            for row in payload['trace']:own['trace'](row)
+            warmup(_extensible_row(payload['warmup'],WARMUP_FIELDS))
+            if payload['run']['result_status']!='completed':errors[payload['run']['solver_id']].write(_error_line(payload))
+            aid=payload['run']['attempt_id'];path=directory/'finalization'/f'{aid}.json'
+            if path.exists():finalization(_extensible_row(dict(attempt_id=aid,**read(path)),FINALIZATION_FIELDS))
+    return refresh_summaries(directory,experiment,attempts)
 
 def check_resume_exports(directory,experiment,attempts):
     """Validate immutable journal identity and detect damaged materialized CSVs."""

@@ -1,5 +1,6 @@
 """Bounded checks for reusable workers, parallel seed isolation and solve-only clocks."""
 import os
+import hashlib
 import time
 from types import SimpleNamespace
 import numpy as np
@@ -10,6 +11,7 @@ from qubo_benchmark.runtime import pool,engine,storage
 from qubo_benchmark.runtime.common import CONFIG,read
 from qubo_benchmark.runtime.selection import preflight,select_solvers,worker_capacity,PROTOCOL
 from qubo_benchmark.runtime.cli import parser,resolve
+from qubo_benchmark.runtime.worker import Observer
 
 
 def controlled_server(connection,stop):
@@ -43,6 +45,23 @@ def controlled_server(connection,stop):
 def base_job(**overrides):
     return dict(dict(device='cpu',budget=.05,watchdog_grace_s=.1,setup_timeout_s=30,
         memory_sampling_interval_s=.01,heartbeat_interval_s=1.,seed=0),**overrides)
+
+
+@pytest.mark.parametrize('dtype',[torch.float32,torch.float64,torch.int8,torch.bool])
+def test_vectorized_capture_preserves_bits_and_initialization_hash(dtype):
+    samples=torch.tensor([[0,1,0],[1,0,1]],dtype=dtype)
+    messages=[];observer=Observer(10,messages.append)
+    observer.capture(samples,phase='initial')
+    expected=hashlib.sha256(repr(samples.tolist()).encode()).hexdigest()
+    assert observer.initialization_hash==expected
+    samples.fill_(0)
+    assert [e['bitstring'] for e in messages[0]['events']]==['010','101']
+
+
+def test_vectorized_capture_keeps_invalid_values_visible():
+    messages=[];observer=Observer(10,messages.append)
+    observer.capture(torch.tensor([[.5,1.],[float('nan'),0.]]))
+    assert [e['bitstring'] for e in messages[0]['events']]==['[0.5, 1.0]','[nan, 0.0]']
 
 
 def test_parallel_readiness_and_setup_outside_budget(monkeypatch):
@@ -80,6 +99,42 @@ def test_pool_watchdog_and_fatal_gpu_abort(monkeypatch):
         # Controlled IPC-only CUDA job exercises failure policy without GPU hardware.
         result=dict(workers.wave([base_job(device='cuda:0',fail=True)],lambda _:None))[0]
         assert result['abort_gpu'] and workers.abort.is_set()
+    finally:workers.close()
+
+
+def test_buffered_completion_is_drained_before_watchdog(monkeypatch):
+    """Parent scheduling delays must not turn a completed seed into GPU loss."""
+    monkeypatch.setattr(pool,'serve',controlled_server)
+    workers=pool.SeedPool(1,'persistent',lambda:False)
+    slot=workers.slots[0];receive=slot.receive
+    def delayed_receive():
+        message=receive()
+        if message is not None and message['kind']=='started':
+            # Child completes in 25 ms; parent resumes after the 150 ms
+            # watchdog deadline with events and done already waiting in IPC.
+            time.sleep(.25)
+        return message
+    monkeypatch.setattr(slot,'receive',delayed_receive)
+    try:
+        result=dict(workers.wave([base_job(device='cuda:0')],lambda _:None))[0]
+        assert result['done']['error'] is None
+        assert result['done']['actual_solve_wall_s']<.05
+        assert result['events'][0]['bitstring']=='00'
+        assert not result['abort_gpu']
+        assert result['worker_end_to_end_s']>.25
+    finally:workers.close()
+
+
+def test_slot_runs_jobs_without_a_wave_barrier(monkeypatch):
+    monkeypatch.setattr(pool,'serve',controlled_server)
+    workers=pool.SeedPool(1,'persistent',lambda:False)
+    try:
+        first=workers.slots[0].run_job(base_job(seed=0))
+        second=workers.slots[0].run_job(base_job(seed=1))
+        assert first['done']['error'] is None and second['done']['error'] is None
+        assert first['setup']['worker_pid']==second['setup']['worker_pid']
+        assert second['setup']['worker_reused']
+        assert first['events'][0]['bitstring']!=second['events'][0]['bitstring']
     finally:workers.close()
 
 

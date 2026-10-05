@@ -84,6 +84,7 @@ class WorkerSlot:
 
     def run(self):
         origin=None;dispatched=time.perf_counter();next_sample=0.;solved=None;cleanup_started=None
+        stopping=None
         try:
             if self.stopped():return self.finish(dict(error='interrupted'))
             self.connection.send(dict(action='run'))
@@ -93,14 +94,20 @@ class WorkerSlot:
                 if now>=next_sample:
                     self.sample();next_sample=now+self.job['memory_sampling_interval_s']
                 message=self.receive()
-                if message:
+                # Drain queued captures and terminal messages before applying a
+                # wall-clock watchdog. Parent scoring or OS scheduling can leave
+                # an already completed result behind older event packets.
+                while message is not None:
                     kind=message.pop('kind')
                     if kind=='started':origin=message['origin_ns'];self.started=message['started_at_utc']
                     elif kind=='events':self.events.extend(message['events'])
+                    elif kind=='stopping':stopping=message
                     elif kind=='solved':solved=message;cleanup_started=time.perf_counter()
                     elif kind=='done':return self.finish(message)
                     elif kind=='fatal':return self.finish(dict(message,error='worker_error'),forced=True)
                     else:raise ValueError(f'Unexpected worker response {kind}')
+                    message=self.connection.recv() if self.connection.poll() else None
+                now=time.perf_counter()
                 elapsed=(time.perf_counter_ns()-origin)/1e9 if origin is not None else None
                 if solved is not None:
                     if now-cleanup_started>self.job['setup_timeout_s']:
@@ -110,9 +117,15 @@ class WorkerSlot:
                 if ((elapsed is not None and elapsed>self.job['budget']+self.job['watchdog_grace_s']) or
                     (origin is None and now-dispatched>self.job['setup_timeout_s'])):
                     return self.finish(dict(error='watchdog_timeout',stop_reason='watchdog',
-                        error_message='Supervisor cutoff; no post-deadline quality credit',actual_solve_wall_s=elapsed),forced=True)
+                        error_message=('Supervisor cutoff during '+('device drain' if stopping else 'solver work')+
+                            '; no post-deadline quality credit'),actual_solve_wall_s=elapsed),forced=True)
         except (EOFError,OSError,ValueError) as exc:
             return self.finish(dict(error='worker_crash',error_message=str(exc)),forced=True)
+
+    def run_job(self,job):
+        """Run one job on this reusable slot; caller owns per-slot serialization."""
+        failure=self.prepare(job)
+        return failure if failure is not None else self.run()
 
 
 class SeedPool:

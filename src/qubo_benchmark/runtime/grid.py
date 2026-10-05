@@ -5,23 +5,27 @@ import subprocess
 import sys
 import uuid
 from .common import ROOT,CONFIG,read,atomic,digest,DirectoryLock,source_identity
-from .selection import grid,environment
+from .selection import grid,environment,worker_argument
 
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--instances',choices=['all','representative'],default='all')
     p.add_argument('--config',default=str(CONFIG/'benchmark_solvers.json'))
-    p.add_argument('--device',default='auto');p.add_argument('--solvers',default='all')
+    p.add_argument('--device','--devices',dest='device',default='auto');p.add_argument('--solvers',default='all')
     p.add_argument('--output-root',default='results');p.add_argument('--runs',type=int,default=100)
     p.add_argument('--seed-start',type=int,default=0);p.add_argument('--seeds-file')
-    p.add_argument('--seed-workers',type=int,default=1)
+    p.add_argument('--seed-workers',type=worker_argument,default='auto')
+    p.add_argument('--no-autotune',action='store_true')
+    p.add_argument('--max-auto-workers',type=int,default=4)
     p.add_argument('--worker-mode',choices=['persistent','fresh'],default='persistent')
     p.add_argument('--require-gpu',action='store_true');p.add_argument('--dry-run',action='store_true')
     p.add_argument('--resume');p.add_argument('--retry-failed',action='store_true')
     args=p.parse_args(argv)
     common=['--instances',args.instances,'--config',str(Path(args.config).resolve()),'--device',args.device,
             '--solvers',args.solvers,'--runs',str(args.runs),'--seed-start',str(args.seed_start),
-            '--seed-workers',str(args.seed_workers),'--worker-mode',args.worker_mode]
+            '--seed-workers',str(args.seed_workers),'--worker-mode',args.worker_mode,
+            '--max-auto-workers',str(args.max_auto_workers)]
+    if args.no_autotune:common+=['--no-autotune']
     if args.seeds_file:common+=['--seeds-file',str(Path(args.seeds_file).resolve())]
     if args.require_gpu:common+=['--require-gpu']
     commands=[[sys.executable,str(ROOT/'run_benchmark.py'),str(n),density,str(t),*common] for n,density,t in grid()]

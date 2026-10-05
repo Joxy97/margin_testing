@@ -5,19 +5,21 @@ import signal
 import time
 import uuid
 from contextlib import closing
-from itertools import groupby
-from .common import ROOT,CONFIG,SCHEMA,utc,digest,atomic,read,table,flattened,DirectoryLock,source_identity
+from functools import lru_cache
+from .common import ROOT,CONFIG,SCHEMA,utc,digest,atomic,read,table,flattened,DirectoryLock,source_snapshot_hash
 from .selection import preflight
-from .storage import RUN_FIELDS,plan,load_attempts,primary,commit,materialize,check_resume_exports
+from .storage import (RUN_FIELDS,plan,load_attempts,primary,commit,materialize,check_resume_exports,
+                      append_projection,append_finalization,compact_attempt,refresh_summaries)
 from .metrics import evaluate
 from .supervisor import trial
-from .pool import SeedPool
+from .scheduler import DeviceScheduler
+from .telemetry import Telemetry
 
 def initialize(prepared,output_root):
     core=prepared['core'];test_id=uuid.uuid4().hex[:12]
     stamp=utc().replace(':','').replace('-','').replace('.','')[:15]
     policy=core['protocol']['execution']
-    name=f"n{core['n']}_{core['density']}_t{core['budget_s']:.3f}s_{core['instance_mode']}_w{policy['seed_workers']}_{policy['worker_mode']}_{stamp}_{test_id}".replace('.','p')
+    name=f"n{core['n']}_{core['density']}_t{core['budget_s']:.3f}s_{core['instance_mode']}_g{len(core['actual_devices'])}_w{policy['seed_workers']}_{policy['worker_mode']}_{stamp}_{test_id}".replace('.','p')
     directory=Path(output_root)/name;directory.mkdir(parents=True,exist_ok=False)
     campaign=digest(dict(solvers=core['solvers'],seeds=core['seeds'],protocol=core['protocol'],
                         reference=core['reference_snapshot_sha256'],environment=core['environment_hash'],
@@ -25,10 +27,11 @@ def initialize(prepared,output_root):
     experiment=dict(schema_version=SCHEMA,test_id=test_id,campaign_id=campaign,created_at=utc(),
                     identity=prepared['identity'],core=core,environment=prepared['environment'],
                     execution_plan=plan(core),label=('STANDARD' if core['standard'] else 'NONSTANDARD SMOKE')+
-                    (' PARALLEL SHARED-DEVICE' if policy['seed_workers']>1 else ' ISOLATED LATENCY'))
+                    ' '+policy['execution_mode'].upper())
     atomic(directory/'experiment.json',experiment)
     atomic(directory/'environment.json',prepared['environment'])
     atomic(directory/'worker_capacity.json',prepared['capacity'])
+    atomic(directory/'autotune.json',prepared.get('tuning',dict(note='Calibration not requested; concurrency explicit, resumed or default single-worker')))
     atomic(directory/'reference_snapshot.json',prepared['catalog'])
     atomic(directory/'solver_configuration.json',prepared['configuration'])
     atomic(directory/'seeds.json',core['seeds'])
@@ -50,10 +53,16 @@ def initialize(prepared,output_root):
     materialize(directory,experiment,[])
     return directory,experiment
 
-def assemble(experiment,item,scheduled,outcome,attempt_number,session,audit_started):
+@lru_cache(maxsize=4)
+def scoring_problem(path):
     from ..model import Problem
+    return Problem.load(path)
+
+
+def assemble(experiment,item,scheduled,outcome,attempt_number,session,audit_started):
     core=experiment['core'];entry=item['entry'];meta=item['metadata']
-    problem=Problem.load(item['npz']);done=outcome['done'];elapsed=done.get('actual_solve_wall_s')
+    problem=scoring_problem(item['npz']);done=outcome['done'];elapsed=done.get('actual_solve_wall_s')
+    device=outcome.get('actual_device',core['actual_device'])
     metrics,solutions,trace=evaluate(problem,outcome['events'],core['budget_s'],
                           entry['normalized_reference_objective_min'],entry['reference_status'],done.get('error'))
     audit=time.perf_counter()-audit_started
@@ -66,7 +75,7 @@ def assemble(experiment,item,scheduled,outcome,attempt_number,session,audit_star
         raw_source_sha256=item['raw_source_sha256'],normalized_problem_sha256=item['normalized_problem_sha256'],
         catalog_sha256=core['catalog_sha256'],reference_snapshot_sha256=core['reference_snapshot_sha256'],
         index_mapping_id=digest(meta['source_labels']),objective_offset=problem.offset,
-        solver_version='0.1.0',adapter_version='runtime-v3',**core['source'],
+        solver_version='0.1.0',adapter_version='runtime-v4',**core['source'],
         parameters_hash=digest(p),parameters_json=p,execution_policy_hash=digest(core['protocol']['execution']),
         rng_backend='Python Random; NumPy legacy + explicit per-trajectory Generators; Torch local Generators',
         initialization_policy='fresh solver object and reseeded RNGs inside solve clock; immutable input cache; compact seedOffset=0',
@@ -75,10 +84,12 @@ def assemble(experiment,item,scheduled,outcome,attempt_number,session,audit_star
         population_size=p['runs'],replicas=p.get('replicas'),internal_batch_size=p.get('run_batch_size'),
         worker_mode=core['protocol']['execution']['worker_mode'],
         seed_workers=core['protocol']['execution']['seed_workers'],
+        workers_on_device=core['protocol']['execution']['workers_per_device'][device],
+        requested_devices_json=core['actual_devices'],
         execution_mode=core['protocol']['execution']['execution_mode'],
         worker_trial_index=done.get('worker_trial_index'),
         restarts=p['runs'],cpu_threads=core['protocol']['execution']['cpu_threads'],
-        requested_device=core['requested_device'],actual_device=core['actual_device'],backend='torch',precision=p['dtype'],
+        requested_device=core['requested_device'],actual_device=device,backend='torch',precision=p['dtype'],
         hardware_id=experiment['environment']['hardware_id'],environment_hash=core['environment_hash'],
         warmup_id=attempt_id+'-warmup',static_setup_id=attempt_id+'-setup',session_id=session,
         requested_time_s=core['budget_s'],timing_scope=core['protocol']['execution']['timing_scope'],
@@ -106,7 +117,7 @@ def assemble(experiment,item,scheduled,outcome,attempt_number,session,audit_star
         cpu_rss_start_bytes=outcome['cpu_rss_start_bytes'],cpu_rss_peak_sampled_bytes=outcome['cpu_rss_peak_sampled_bytes'],
         cpu_memory_method='supervisor samples worker process tree RSS; may miss transient peaks',
         cpu_memory_sampling_interval_s=core['protocol']['execution']['memory_sampling_interval_s'],
-        gpu_memory_method='Torch allocator peak counters' if core['actual_device'].startswith('cuda') else 'not_applicable',
+        gpu_memory_method='Torch allocator peak counters' if device.startswith('cuda') else 'not_applicable',
         peak_memory_scope='timed reset/search/capture plus persistent input baseline; RSS sampled through return',
         unsupported_measurements='algorithm_preprocess_s not isolated; reset field excludes algorithm-specific initialization; '
           'serialization/end-to-end finalization in finalization.csv; GPU event/process sampling unavailable; evaluation counters unavailable')
@@ -123,7 +134,8 @@ def assemble(experiment,item,scheduled,outcome,attempt_number,session,audit_star
             note='native dense representation prepared before clock, or preprocessing interrupted before matrix became ready')
     linkage=dict(schema_version=SCHEMA,run_id=scheduled['run_id'],attempt_id=attempt_id)
     return dict(run=row,solutions=[dict(s,**linkage) for s in solutions],trace=[dict(t,**linkage) for t in trace],
-                attempt_number=attempt_number,warmup=dict(linkage,**outcome['setup']))
+                attempt_number=attempt_number,warmup=dict(linkage,**dict(outcome['setup'],device=device)))
+
 
 def execute(prepared,args):
     if args.resume:
@@ -138,18 +150,31 @@ def execute(prepared,args):
     interrupted=[False]
     def request_stop(*_):interrupted[0]=True
     old_handlers={s:signal.signal(s,request_stop) for s in (signal.SIGINT,signal.SIGTERM)}
+    scheduler=None;telemetry=None
     try:
         with DirectoryLock(directory):
-            attempts=load_attempts(directory)
+            attempts=load_attempts(directory,compact=True)
             check_resume_exports(directory,experiment,attempts)
             materialize(directory,experiment,attempts)
-            core=experiment['core'];session=uuid.uuid4().hex
+            core=experiment['core'];session=uuid.uuid4().hex;policy=core['protocol']['execution']
             items={i['entry']['instance_id']:i for i in prepared['selected']}
             registry=prepared['registry'];eligible=sum(r['status']=='runnable' for r in registry)
-            current=None;active_seeds=[];policy=core['protocol']['execution']
+            current=None;selected=primary(attempts);total=len(experiment['execution_plan'])
+            telemetry=Telemetry(core['actual_devices'],output_path=directory/'hardware_telemetry.csv',
+                gpu_metadata=experiment['environment']['hardware'].get('gpus')).start()
+            begun=time.perf_counter();next_source_check=0.;next_summary=0.
+            counts={}
+            for attempt in attempts:
+                key=attempt['run']['run_id'];counts[key]=max(counts.get(key,0),attempt['attempt_number'])
             def progress(phase):
-                selected=primary(attempts);terminal=len(selected);total=len(experiment['execution_plan'])
-                successes=sum(a['run']['success_1pct'] for a in selected.values())
+                nonlocal next_source_check
+                now=time.perf_counter()
+                if now>=next_source_check:
+                    next_source_check=now+1.
+                    if source_snapshot_hash()!=core['source']['code_snapshot_hash']:
+                        interrupted[0]=True;phase='source_changed'
+                active=scheduler.snapshot() if scheduler is not None else []
+                terminal=len(selected);successes=sum(a['run']['success_1pct'] for a in selected.values())
                 own=[a['run'] for a in selected.values() if current and
                      a['run']['solver_id']==current['solver_id'] and a['run']['instance_id']==current['instance_id']]
                 gaps=[r['signed_gap_percent'] for r in own if r['signed_gap_percent'] is not None]
@@ -162,79 +187,72 @@ def execute(prepared,args):
                     unavailable_solvers=sum(r['status']=='unavailable' for r in registry),
                     excluded_solvers=sum(r['status']=='excluded' for r in registry),
                     output=str(directory.resolve()),current=current,latest_gap_percent=gaps[-1] if gaps else None,
-                    active_seeds=list(active_seeds),seed_workers=policy['seed_workers'],
+                    active_trials=active,active_seeds=[r['seed'] for r in active],seed_workers=policy['seed_workers'],
+                    workers_per_device=policy['workers_per_device'],actual_devices=core['actual_devices'],
                     execution_mode=policy['execution_mode'],worker_mode=policy['worker_mode'],
                     best_gap_percent=min(gaps) if gaps else None,current_instance_terminal=len(own),
-                    current_solver_terminal=sum(a['run']['solver_id']==current['solver_id'] for a in selected.values()) if current else 0)
+                    current_solver_terminal=sum(a['run']['solver_id']==current['solver_id'] for a in selected.values()) if current else 0,
+                    session_elapsed_s=now-begun,session_trials_per_s=(len(attempts)-initial_attempts)/max(now-begun,1e-9))
+                status['hardware_telemetry']=telemetry.snapshot()
                 atomic(directory/'status.json',status)
                 line=(f"{phase} | {terminal}/{total} ({status['percentage']:.2f}%) | "
                       f"solver {list(core['solvers']).index(current['solver_id'])+1}/{len(core['solvers'])} {current['solver_id']} | "
                       f"instance {list(items).index(current['instance_id'])+1}/{len(items)} {current['instance_id']} | "
                       f"seed run {current['seed_index']+1}/{len(core['seeds'])} seed={current['seed']} | "
-                      f"workers={policy['seed_workers']} active seeds={active_seeds} | "
+                      f"GPUs/devices={len(core['actual_devices'])} workers={policy['seed_workers']} active={len(active)} | "
                       f"latest gap={status['latest_gap_percent']}% best gap={status['best_gap_percent']}% | "
-                      f"hits {successes}/{terminal} {'FINAL' if terminal==total else 'PROVISIONAL'}") if current else f"{phase}: {terminal}/{total}"
+                      f"hits {successes}/{terminal}") if current else f"{phase}: {terminal}/{total}, active={len(active)}"
                 print(line,flush=True)
                 with (directory/'progress.log').open('a',encoding='utf-8') as handle:handle.write(utc()+' '+line+'\n')
-            progress('ready')
-            # Freeze retry targets at invocation; never loop retrying failures.
-            selected=primary(attempts)
+            initial_attempts=len(attempts);progress('ready')
+            # Retry targets frozen once; failed primaries are never silently replaced.
             todo=[r for r in experiment['execution_plan'] if r['run_id'] not in selected or
                   (args.retry_failed and selected[r['run_id']]['run']['result_status']!='completed')]
-            def job_for(scheduled):
-                return dict(solver=scheduled['solver_id'],seed=scheduled['seed'],budget=core['budget_s'],
-                    parameters=core['solvers'][scheduled['solver_id']],npz=items[scheduled['instance_id']]['npz'],device=core['actual_device'],
+            def job_for(row,device):
+                return dict(solver=row['solver_id'],seed=row['seed'],budget=core['budget_s'],
+                    parameters=core['solvers'][row['solver_id']],npz=items[row['instance_id']]['npz'],device=device,
                     **{k:policy[k] for k in ('cpu_threads','watchdog_grace_s','setup_timeout_s',
                                             'memory_sampling_interval_s','heartbeat_interval_s')})
-            pool=None if policy['worker_mode']=='fresh' and policy['seed_workers']==1 else SeedPool(
-                policy['seed_workers'],policy['worker_mode'],lambda:interrupted[0])
-            def outcomes():
-                nonlocal current,active_seeds
-                wave_id=0
-                for _,group in groupby(todo,key=lambda r:(r['solver_id'],r['instance_id'])):
-                    rows=list(group)
-                    for start in range(0,len(rows),policy['seed_workers']):
-                        if interrupted[0]:return
-                        if source_identity()['code_snapshot_hash']!=core['source']['code_snapshot_hash']:
-                            progress('source_changed');raise ValueError('Source changed during campaign; no new trial scheduled')
-                        wave=rows[start:start+policy['seed_workers']];wave_id+=1
-                        current=wave[0];active_seeds=[r['seed'] for r in wave];progress('starting')
-                        if pool is None:
-                            began=time.perf_counter();outcome=trial(job_for(current),progress,lambda:interrupted[0])
-                            yield current,outcome,began,wave_id,1
-                        else:
-                            with closing(pool.wave([job_for(r) for r in wave],progress)) as stream:
-                                for index,outcome in stream:
-                                    yield wave[index],outcome,outcome['parent_trial_started'],wave_id,len(wave)
+            def fresh_outcomes():
+                for row in todo:
+                    if interrupted[0]:return
+                    outcome=trial(job_for(row,core['actual_device']),progress,lambda:interrupted[0])
+                    yield row,outcome
+            if todo and not (policy['worker_mode']=='fresh' and policy['seed_workers']==1):
+                scheduler=DeviceScheduler(policy['workers_per_device'],policy['worker_mode'],lambda:interrupted[0])
+            stream=(scheduler.outcomes(todo,job_for,progress) if scheduler is not None else fresh_outcomes())
             try:
-                with closing(outcomes()) as stream:
-                    for current,outcome,trial_started,wave_id,wave_size in stream:
-                        if source_identity()['code_snapshot_hash']!=core['source']['code_snapshot_hash']:
-                            outcome['done'].update(error='code_changed',error_message='Source changed during trial')
+                with closing(stream):
+                    for current,outcome in stream:
+                        trial_started=outcome.get('parent_trial_started',time.perf_counter()-outcome['worker_end_to_end_s'])
+                        if source_snapshot_hash()!=core['source']['code_snapshot_hash']:
+                            outcome['done'].update(error='code_changed',error_message='Source changed during campaign')
                             interrupted[0]=True
-                        number=1+sum(a['run']['run_id']==current['run_id'] for a in attempts)
+                        key=current['run_id'];number=counts.get(key,0)+1;counts[key]=number
                         payload=assemble(experiment,items[current['instance_id']],current,outcome,number,session,time.perf_counter())
-                        payload['run'].update(trial_end_to_end_s=time.perf_counter()-trial_started,wave_id=wave_id,wave_size=wave_size)
-                        serial_start=time.perf_counter();commit(directory,payload);attempts.append(payload)
-                        materialize(directory,experiment,attempts)
+                        payload['run'].update(trial_end_to_end_s=time.perf_counter()-trial_started,wave_id=None,wave_size=None)
+                        serial_start=time.perf_counter();commit(directory,payload)
+                        append_projection(directory,experiment,payload)
+                        compact=compact_attempt(payload);attempts.append(compact)
+                        if payload['run']['result_status']!='interrupted':selected.setdefault(key,compact)
+                        if time.perf_counter()>=next_summary:
+                            refresh_summaries(directory,experiment,attempts);next_summary=time.perf_counter()+5.
                         serialization=time.perf_counter()-serial_start
-                        atomic(directory/'finalization'/f"{payload['run']['attempt_id']}.json",
-                               dict(serialization_s=serialization,trial_end_to_end_s=time.perf_counter()-trial_started,
-                                    note='includes readiness barrier, audit, commit and CSV export; excludes pool shutdown and this finalization file'))
-                        if current['seed'] in active_seeds:active_seeds.remove(current['seed'])
+                        append_finalization(directory,payload['run']['attempt_id'],
+                            dict(serialization_s=serialization,trial_end_to_end_s=time.perf_counter()-trial_started,
+                                 note='Includes preparation, result-queue waiting, audit, journal and CSV append; excludes final pool shutdown'))
                         if outcome['done'].get('error')=='interrupted':interrupted[0]=True
-                        if outcome['abort_gpu']:
-                            interrupted[0]=True;progress('gpu_worker_lost_resume_required')
+                        if outcome['abort_gpu']:interrupted[0]=True;progress('gpu_worker_lost_resume_required')
                         progress('trial_saved')
-                        # Drain every dispatched seed before stopping; unstarted seeds remain pending.
             finally:
-                if pool is not None:atomic(directory/'worker_sessions'/f'{session}.json',pool.close())
+                if scheduler is not None:atomic(directory/'worker_sessions'/f'{session}.json',scheduler.close())
             materialize(directory,experiment,attempts)
-            if len(primary(attempts))<len(experiment['execution_plan']):interrupted[0]=True
+            if len(selected)<total:interrupted[0]=True
             unavailable=any(r['status']=='unavailable' for r in registry)
-            progress('interrupted' if interrupted[0] else 'complete_with_unavailable_solvers' if unavailable else 'complete_with_failures' if any(
-                a['run']['result_status']!='completed' for a in primary(attempts).values()) else 'complete')
-            return directory,130 if interrupted[0] else 1 if unavailable or any(
-                a['run']['result_status']!='completed' for a in primary(attempts).values()) else 0
+            failures=any(a['run']['result_status']!='completed' for a in selected.values())
+            progress('interrupted' if interrupted[0] else 'complete_with_unavailable_solvers' if unavailable else 'complete_with_failures' if failures else 'complete')
+            return directory,130 if interrupted[0] else 1 if unavailable or failures else 0
     finally:
+        if telemetry is not None:telemetry.close()
+        scoring_problem.cache_clear()
         for s,handler in old_handlers.items():signal.signal(s,handler)

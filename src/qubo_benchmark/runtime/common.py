@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[3]
 CONFIG = ROOT/'configs'
-SCHEMA = 3
+SCHEMA = 4
 
 def utc():
     return datetime.now(timezone.utc).isoformat()
@@ -60,18 +60,22 @@ def flattened(value, prefix=''):
         if isinstance(item,dict):yield from flattened(item,name)
         else:yield dict(path=name,type=type(item).__name__,value=item)
 
-def source_identity():
+def source_snapshot_hash():
     files=[]
     for directory in ('src/qubo_solvers','src/qubo_benchmark'):
         files.extend((ROOT/directory).rglob('*.py'))
     files.extend(ROOT/name for name in ('run_benchmark.py','run_benchmark_grid.py',
                                         'monitor_benchmark.py','aggregate_benchmarks.py'))
     hashes={str(p.relative_to(ROOT)).replace('\\','/'):filehash(p) for p in sorted(files) if p.exists()}
+    return digest(hashes)
+
+def source_identity():
+    snapshot=source_snapshot_hash()
     def git(*args):
         result=subprocess.run(['git',*args],cwd=ROOT,capture_output=True,text=True)
         return result.stdout.strip() if result.returncode==0 else None
     return dict(code_commit=git('rev-parse','HEAD'),code_dirty=bool(git('status','--porcelain')),
-                code_snapshot_hash=digest(hashes))
+                code_snapshot_hash=snapshot)
 
 class DirectoryLock:
     def __init__(self,path): self.path=Path(path)/'.lock'

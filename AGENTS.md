@@ -1,6 +1,6 @@
 ﻿# Solver benchmark deployment instructions
 
-This `solvers_testing2` branch ships the standalone canonical solver library,
+This `solvers_testing3` branch ships the standalone canonical solver library,
 benchmark runners, configuration, focused validation tests, and all 37 offline
 QUBO inputs with source/reference provenance. The earlier `solvers_testing`
 branch retains the broader portfolio application. Do not add market datasets,
@@ -20,8 +20,9 @@ SOLVER_LIBRARY.md before changing the corresponding interfaces.
   immutable candidate capture. Exclude worker startup, immutable input setup,
   independent scoring, cleanup and persistence from the solver budget.
 - Reuse infrastructure and immutable inputs only. Each seed gets fresh mutable
-  state. Parallel seeds use separate spawned processes and readiness barriers.
-  Keep independent watchdogs and shared-device timing labels.
+  state. Parallel seeds use separate spawned processes and an initial readiness
+  barrier. Detect all visible GPUs by default; freeze measured concurrency before
+  scheduling. Keep independent watchdogs and shared-device timing labels.
 - Preserve execution-policy, source, data, environment and parameter resume
   identities. Never edit numerical source while a benchmark is active.
 - Save each trial atomically; preserve failed attempts and independently score
@@ -38,6 +39,12 @@ Install from this checkout: python -m pip install -e ".[benchmark,dev]".
 Focused orchestration checks:
 
     python -m pytest tests/test_runtime_workers.py tests/test_runtime_benchmark.py -q
+
+Multi-GPU orchestration checks also include tests/test_runtime_devices.py,
+tests/test_runtime_scheduler.py, tests/test_runtime_incremental.py and
+tests/test_runtime_telemetry.py. Keep result queues and scorer caches bounded;
+commit each trial before appending CSV projections. Schema-4 resume restores
+the original selected devices and calibrated worker counts without retuning.
 
 For numerical changes, use tests/qubo_solvers and tests/test_qubo_benchmark.py
 on CPU and the target GPU. The standalone checkout excludes tests requiring
