@@ -1,10 +1,12 @@
 ﻿# Solver benchmark deployment instructions
 
-This `solvers_testing3` branch ships the standalone canonical solver library,
-benchmark runners, configuration, focused validation tests, and all 37 offline
-QUBO inputs with source/reference provenance. The earlier `solvers_testing`
-branch retains the broader portfolio application. Do not add market datasets,
-virtual environments, generated results, caches, or credentials to this branch.
+This `solver_testing4` branch ships the standalone canonical solver library,
+historical and continuous benchmark runners, configuration, focused validation
+tests, all 37 historical offline QUBO inputs, and small provenance needed to
+recover the 12 continuous inputs. The earlier `solvers_testing` branch retains
+the broader portfolio application. Do not add market datasets, bulk recovered
+continuous inputs, virtual environments, generated results, caches, or
+credentials to this branch.
 
 Read README.md, README_BENCHMARKS.md, BENCHMARK_DEFINITIONS.txt and
 SOLVER_LIBRARY.md before changing the corresponding interfaces.

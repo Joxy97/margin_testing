@@ -1,20 +1,24 @@
-# Solver library and offline QUBO benchmarks
+# Solver library and continuous QUBO benchmarks
 
 This branch contains the canonical 28-method solver library and the runtime
 benchmark for the 23 GPU-capable methods compatible with all 37 prepared QUBOs.
-This `solvers_testing3` branch ships the standalone library and benchmark. Generated
-benchmark results, environments, caches and unrelated market datasets are not
-part of this deployment branch.
+This `solver_testing4` branch additionally ships the validated compact 20-second
+continuous runner, frozen solver presets, and provenance for one sparse and one
+dense input at each of 100, 200, 500, 1000, 5000, and 10000 variables. Generated
+benchmark results, environments, caches, bulk recovered continuous inputs, and
+unrelated market datasets are not part of this deployment branch.
 
-Changes since `solvers_testing2`: automatic use of all visible GPUs, measured
-worker concurrency, simultaneous solver/seed scheduling, persistent CUDA workers,
-faster independent scoring, incremental result storage and hardware telemetry.
-See [BRANCH_CHANGES.md](BRANCH_CHANGES.md) for the release notes and validation.
+Changes since `solvers_testing3` include the continuous protocol, tuned 20-second
+configuration, known-optimum early stopping, quality-aware worker calibration,
+compact crash-safe results, and post-run 1% hit exports. See
+[README_BENCHMARKS.md](README_BENCHMARKS.md) and
+[EARLY_STOP_AND_WORKERS.txt](EARLY_STOP_AND_WORKERS.txt) for the current protocol.
+[BRANCH_CHANGES.md](BRANCH_CHANGES.md) documents the inherited historical runtime.
 
 ## Clone and install
 
 ```bash
-git clone --depth 1 --single-branch --branch solvers_testing3 https://github.com/Joxy97/margin_testing.git
+git clone --depth 1 --single-branch --branch solver_testing4 https://github.com/Joxy97/margin_testing.git
 cd margin_testing
 python -m venv .venv
 source .venv/bin/activate
@@ -32,17 +36,53 @@ Check the active interpreter, not a different system installation:
 ```bash
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 python run_benchmark.py --list-solvers
-python run_benchmark.py 200 sparse 0.05 --device cuda:0 --require-gpu --dry-run
+python tools/stage_continuous_inputs.py --catalog configs/continuous_catalog.windows.json
+python run_benchmark.py --variable-count 200 --sparse --seed-workers 1 \
+  --catalog benchmark_data/continuous12/staged_catalog.json \
+  --config configs/benchmark_solvers_selected_20s.json --require-gpu --dry-run
 ```
 
 All raw source data, normalized matrices, reference witnesses and provenance are
-included under `benchmark_data/qubo37`. The runner never downloads problem data.
-Python packages still need installation; for completely disconnected deployment,
-prepare a wheelhouse matching the target OS/Python/CUDA environment beforehand.
-An editable installation from this checkout is required because benchmark data
-and configurations remain beside the source rather than inside a standalone wheel.
+included for the historical 37-input suite under `benchmark_data/qubo37`. The new
+continuous inputs are deliberately excluded because of their size; the staging
+command above downloads frozen public payloads, verifies their checksums and
+canonical arrays, and writes a separate local `staged_catalog.json`. On the original
+prepared Vast checkout, keep its existing verified inputs and default Linux catalog
+instead of restaging them. Python packages still need installation; for completely
+disconnected deployment, prepare matching wheels and transfer the prepared inputs.
+An editable installation is required because data and configurations remain beside
+the source rather than inside a standalone wheel.
 
 ## Run
+
+```bash
+# Continuous protocol: one input, all 23 solvers, seeds 0-99, one worker per GPU.
+python run_benchmark.py --variable-count 200 --sparse --seed-workers 1 \
+  --catalog benchmark_data/continuous12/staged_catalog.json \
+  --config configs/benchmark_solvers_selected_20s.json --require-gpu \
+  --output benchmark_results/200_sparse
+
+# Run the dense test only after the sparse test finishes.
+python run_benchmark.py --variable-count 200 --dense --seed-workers 1 \
+  --catalog benchmark_data/continuous12/staged_catalog.json \
+  --config configs/benchmark_solvers_selected_20s.json --require-gpu \
+  --output benchmark_results/200_dense
+
+python tools/postprocess_continuous_results.py benchmark_results/200_sparse --hit-percent 1
+```
+
+Valid continuous variable counts are `100`, `200`, `500`, `1000`, `5000`, and
+`10000`. Each test is one uninterrupted optimization per solver/seed with checkpoints
+at 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, and 20 seconds. `--seed-workers 1` means one
+persistent worker on each selected GPU; use `--device cuda:0` when exactly one GPU
+must be selected. Resume a continuous run with `python run_benchmark.py --resume
+benchmark_results/200_sparse`.
+
+## Historical fixed-budget runner
+
+The positional interface below remains available for the inherited 37-input
+protocol. Its results and timing definitions must not be mixed with continuous
+results.
 
 ```bash
 # Small optional GPU smoke: one representative, one seed, all 23 methods.

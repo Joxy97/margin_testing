@@ -74,7 +74,34 @@ four-worker smoke execution does not establish equal solution quality. Exchange
 benchmark graphs reuse a worker-owned capture stream to bound BLAS workspace
 caching, while graphs and optimization state remain fresh for every seed.
 
-Run from `solvers_testing/margin_testing`:
+### Fresh-clone continuous deployment
+
+Clone the current branch and recover the checksum-verified public inputs before
+running a continuous campaign:
+
+```bash
+git clone --depth 1 --single-branch --branch solver_testing4 https://github.com/Joxy97/margin_testing.git
+cd margin_testing
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[benchmark,dev]'
+python -m pip check
+python tools/stage_continuous_inputs.py --catalog configs/continuous_catalog.windows.json
+python run_benchmark.py --variable-count 200 --sparse --seed-workers 1 \
+  --catalog benchmark_data/continuous12/staged_catalog.json \
+  --config configs/benchmark_solvers_selected_20s.json --require-gpu --dry-run
+```
+
+The explicit frozen catalog is required during recovery because the fingerprint
+manifest binds that catalog. Always run fresh-clone campaigns with the generated
+`benchmark_data/continuous12/staged_catalog.json`. The original prepared Vast
+checkout instead uses its already verified normalized inputs and default Linux
+catalog without restaging.
+
+## Historical fixed-budget protocol
+
+The remainder of this section documents the inherited positional protocol. Run
+from the repository root:
 
 ```bash
 python run_benchmark.py 200 sparse 0.05
@@ -100,7 +127,7 @@ saved in `experiment.json` supersede the file's historical schema-3 worker
 extension. The old `python -m qubo_benchmark run` interface remains available for
 historical experiments; it does **not** implement this 100-seed runtime protocol.
 
-## Installation and offline data
+## Historical installation and offline data
 
 Use an environment with the NVIDIA driver and a compatible CUDA-enabled Torch
 wheel already installed on the GPU host. Use the official PyTorch installation
