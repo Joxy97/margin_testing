@@ -1,5 +1,6 @@
 """Shared integration and decoding for three vector relaxations."""
 import torch
+from . import observation
 from ._dynamics import SpinObjective, finite, normal, publish, spins, unit
 
 
@@ -9,7 +10,7 @@ def search_vectors(solver, run, record, *, project=True, precession=0.):
     vector[..., 2] = vector[..., 2].abs()*spins(run)
     vector = unit(vector)
     for k in range(solver.max_steps):
-        progress = (k+1)/max(solver.max_steps, 1)
+        progress = observation.schedule_fraction((k+1)/max(solver.max_steps, 1))
         gradient = solver._gradient(vector, progress, objective)
         if project:
             tangent = gradient-vector*(vector*gradient).sum(-1, keepdim=True)

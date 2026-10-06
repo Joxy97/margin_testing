@@ -1,0 +1,132 @@
+{
+  "assertion_note": "Authors CMake uses -DNDEBUG. The equality of recursively shrinking candidate capacity and global degree-vector size is a wrong debug invariant; global original vertex-ID bounds remain valid. Source is unmodified.",
+  "builds": [
+    {
+      "command": [
+        "g++",
+        "-O3",
+        "-DNDEBUG",
+        "-std=c++23",
+        "-fsanitize=signed-integer-overflow",
+        "-fno-sanitize-recover=all",
+        "-I",
+        "author-source/lib",
+        "verify_continuous_reference.cpp",
+        "-o",
+        "verify_author"
+      ],
+      "completed": true,
+      "configured_step_limit": null,
+      "configured_time_limit": null,
+      "elapsed_s": 3.362871493009152,
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "make",
+        "-B",
+        "-C",
+        "cliquer-1.21",
+        "CFLAGS=-O3 -Wall -fsanitize=signed-integer-overflow -fno-sanitize-recover=all",
+        "LDFLAGS=-fsanitize=signed-integer-overflow",
+        "cl"
+      ],
+      "completed": true,
+      "configured_step_limit": null,
+      "configured_time_limit": null,
+      "elapsed_s": 1.6212465050048195,
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "make: Entering directory '/workspace/continuous_reference_check/cliquer-1.21'\ngcc -O3 -Wall -fsanitize=signed-integer-overflow -fno-sanitize-recover=all -DENABLE_LONG_OPTIONS -o cl.o -c cl.c\ngcc -O3 -Wall -fsanitize=signed-integer-overflow -fno-sanitize-recover=all   -c -o cliquer.o cliquer.c\ngcc -O3 -Wall -fsanitize=signed-integer-overflow -fno-sanitize-recover=all   -c -o graph.o graph.c\ngcc -O3 -Wall -fsanitize=signed-integer-overflow -fno-sanitize-recover=all   -c -o reorder.o reorder.c\ngcc -fsanitize=signed-integer-overflow -o cl cl.o cliquer.o graph.o reorder.o\nmake: Leaving directory '/workspace/continuous_reference_check/cliquer-1.21'\n",
+      "timed_out": false
+    }
+  ],
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+  "completed_exact_searches": [
+    {
+      "command": [
+        "/workspace/continuous_reference_check/verify_author",
+        "/workspace/continuous_reference_check/17393e48bba1fcf0554e01ca98b515dd33f5776bcc902b0d658a5adbc049a927.raw"
+      ],
+      "completed": true,
+      "configured_step_limit": null,
+      "configured_time_limit": null,
+      "elapsed_s": 57.75697401698562,
+      "exact": true,
+      "executable_sha256": "2030727926d17627fbc40e940f267682a067c933dcc6befc50370f73e685223b",
+      "exit_code": 0,
+      "method": "authors_MCQDW",
+      "source_archive_sha256": "bd33e3ec96b4f31c9e931adedc685150752f51187ab6afdb0f69637ba7dbd5a5",
+      "source_archive_url": "https://gitlab.com/janezkonc/insidrug/-/archive/mcqdw_v1.0.0/insidrug-mcqdw_v1.0.0.tar.gz",
+      "source_commit": "f156fbf6b3fb1779e9efc274043f76b46c241898",
+      "source_tag": "mcqdw_v1.0.0",
+      "source_url": "https://gitlab.com/janezkonc/insidrug/-/releases/mcqdw_v1.0.0",
+      "source_vertex_labels": [
+        309,
+        1243,
+        3521,
+        5046,
+        6321,
+        6868,
+        7140
+      ],
+      "stderr": "",
+      "stdout": "{\"completed\":true,\"exact\":true,\"method\":\"MCQDW\",\"configured_step_limit\":null,\"configured_time_limit\":null,\"weight_integer\":8873650,\"elapsed_search_s\":56.029492193999999,\"binary64_integer_bound\":9997071804,\"source_vertex_labels\":[309,1243,3521,5046,6321,6868,7140]}\n",
+      "timed_out": false,
+      "weight_integer": 8873650
+    },
+    {
+      "command": [
+        "/workspace/continuous_reference_check/cliquer-1.21/cl",
+        "-q",
+        "-q",
+        "-s",
+        "-m",
+        "0",
+        "-M",
+        "0",
+        "/workspace/continuous_reference_check/17393e48bba1fcf0554e01ca98b515dd33f5776bcc902b0d658a5adbc049a927.raw"
+      ],
+      "completed": true,
+      "configured_step_limit": null,
+      "configured_time_limit": null,
+      "elapsed_s": 18.63857005801401,
+      "exact": true,
+      "executable_sha256": "c7ed3420733ba167393d9b83ac9cd826ea94051406bc52a5b4251ebe2df5a2a1",
+      "exit_code": 0,
+      "method": "independent_Cliquer",
+      "source_archive_sha256": "ff306d27eda82383c0257065e3ffab028415ac9af73bccfdd9c2405b797ed1f1",
+      "source_archive_url": "https://users.aalto.fi/~pat/cliquer/cliquer-1.21.tar.gz",
+      "source_url": "https://users.aalto.fi/~pat/cliquer.html",
+      "source_version": "1.21",
+      "source_vertex_labels": [
+        309,
+        1243,
+        3521,
+        5046,
+        6321,
+        6868,
+        7140
+      ],
+      "stderr": "",
+      "stdout": "size=7, weight=8873650:   309 1243 3521 5046 6321 6868 7140\n",
+      "timed_out": false,
+      "weight_integer": 8873650
+    }
+  ],
+  "created_at": "2026-10-06T17:03:34.183148+00:00",
+  "driver_sha256": "a0216f7a0e369ff4c66fc37848be0c07ed6434a1aa19df573b97bd2f788df03a",
+  "formal_optimality_certificate_available": false,
+  "input_sha256": "68963a69f2c5423e6a4ab0860027e7a1c2c908dce40eb00c81f1fb3ccb2f505e",
+  "objective_max": 8873650,
+  "objective_min": -8873650,
+  "original_vertex_weights_preserved": true,
+  "proof_note": "Two independently implemented complete exact searches agree; feasible witnesses will also be scored independently against original source and canonical QUBO. This is not a published optimum or a separate formal proof certificate.",
+  "published_numeric_reference": false,
+  "schema_version": 1,
+  "status": "independently_verified_optimum",
+  "verification_tool_sha256": "4ac2fc7506bec2a7756204d3a4f5ba676c43b5afa369e96a22af4f8b6e5d34b2"
+}

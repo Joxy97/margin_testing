@@ -1,6 +1,7 @@
 """SphericalAnnealing for unconstrained QUBO/Ising."""
 from dataclasses import dataclass
 import math
+from . import observation
 from ._dynamics import IterativeSolver, SpinObjective, finite, positive, publish, spins, unit
 from .solvers import _integer
 
@@ -22,7 +23,11 @@ class SphericalAnnealing(IterativeSolver):
         obj, q = SpinObjective(run), spins(run)
         n = q.shape[1]
         for k in range(self.max_steps):
-            gradient = obj.gradient(q) + self.penalty*(k+1)/max(self.max_steps, 1)*q*(q*q-1)
+            fraction = observation.schedule_fraction(None)
+            # Retain the original multiplication/division order when disabled.
+            penalty = (self.penalty*(k+1)/max(self.max_steps, 1)
+                       if fraction is None else self.penalty*fraction)
+            gradient = obj.gradient(q) + penalty*q*(q*q-1)
             tangent = gradient - q*(q*gradient).sum(-1, keepdim=True)/n
             q = unit(q-self.time_step*tangent, math.sqrt(n))
             publish(run, q)

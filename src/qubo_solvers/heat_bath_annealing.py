@@ -1,6 +1,7 @@
 """HeatBathAnnealing for unconstrained QUBO/Ising."""
 from dataclasses import dataclass
 import torch
+from . import observation
 
 
 from .simulated_annealing import SimulatedAnnealing
@@ -10,7 +11,7 @@ class HeatBathAnnealing(SimulatedAnnealing):
 
     def _search(self, run, record):
         for sweep in range(self.sweeps):
-            t = sweep / max(self.sweeps-1, 1)
+            t = observation.schedule_fraction(sweep / max(self.sweeps-1, 1))
             temperature = self.start_temperature * (self.end_temperature/self.start_temperature)**t
             for column in torch.randperm(run.x.shape[1], generator=run.order_generator).tolist():
                 direction = -2*run.x[:, column] if run.spin else 1-2*run.x[:, column]

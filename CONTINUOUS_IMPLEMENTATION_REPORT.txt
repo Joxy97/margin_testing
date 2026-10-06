@@ -1,0 +1,128 @@
+COMPACT BENCHMARK IMPLEMENTATION AND HANDOFF
+==========================================
+Date: 2026-10-06
+FINAL EVIDENCE
+Final local complete CPU suite:787 passed,333 CUDA skips,48 subtests passed.
+Initial full target GPU suite:1112 passed,1 skipped,48 subtests passed;
+3 portfolio-application import tests failed because that application is not
+included in this standalone deployment, as documented by repository AGENTS.md.
+They are out of scope, not hidden solver failures. After the final shared SBM
+scoring-adapter fix and installing the declared plot dependency, final target
+GPU adapter/storage/plot regressions:49 passed. Protected algorithms unchanged.
+Bounded tuning:178/178 complete (108 screen,70 held out), no failures.
+Held-out signed mean gap:9 improved,6 tied,3 regressed; no guaranteed hits.
+Final one-seed GPU smokes:all23 solvers at200 sparse passed; all12 size/density
+slots passed using unchanged greedy. This does NOT test all23 on everylarge
+input. Completed resume dispatched no new seed. Every retained energy array
+is float64(1,9),72byte payload even at10000variables. Each aggregate reproduced
+exactly from its energy array; no vectors/trajectory artifacts found.
+Raw-discard GPU integration passed: one additional seed, zero retained arrays,
+zero numerical payload, all3 CSV-derived plots generated, completed resume
+dispatched no new seed. Its final directory was77,619bytes including plots.
+Together these are36 bounded final smoke solves, not a production campaign.
+Local backup audit:14 result groups,35 retained arrays,2,520 numerical bytes,
+all raw files exactly200bytes (128header+72payload),42 smoke PNGs; no failures.
+All14 groups together occupy1,337,356bytes including plots. Archive1,128,215bytes.
+Large-input smoke success means integration/scoring/storage passed, NOT good
+solution quality or a reference hit. All23 on all12 large inputs remain untested.
+
+VAST DEPLOYMENT AND LOCAL BACKUP
+Final code/input/config checkout: /workspace/margin_testing_continuous_release
+Tuning evidence: /workspace/margin_testing_continuous/benchmark_results/continuous_tuning_v2
+Local tuning evidence: ../benchmark_results/continuous_tuning_v2
+Local final smoke backup: ../continuous_validation_results/
+Server-side preparation reused/authenticated original caches and regenerated
+normalized containers: all12 numeric COO digests are identical to Windows.
+Seven NPZ ZIP-container checksums differ across platforms; the deployed Linux
+catalog explicitly records its verified normalized hashes. Original Windows
+catalog retained at configs/continuous_catalog.windows.json on Vast. Objective
+coefficients, dimensions, reference values/statuses and source hashes match.
+Source/config/environment changes were never silently resumed. Earlier failed
+smoke attempts and interrupted tuning v1 were preserved in separate folders.
+
+1. EXISTING FILES CHANGED IN THIS CONTINUOUS TASK
+run_benchmark.py: new named-argument dispatch; historical positional CLI kept;
+                 both --resume PATH and --resume=PATH supported.
+src/qubo_benchmark/model.py: vectorized/chunked duplicate-coordinate validation,
+                           avoiding millions of Python tuples; scores unchanged.
+src/qubo_solvers/observation.py: optional scalar/wall-time observation bridge.
+src/qubo_solvers/backends/torch_candidates.py: optional device-scalar candidate
+    accumulation; old ordinary selection path remains available.
+src/qubo_solvers/exchange_cascade.py: opt-in elapsed-time graph-block schedule,
+    no giant step-schedule allocation; original default path preserved.
+src/qubo_solvers/_vector_dynamics.py, angular_annealing.py, transverse_route.py,
+    spin_vector_langevin.py, mean_field_annealing.py, replica_annealing.py,
+    spherical_annealing.py, heat_bath_annealing.py,
+    backends/torch_physics.py, backends/dynamical_geometry.py:
+    opt-in elapsed-time schedule fractions; default mathematical paths retained.
+README_BENCHMARKS.md: distinguish the new protocol from old experiments.
+pyproject.toml: declare Matplotlib for the requested plots.
+.gitignore: include new focused tools/tests, preserve existing shipping exclusions.
+Earlier Exchange/Replica fixes, legacy selection compatibility and prior tuning
+artifacts are preserved, not reclassified as new changes or deleted.
+
+NEW COMMON INFRASTRUCTURE (NOT A PROJECT REWRITE)
+src/qubo_benchmark/runtime/{continuous_cli,continuous_worker,compact_storage,
+                           compact_metrics,compact_plots}.py
+src/qubo_benchmark/continuous_catalog.py
+configs/{continuous_catalog,continuous_tuning_plan,benchmark_solvers_20s}.json
+configs/benchmark_solvers_selected_20s.json: frozen exploratory size-aware winners.
+tools/{prepare_continuous_inputs,tune_continuous_solvers,
+       verify_continuous_reference,validate_continuous_results}.py
+tools/verify_continuous_reference.cpp
+tools/stage_continuous_inputs.py: exact-cache/canonical-array deployment checks.
+Focused storage, observer, CLI, wall-schedule, catalog and tuning regression tests.
+CONTINUOUS_BENCHMARK_DEFINITIONS.txt: precise metrics/timing/storage explanations.
+CONTINUOUS_INPUT_REFERENCES.txt: all12 measured input densities and reference proof.
+CONTINUOUS_TUNING_REPORT.txt: candidate controls and observed bounded comparisons.
+
+2. RESULT DATA NO LONGER WRITTEN IN NEW MODE
+No solution vectors/bitstrings, trajectories, populations, physics states,
+auxiliary vectors, matrices, per-iteration energies/times, GPU/memory telemetry,
+iterations, first-hit time, per-row hit/gap flags or repeated reference fields.
+Existing historical results were NOT removed. Temporary solver state is allowed.
+
+3-5. EXACT MINIMAL SAVED RESULT FORMATS
+raw/<solver>/<problem>.npy: float64 matrix (100,9) by default, one best_energy
+per seed/checkpoint. Seed IDs and9 checkpoint times occur once in manifest.json.
+NaN denotes unavailable energy. No assignment is stored even for a reference hit.
+aggregated/<solver>/<problem>.csv: exactly9 rows and4 columns:
+checkpoint_seconds,gap_to_solution,hit_probability,TTS99
+Solver/problem names occur in path context. Reference info occurs once/problem.
+Small progress/state/completion files hold immutable identity, statuses and
+checksums only. All writes are atomic; interrupted seeds restart in full.
+With --no-keep-raw-results, raw energies and their per-row checksums are removed
+only after durable aggregation/completion. Aggregate checksums/statuses remain.
+
+6. ONE CONTINUOUS RUN, NOT NINE SEPARATE TESTS
+One fresh solver/RNG state, one solve call, one20s observation window.
+Nine boundaries read the most recent fully completed independently scored
+incumbent. Late results are not back-credited. Checkpoint GPU-to-host transfer
+is scalar-sized, not proportional to variable count. Natural early returns
+are carried forward without restarting or changing protected algorithms.
+Mutable18 wall schedules and parameters are an explicit separate tuning mode,
+not a hidden algorithm change needed for storage. Original defaults are kept.
+
+7. EXACTLY THREE REPORTED BENCHMARK METRICS
+Mean signed raw Gap to solution; empirical exact/BKS Hit probability; TTS99.
+No new memory metric, first-hit metric, relative/1% gap, AUC or composite score.
+Only3 PNGs/problem, from aggregate CSVs; seed count labels expose bounded smokes.
+
+8. ESTIMATED RESULT SIZE, INDEPENDENT OF VARIABLE COUNT
+One solver/problem:7,200byte payload +128byte NumPy header =7,328bytes.
+All23*12*100seeds:248,400values =1,987,200payload bytes (~1.90MiB).
+276arrays including headers:2,022,528bytes (~1.93MiB).
+Progress/checksums/manifests/CSVs add a few MiB; inputs excluded and not copied.
+At most36 modest PNGs may dominate downloadable size. Raw-off retains only
+aggregates/integrity/status plus optional plots. n=10000 and n=100 have the
+same energy-array size when seeds/checkpoints are equal.
+
+SAFE HANDOFF
+Use --config configs/benchmark_solvers_selected_20s.json for selected settings.
+Without --config, the initial20s profile is used. The selected preset is not a
+claim of universal improvement: easy-axis,phonon and spin-vector-Langevin had
+held-out mean-gap regressions. See the signed-delta table in the tuning report.
+Full23*12*100campaign was NOT launched. Original protected configuration is
+unchanged except the user-authorized large-size memory guard for native SA,
+greedy, tabu and TAP; SBM unchanged. See definitions for timing differences,
+unavailable energies, p=1 literal TTS limit, strict resume and IQR terminology.

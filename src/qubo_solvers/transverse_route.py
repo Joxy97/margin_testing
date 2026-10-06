@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 import math
 import torch
+from . import observation
 from ._dynamics import IterativeSolver, SpinObjective, finite, positive, publish, spins
 from .solvers import _integer
 
@@ -50,7 +51,8 @@ class TransverseRoute(IterativeSolver):
                            generator=run.generator).sub_(.5).mul_(math.pi)
         angle += (spins(run) < 0)*math.pi
         for k in range(self.max_steps):
-            progress, next_progress = k/max(self.max_steps, 1), (k+1)/max(self.max_steps, 1)
+            progress = observation.schedule_fraction(k/max(self.max_steps, 1))
+            next_progress = observation.schedule_fraction((k+1)/max(self.max_steps, 1))
             first = self._rhs(angle, progress, objective)
             if self.integrator == 'heun':
                 second = self._rhs(angle+self.time_step*first, next_progress, objective)

@@ -1,0 +1,40 @@
+solver_testing4: source retrieved directly from the deployed Vast checkout
+=======================================================================
+
+Source: /workspace/margin_testing_continuous_release
+The runtime, solver code, tests, configurations and documentation were downloaded
+directly from this checkout, with every retrieved file checksum verified.
+
+Deployed and published numerical/runtime source snapshot SHA256:
+b3a98190351168ad94d84e528b675d04055d49702a7dccdac522bd4f79e40afb
+
+Publishing-only additions are this note and Git attributes/ignore rules. No solver
+equations or numerical configurations were edited while publishing. Git attributes
+preserve Python and frozen configuration bytes across Windows/Linux checkouts.
+The original local worktree and its earlier staged changes were not overwritten.
+
+The new branch is solver_testing4 (singular "solver"), based on solvers_testing3.
+Code and small source/reference metadata are included. Generated results, caches,
+virtual environments, credentials and new large continuous12 NPZ/raw payloads are
+excluded. The existing 37-instance corpus inherited from solvers_testing3 remains.
+All deployed inputs and results on Vast are left intact.
+
+The default configs/continuous_catalog.json is the deployed Linux catalog.
+configs/continuous_catalog.windows.json preserves the original frozen catalog
+bound by benchmark_data/continuous12/canonical_fingerprints.json. Do not mix
+normalized payloads and catalogs with differing byte hashes.
+
+To recover new inputs in a fresh checkout, install .[benchmark,dev], then:
+
+  python tools/stage_continuous_inputs.py --catalog configs/continuous_catalog.windows.json
+
+This downloads/checks frozen public source payloads and verifies canonical
+numerical arrays. It does not start solvers or overwrite the default catalog.
+Use the separately generated catalog for subsequent new runs, for example:
+
+  python run_benchmark.py --variable-count 200 --sparse --seed-workers 1 --catalog benchmark_data/continuous12/staged_catalog.json --config configs/benchmark_solvers_selected_20s.json --require-gpu --output benchmark_results/my_200_sparse
+
+On the existing prepared Vast checkout, use its existing verified default Linux
+catalog and inputs. No full campaign was started as part of retrieval/publishing.
+Prior actual CUDA validation and worker calibration are documented in
+EARLY_STOP_AND_WORKERS.txt; publishing does not imply a fresh full benchmark.

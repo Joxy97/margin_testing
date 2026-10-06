@@ -1,6 +1,7 @@
 """AngularAnnealing for unconstrained QUBO/Ising."""
 from dataclasses import dataclass
 import math
+from . import observation
 from ._dynamics import IterativeSolver, SpinObjective, finite, positive, publish, spins
 from .solvers import _integer
 
@@ -36,7 +37,8 @@ class AngularAnnealing(IterativeSolver):
         obj = SpinObjective(run)
         theta = math.pi / 2 - .2 * spins(run)
         for k in range(self.max_steps):
-            t, nt = k / max(self.max_steps, 1), (k + 1) / max(self.max_steps, 1)
+            t = observation.schedule_fraction(k / max(self.max_steps, 1))
+            nt = observation.schedule_fraction((k + 1) / max(self.max_steps, 1))
             first = self._rhs(theta, t, obj)
             second = self._rhs(theta + self.time_step * first, nt, obj)
             theta += .5 * self.time_step * (first + second)

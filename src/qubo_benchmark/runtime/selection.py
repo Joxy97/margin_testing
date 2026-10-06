@@ -168,9 +168,28 @@ def environment(requested='auto',require_gpu=False):
                         'CUDA_MPS_ACTIVE_THREAD_PERCENTAGE') if k in os.environ},
                 container_image=None,container_image_reason='not available without an explicitly supplied deployment manifest')
 
+def resolve_legacy_exchange_defaults(settings):
+    """Expand only newly optional Exchange fields, without retuning old files.
+
+    The literal values preserve the previous mathematical protocol. Missing
+    pre-existing fields remain errors. Preflight freezes the expanded values
+    into the experiment identity rather than relying on implicit defaults.
+    """
+    effective=copy.deepcopy(settings)
+    if 'lib_exchange_cascade' in effective:
+        optional=dict(order_seed=.05,order_seed_at_activation=False,
+                      order_a_start=.2,order_a_duration=.25,
+                      order_b_start=.45,order_b_duration=.3,
+                      freeze_fraction=.75,candidate_interval=1,
+                      spin_mobility=1.,graph_block=0)
+        for name,value in optional.items():effective['lib_exchange_cascade'].setdefault(name,value)
+    return effective
+
+
 def inventory(settings,device='cpu'):
     from qubo_solvers import SOLVERS,solver_capabilities,create_bqm_solver
     from ..adapters import GPU_SOLVERS
+    settings=resolve_legacy_exchange_defaults(settings)
     rows=[]
     for name in SOLVERS:
         cap=solver_capabilities(name);eligible=name in GPU_SOLVERS
@@ -220,6 +239,7 @@ def preflight(args):
     import numpy as np
     settings=read(args.config or CONFIG/'benchmark_solvers.json')
     if settings.get('schema_version')!=2:raise ValueError('Unsupported solver configuration schema')
+    settings['solvers']=resolve_legacy_exchange_defaults(settings['solvers'])
     if any('seed' in p or 'device' in p for p in settings['solvers'].values()):
         raise ValueError('Seeds/devices belong to execution policy, not algorithm configuration')
     env=environment(args.device,args.require_gpu);device=env['hardware']['device']

@@ -1,0 +1,100 @@
+CONTINUOUS 20-SECOND SOLVER TUNING
+FINAL OBSERVED RESULTS: COMPLETE, exploratory GPU evidence
+Source: ../benchmark_results/continuous_tuning_v2; four NVIDIA GeForce RTX 3080s.
+178/178 trials status=complete: 108 screen, 70 holdout; no failed trial statuses.
+Final held-out signed mean gap: 9 methods improved, 6 equal, 3 regressed.
+Selections were frozen before fresh holdout; regressions did not trigger reselection.
+These observed comparisons provide no guaranteed reference hits or validation claim.
+Held-out 20-second comparison (B=continuous profile baseline, W=screen winner)
+Every comparison uses two matching fresh objective/seed blocks; p=hits/2.
+Delta = W-B: negative gap/TTS is better, positive probability is better.
+NA encodes zero-hit Inf (JSON null); production CSV stores Inf. All18 dTTS lack two finite sides.
+Solver                           Selected     Gap B->W          dGap    p B->W   dP    TTS99 B->W (s)    dTTS
+lib_altermagnet                  population64 946->692          -254    0->0     0     NA->NA            NA
+lib_angular_annealing            population64 722.5->722.5      0       0->0     0     NA->NA            NA
+lib_contact_annealing            population64 552->552          0       0->0     0     NA->NA            NA
+lib_dynamical_geometry           profile      3569.5->3569.5    0       0->0     0     NA->NA            NA
+lib_easy_axis_annealing          population64 1.5->34.5         +33     0.5->0   -0.5  132.877->NA       NA
+lib_exchange_cascade             late_freeze  610->585.5        -24.5   0->0     0     NA->NA            NA
+lib_geometric                    population64 1040->629         -411    0->0     0     NA->NA            NA
+lib_heat_bath_annealing          late_freeze  42->18.5          -23.5   0->0.5   +0.5  NA->132.877       NA
+lib_mean_field_annealing         population64 117.5->117.5      0       0->0     0     NA->NA            NA
+lib_phonon_exchange              population64 170->181          +11     0->0     0     NA->NA            NA
+lib_random_search                late_freeze  61524.5->61438.5  -86     0->0     0     NA->NA            NA
+lib_replica_annealing            population64 955->724          -231    0->0     0     NA->NA            NA
+lib_spherical_annealing          late_freeze  677->593          -84     0->0     0     NA->NA            NA
+lib_spin_coherent_annealing      population64 238.5->238.5      0       0->0     0     NA->NA            NA
+lib_spin_vector_langevin         population64 541.5->558.5      +17     0->0     0     NA->NA            NA
+lib_supersymmetric               population64 2129.5->2129.5    0       0->0     0     NA->NA            NA
+lib_transverse_route             population64 581->522          -59     0->0     0     NA->NA            NA
+lib_vector_amplitude_annealing   population64 157.5->117.5      -40     0->0     0     NA->NA            NA
+Exchange chose freeze_fraction=0.95 (late freeze) over profile=1 (disabled):
+gap 610->585.5, delta=-24.5; both 0/2 hits, p=0, TTS99 unavailable; no universal freeze claim.
+
+Protocol and physical meaning
+Each seed gets one fresh solver/RNG state and one uninterrupted 20-second solve.
+Record only scalar incumbents at 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20 seconds.
+Checkpoints never restart search; carry naturally returned incumbents forward.
+Mutable control ramps use elapsed solve time / 20; 10,000,000 steps is a guard.
+Integration time_step is a numerical dynamics increment, not host seconds.
+This changes earlier finite step-based schedules, while preserving force equations,
+source objectives/dimensions and native padding. References enter metrics only.
+
+Exact candidate controls for all 18 mutable methods
+Profile: prior tuned physics, float32, 32/full batch, 10m cap; population64 changes only runs to 64.
+late_freeze: method-specific change below; all other physical controls fixed.
+Canonical solver ID                 Earlier cap   Profile -> late_freeze
+lib_spin_vector_langevin                 1000    time_step 0.1 -> 0.05
+lib_angular_annealing                    1000    time_step 0.2 -> 0.1
+lib_transverse_route                     1000    time_step 0.2 -> 0.1
+lib_easy_axis_annealing                  1000    time_step 0.1 -> 0.05
+lib_spin_coherent_annealing              1000    time_step 0.2 -> 0.1
+lib_vector_amplitude_annealing           1000    time_step 0.05 -> 0.025
+lib_mean_field_annealing                 1000    time_step 0.3 -> 0.15
+lib_spherical_annealing                  1000    time_step 0.1 -> 0.05
+lib_contact_annealing                    1000    time_step 0.05 -> 0.025
+lib_replica_annealing                    1000    time_step 0.2 -> 0.1; replicas=3
+lib_heat_bath_annealing                   100    trajectories 32 -> 96
+lib_random_search                      10000    trajectories 32 -> 96
+lib_exchange_cascade                   10000    freeze_fraction 1.0 -> 0.95
+lib_altermagnet                         1500    time_step 0.5 -> 0.25
+lib_dynamical_geometry                  3000    time_step 0.1 -> 0.05
+lib_geometric                          3000    time_step 1.0 -> 0.5
+lib_phonon_exchange                     1000    time_step 0.1 -> 0.05
+lib_supersymmetric                      3000    time_step 0.5 -> 0.25
+Exchange keeps graph_block=25, candidate_interval=25 and activation seeding.
+Native mutable guards are 8 GiB; graph mode requires null plus separate admission.
+Large mutable profiles set existing max_dense_variables=16384; padding unchanged.
+
+Protected comparisons (excluded from the 178-trial parameter search)
+lib_simulated_annealing, lib_simulated_bifurcation, lib_greedy_local_search,
+lib_tabu_search, lib_tap_annealing keep original numerical settings/schedules.
+ONLY authorized exception: existing memory_limit_bytes=8 GiB at n>=5000 for
+SA/greedy/tabu/TAP; n<=1000 retains 512 MiB. No SBM guard/parameter is added.
+The original baseline JSON is untouched; memory admission is not a peak guarantee.
+
+Frozen split, baseline meaning and statistical limits
+Screen: (gka1e,101), (be200.8.1,102); three candidates/method, 108 trials.
+Rank at 20s: signed mean gap, descending hit probability, ascending TTS99, ID.
+Holdout: (bqp500-2,201), (be200.8.2,202); winner and profile, 70 trials.
+Dynamical geometry selected profile, so its identical baseline was not rerun.
+Baseline already has continuous 20-second scheduling; it is not the older finite
+preset. Export keeps the screen selection despite holdout regressions.
+Two paired blocks confound instance/seed effects; objective scales differ.
+Pooled TTS99 is descriptive, not a robust per-instance estimate.
+No statistical superiority, global optimality or guaranteed reference hits follows.
+
+Exactly three quality metrics and comparison formulas
+Gap=best_energy-reference in signed raw units. Proven hits require equality;
+BKS hits allow energy<=reference. Below-proven values trigger validation alarms.
+Failed trials stay in the hit denominator; incomplete gap means are unavailable.
+TTS99(t)=t*ln(0.01)/ln(1-p(t)); p=0 Inf (diagnostic JSON null), p=1 literal limit0.
+dGap=winner_mean_gap-baseline_mean_gap; dP=winner_p-baseline_p.
+dTTS=winner_TTS99-baseline_TTS99 only when both values are available.
+No percentage threshold, 1% success or time-to-target enters selection.
+
+Workflow attribution
+GPU/memory/CLI guidance: optimize-for-gpu, memory-optimization, cli-creator;
+Torch execution, quadratic admission, scalar output and strict resume identities.
+Scientific Agent Skills, arXiv:2609.00065; latest v2 verified 2026-10-06:
+https://doi.org/10.48550/arXiv.2609.00065

@@ -1,5 +1,6 @@
 """MeanFieldAnnealing for unconstrained QUBO/Ising."""
 from dataclasses import dataclass
+from . import observation
 from ._dynamics import IterativeSolver, SpinObjective, finite, positive, publish, spins
 from .solvers import _integer
 
@@ -30,6 +31,8 @@ class MeanFieldAnnealing(IterativeSolver):
         squared = self._squared_couplings(obj)
         for k in range(self.max_steps):
             t = k / max(self.max_steps-1, 1)
+            if squared is None:
+                t = observation.schedule_fraction(t)
             temperature = self.start_temperature * (self.end_temperature/self.start_temperature)**t
             m = u.tanh()
             gradient = obj.gradient(m) + temperature*u

@@ -1,5 +1,79 @@
 # Fixed wall-clock QUBO benchmark
 
+## New compact continuous 20-second mode
+
+The named-argument interface selects one public input per size/category and
+records nine energies during one uninterrupted run per seed. It reports only
+mean signed raw gap, exact/BKS hit probability, and TTS99. Full definitions,
+storage/resume semantics and timing caveats are in
+[CONTINUOUS_BENCHMARK_DEFINITIONS.txt](CONTINUOUS_BENCHMARK_DEFINITIONS.txt);
+all twelve references are in
+[CONTINUOUS_INPUT_REFERENCES.txt](CONTINUOUS_INPUT_REFERENCES.txt).
+
+```bash
+python run_benchmark.py --variable-count 200 --sparse --dry-run --json
+python run_benchmark.py --continuous --list-instances --json
+# Bounded smoke: ONE seed, ONE solver, not the full campaign.
+python run_benchmark.py --variable-count 200 --sparse --runs 1 \
+  --config configs/benchmark_solvers_selected_20s.json \
+  --solvers lib_exchange_cascade --seed-workers 1 --device cuda:0 --require-gpu --output results/smoke
+python run_benchmark.py --resume results/smoke
+
+# Use measured, quality-aware workers instead of one per GPU.
+# Pilot seeds are excluded from production results; default ceiling is four.
+python run_benchmark.py --variable-count 500 --dense --seed-workers auto \
+  --config configs/benchmark_solvers_selected_20s.json --require-gpu --dry-run
+
+# Post-run exports: threshold hit counts and recorded per-seed optimum times.
+python tools/postprocess_continuous_results.py results/smoke --hit-percent 1
+```
+
+Default seeds are 0–99. Verified OPTIMUM hits stop immediately after completed
+independent scoring; their energy is carried into later checkpoints and the
+first observed time is atomically saved per seed in the progress record. BKS
+matches/improvements do not trigger stopping. Configured natural solver stops
+remain unchanged. Raw energy retention is now required for retrospective1% hits;
+`--no-keep-raw-results` is rejected by this new CLI (historical artifacts remain).
+Results use
+`raw/<solver>/<problem>.npy`, `aggregated/<solver>/<problem>.csv`, and exactly
+three PNGs under `plots/<problem>/`. Transfer both existing `benchmark_data/qubo37`
+and new `benchmark_data/continuous12` once; inputs are not copied into results.
+The historical positional interface documented below is preserved, but is a
+different timing/metric/storage protocol; do not mix its experiments with this one.
+The selected preset is exploratory (9 held-out mean-gap improvements, 6 ties,
+3 regressions); see [CONTINUOUS_TUNING_REPORT.txt](CONTINUOUS_TUNING_REPORT.txt).
+Without `--config`, the initial `benchmark_solvers_20s.json` profile is used.
+`--seed-workers 1` is the default; `auto` measures1..4 workers/GPU with paired
+full-budget pilot seeds and fresh holdout, or use an explicit admitted integer.
+`--gpu-workers` and `--workers-per-gpu` are aliases. Automatic calibration is
+per solver/input/GPU, checks host/VRAM headroom and requires >=10% throughput
+gain without observed paired-incumbent/exact/1%-hit degradation. It cannot prove
+unchanged quality on all future seeds. Inconclusive results retain one worker.
+`--calibration-only` freezes pilot evidence without starting production seeds.
+Resume restores frozen counts without recalibration; old compact schema1 cannot
+resume with schema2 but remains readable for post-processing.
+Percentage progress is printed after every durably committed seed.
+See [EARLY_STOP_AND_WORKERS.txt](EARLY_STOP_AND_WORKERS.txt) for precise semantics,
+options, memory assumptions, deployment paths and measured validation.
+
+On the existing Vast instance, use the deployed checkout and its CUDA environment:
+
+```bash
+cd /workspace/margin_testing_continuous_release
+source /workspace/margin_testing/.venv/bin/activate
+# Runs all 23 solvers with 100 seeds on the selected single input, all visible GPUs.
+# You start this campaign; installation/validation does not launch it.
+python run_benchmark.py --variable-count 200 --sparse --seed-workers 1 \
+  --config configs/benchmark_solvers_selected_20s.json --require-gpu \
+  --output benchmark_results/my_200_sparse
+```
+
+Change `--seed-workers 1` to `auto` for measured calibration or to an explicit
+admitted integer. Explicit sharing bypasses quality calibration; successful
+four-worker smoke execution does not establish equal solution quality. Exchange
+benchmark graphs reuse a worker-owned capture stream to bound BLAS workspace
+caching, while graphs and optimization state remain fresh for every seed.
+
 Run from `solvers_testing/margin_testing`:
 
 ```bash

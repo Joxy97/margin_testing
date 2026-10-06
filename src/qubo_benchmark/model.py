@@ -27,8 +27,21 @@ class Problem:
             raise ValueError('Invalid coordinate arrays')
         if np.any(r < 0) or np.any(c >= self.n) or np.any(r > c) or not np.all(np.isfinite(v)):
             raise ValueError('Expected finite upper-triangle coefficients')
-        if len(set(zip(r.tolist(), c.tolist()))) != len(r):
-            raise ValueError('Duplicate matrix coordinates')
+        # Avoid tens of millions of Python tuples for large dense public inputs.
+        # Ordered COO can be checked in bounded chunks; unordered input needs
+        # one packed integer key per coordinate, not a Python hash table.
+        ordered, previous = True, -1
+        for start in range(0, len(r), 1_000_000):
+            keys = r[start:start+1_000_000].astype(np.int64)*self.n+c[start:start+1_000_000]
+            if len(keys) and (keys[0]<=previous or np.any(keys[1:]<=keys[:-1])):
+                ordered = False
+                break
+            if len(keys):
+                previous = int(keys[-1])
+        if not ordered:
+            keys = r.astype(np.int64)*self.n+c
+            if len(np.unique(keys))!=len(r):
+                raise ValueError('Duplicate matrix coordinates')
         for name, a in [('rows',r),('cols',c),('values',v)]:
             a = a.copy(); a.flags.writeable = False
             object.__setattr__(self, name, a)

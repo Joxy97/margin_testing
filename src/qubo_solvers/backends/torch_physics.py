@@ -10,6 +10,7 @@ import math
 from numbers import Integral, Real
 
 import numpy
+from .. import observation
 
 from .result import BQMOptimizationResult
 from .torch_execution import TorchExecution, _MAX_TORCH_SEED, _RUN_SEED_STRIDE
@@ -268,7 +269,9 @@ class TorchPhysicsSolver(TorchExecution):
 
 
 def smoothSchedule(step, steps):
-    u = min(1., step / max(1., .8 * (steps - 1)))
+    fraction = observation.schedule_fraction(None)
+    u = (min(1., step / max(1., .8 * (steps - 1)))
+         if fraction is None else min(1., fraction/.8))
     return u*u*(3-2*u)
 
 

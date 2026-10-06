@@ -16,6 +16,40 @@ from qubo_solvers.observation import SolveInterrupted,observing,current
 from qubo_benchmark.runtime import engine,storage,supervisor
 from qubo_benchmark.runtime.cli import parser,resolve
 
+
+def test_legacy_exchange_defaults_are_explicit_without_mutating_frozen_file():
+    from qubo_benchmark.runtime.selection import resolve_legacy_exchange_defaults
+    settings=read(CONFIG/'benchmark_solvers.json')['solvers'];before=digest(settings)
+    expanded=resolve_legacy_exchange_defaults(settings)
+    assert digest(settings)==before
+    p=expanded['lib_exchange_cascade']
+    assert p['graph_block']==0 and p['spin_mobility']==1.
+    assert p['freeze_fraction']==.75 and p['order_seed_at_activation'] is False
+    assert p['candidate_interval']==1 and p['order_seed']==.05
+    for name in settings:
+        if name!='lib_exchange_cascade':assert expanded[name]==settings[name]
+    missing=dict(p);missing.pop('k')
+    bad=dict(expanded,lib_exchange_cascade=missing)
+    assert next(r for r in inventory(bad) if r['solver_id']=='lib_exchange_cascade')['status']=='unavailable'
+
+
+def test_legacy_exchange_expansion_preserves_explicit_graph_parameters():
+    from qubo_benchmark.runtime.selection import resolve_legacy_exchange_defaults
+    p=dict(read(CONFIG/'benchmark_solvers.json')['solvers']['lib_exchange_cascade'],
+           graph_block=25,freeze_fraction=1.,order_seed_at_activation=True,memory_limit_bytes=None)
+    resolved=resolve_legacy_exchange_defaults({'lib_exchange_cascade':p})['lib_exchange_cascade']
+    assert all(resolved[name]==value for name,value in p.items())
+
+
+def test_preflight_freezes_all_new_exchange_defaults(tmp_path):
+    args=resolve(parser().parse_args(['200','sparse','10','--instances','representative',
+        '--solvers','lib_exchange_cascade','--runs','1','--device','cpu','--no-autotune',
+        '--output-root',str(tmp_path)]))
+    prepared=preflight(args)
+    p=prepared['core']['solvers']['lib_exchange_cascade']
+    assert p['graph_block']==0 and p['order_seed_at_activation'] is False
+    assert p==prepared['configuration']['solvers']['lib_exchange_cascade']
+
 def objective():
     return Problem(2,np.array([0,1]),np.array([0,1]),np.array([-10,-1]),0)
 

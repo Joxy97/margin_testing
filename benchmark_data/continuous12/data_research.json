@@ -1,0 +1,81 @@
+{
+  "checked_at": "2026-10-06",
+  "required_slot": {"binary_variables": 10000, "density_category": "dense"},
+  "status": "public_dense10000_input_ready_with_user_approved_independently_verified_optimum",
+  "resolution": "Authentic authors-released weighted graph retained unchanged; two complete independent exact algorithms agree on maximum original weight8873650, normalized QUBO minimum-8873650. This numeric reference was independently computed, not found in a publication. Proof journal and independently rescored witnesses are reference evidence, never solver inputs.",
+  "resolution_proof_path": "benchmark_data/continuous12/references/rozman10000_0.1_rnd2_exact_proof.json",
+  "candidates": [
+    {
+      "family": "GES extension of Palubeckis UBQP",
+      "instance": "p10000.1",
+      "primary_source_url": "https://cctech.org.ua/images/docs/Articles/2023/paper_23_2_2.pdf",
+      "primary_table": "Table 1, printed page 14 / PDF page 4",
+      "reported_maximization_reference": 24197906,
+      "finding": "Primary authors report extending the usual set to 10000 variables. The exact input file or benchmark-specific published generator seed was not located. Reconstructing an assumed seed would create an unverified instance.",
+      "standard_public_metadata_url": "https://raw.githubusercontent.com/rliang/qubo-benchmark-instances/main/metadata.json",
+      "standard_public_set_maximum_variables": 7000
+    },
+    {
+      "family": "MQLib public MaxCut benchmarks",
+      "primary_metadata_url": "https://raw.githubusercontent.com/MQLib/MQLib/master/data/metrics.csv",
+      "primary_header_url": "https://raw.githubusercontent.com/MQLib/MQLib/master/data/instance_header_info.csv",
+      "exact_10000_variable_instances": ["G67", "G70", "G72", "g000644", "g001162", "g002555", "g002744"],
+      "finding": "All exact-10000 public entries are sparse. The large dense g001345 instance is about 5066 vertices and cannot fill this slot. No size padding or relabeling performed."
+    },
+    {
+      "family": "Maximum weighted clique, Rozman et al. (2024)",
+      "primary_source_url": "https://www.nature.com/articles/s41598-024-59689-x",
+      "primary_table_url": "https://www.nature.com/articles/s41598-024-59689-x/tables/5",
+      "primary_data_page": "http://insilab.org/maxcliqueweight",
+      "archive_url": "http://insilab.org/files/maxcliqueweight/random_weighted_graphs.zip",
+      "archive_bytes": 2781916955,
+      "archive_etag": "\"a5d0af1b-6127147d04e0f\"",
+      "archive_central_directory_offset": 2781500520,
+      "archive_central_directory_bytes": 416413,
+      "selected_public_member": "random_weighted_graphs/random_10000_0.1_clq7.rnd2",
+      "selected_local_header_offset": 14336028,
+      "selected_compressed_bytes": 12829577,
+      "selected_uncompressed_bytes": 59002605,
+      "selected_crc32": 3034883835,
+      "source_retrieved": true,
+      "source_sha256": "68963a69f2c5423e6a4ab0860027e7a1c2c908dce40eb00c81f1fb3ccb2f505e",
+      "cache_directory": "benchmark_data/continuous12/raw",
+      "cache_source_url": "http://insilab.org/files/maxcliqueweight/random_weighted_graphs.zip#random_weighted_graphs/random_10000_0.1_clq7.rnd2",
+      "source_header": "p edge 10000 4997110",
+      "measured_nonedge_qubo_density_percent": 90.0047804780478,
+      "source_release_url": "https://gitlab.com/janezkonc/insidrug/-/releases/mcqdw_v1.0.0",
+      "finding": "Authenticated public 10000-vertex weighted input retrieved using bounded 13 MB HTTP ranges rather than the 2.78 GB archive. Primary Table5 reports timings, not optimum weights. After explicit user approval, unmodified pinned authorMCQDW and independent Cliquer1.21 completed unbounded exact weighted searches, both exit0 with clean overflow sanitizers, agreeing on weight8873650. Original witness vertex labels309,1243,3521,5046,6321,6868,7140 independently checked against source weights/all21 clique pairs and canonical QUBO. Vertex weights retained, no synthetic instance or borrowed cardinality target; reference is independently_verified_optimum, not published."
+    },
+    {
+      "family": "100000-spin coherent Ising machine, Honjo et al. (2021)",
+      "primary_source_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8480917/",
+      "finding": "Paper tests dense 10000-node graphs as part of scaling. Public supplementary material is a PDF, without an authenticated instance plus a matching numeric reference/witness identified."
+    },
+    {
+      "family": "Antiferromagnetic spatial photonic Ising machine / number partitioning (2021)",
+      "primary_source_url": "https://www.nature.com/articles/s42005-021-00741-x",
+      "finding": "Figure 4 explicitly tests N=10000 number-partition instances. Both source data and code are available only by corresponding-author request. No public matching integer weights, perfect-partition reference or witness identified."
+    },
+    {
+      "family": "QPLIB",
+      "primary_source_url": "https://qplib.zib.de/instances.html",
+      "finding": "10000-variable entries located are continuous quadratic models rather than unconstrained binary dense QUBOs. No change of variable domains was made."
+    },
+    {
+      "family": "Fraunhofer FOKUS QUBO challenges",
+      "primary_source_url": "https://qubobenchmark.fokus.fraunhofer.de/",
+      "finding": "Current public challenge listing includes 9684 variables as its nearest large size, not exactly 10000. No padding or size substitution was made."
+    },
+    {
+      "family": "CUDA-MS clique benchmarks (2018)",
+      "primary_source_url": "https://link.springer.com/article/10.1007/s10732-018-9393-x",
+      "primary_code_url": "https://github.com/pawelld/CUDA-MS",
+      "finding": "Published large random graph sizes are powers of two from 4096 to 32768, not the exact 10000 variables required."
+    },
+    {
+      "family": "NPP and Wishart/planted dense benchmarks",
+      "finding": "Broadened primary-source searches did not locate an authenticated exact-10000 public input with a matching published zero/ground-state reference. No new random or deterministic toy benchmark was generated."
+    }
+  ],
+  "preflight_behavior": "Keep and verify all 12 required slots. Dense10000 now uses an authenticated public weighted graph and the explicitly distinguished user-approved independently verified optimum. Missing, corrupt, mismatched or cutoff reference evidence causes visible failure; never substitute sizes or silently narrow the suite."
+}

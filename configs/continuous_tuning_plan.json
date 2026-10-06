@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "budget_s": 20.0,
+  "checkpoints_s": [
+    0.05,
+    0.1,
+    0.2,
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0
+  ],
+  "protected": [
+    "lib_simulated_annealing",
+    "lib_simulated_bifurcation",
+    "lib_greedy_local_search",
+    "lib_tabu_search",
+    "lib_tap_annealing"
+  ],
+  "protected_memory_guard_override": true,
+  "protected_memory_guard_authorization": "User authorized raising ONLY existing native protected memory_limit_bytes to 8 GiB for n>=5000 (SA, greedy, tabu, TAP). All other protected parameters, n<=1000 guards and SBM remain original.",
+  "base_configuration": "configs/benchmark_solvers_20s.json",
+  "previous_configuration_sha256": "ff24fc4fe51cfd37e6337da3fd5903071541b237d8fea60792a18ec6c631ea03",
+  "protected_configuration_sha256": "890a290d3b91b5bfa0074d8589ec6400dddea936aed909fb3df46a981b4ee446",
+  "training_instances": [
+    "gka1e",
+    "be200.8.1"
+  ],
+  "holdout_instances": [
+    "bqp500-2",
+    "be200.8.2"
+  ],
+  "training_seeds": [
+    101,
+    102
+  ],
+  "holdout_seeds": [
+    201,
+    202
+  ],
+  "block_policy": "paired: representative 0/seed 0, representative 1/seed 1; not a cross-product",
+  "candidates": [
+    {
+      "id": "profile",
+      "population_multiplier": 1.0,
+      "step_multiplier": 1.0
+    },
+    {
+      "id": "population64",
+      "population_multiplier": 2.0,
+      "step_multiplier": 1.0
+    },
+    {
+      "id": "late_freeze",
+      "population_multiplier": 1.0,
+      "step_multiplier": 1.0,
+      "exchange_freeze_fraction": 0.95
+    }
+  ],
+  "size_profiles": [
+    {
+      "max_variables": 1000,
+      "steps": 10000000,
+      "population": 32
+    },
+    {
+      "max_variables": 5000,
+      "steps": 10000000,
+      "population": 32,
+      "max_dense_variables": 16384
+    },
+    {
+      "max_variables": 10000,
+      "steps": 10000000,
+      "population": 32,
+      "max_dense_variables": 16384
+    }
+  ],
+  "schedule_policy": "wall-clock annealing controls over one stateful 20-second search for the 18 tunable methods only; protected five retain their legacy schedules",
+  "calibration": {
+    "overprovision": 1.25,
+    "maximum_steps": 100000000,
+    "input_format": "profiles[solver][n_variables].steps_per_second",
+    "timing_only": true,
+    "excluded_from_quality": true
+  },
+  "selection_metrics": [
+    "mean_gap_raw",
+    "exact_bks_hit_probability",
+    "tts99_s"
+  ],
+  "tts99_definition": "t*ln(0.01)/ln(1-p); p=0 unavailable; p=1 literal limit 0",
+  "selection_policy": "20-second mean signed raw objective gap (energy minus reference), descending exact/BKS hit probability, ascending TTS99; candidate ID breaks ties. Select before holdout.",
+  "holdout_policy": "Preselected winner and profile baseline, two fresh paired seeds on disjoint instances; never reselect on holdout. Skip identical duplicate baseline.",
+  "execution": {
+    "workers_per_device": 1,
+    "cpu_threads": 1,
+    "setup_timeout_s": 120.0,
+    "return_grace_s": 5.0,
+    "watchdog_s": 150.0,
+    "result_queue_limit": 8,
+    "memory_admission_fraction": 0.8,
+    "context_reserve_bytes": 1073741824,
+    "dense_matrix_copies": 12
+  },
+  "limitations": [
+    "At most 180 exploratory trials for 18 tunable methods, not a 100-seed campaign.",
+    "Paired blocks do not estimate independent instance and seed effects.",
+    "TTS99 uses checkpoint hit probability, no interpolation or TTT.",
+    "Step ceilings are immutable guards, not measured throughput or a new start at a checkpoint.",
+    "Native dense storage remains quadratic even for sparse source objectives.",
+    "Only the explicitly authorized existing native protected memory guard becomes 8 GiB at n>=5000; all other protected parameters and SBM remain original.",
+    "Carry incumbents after a natural return; finite schedules may produce flat curves."
+  ]
+}

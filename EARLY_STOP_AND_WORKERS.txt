@@ -1,0 +1,239 @@
+EARLY STOPPING, OPTIMUM TIMES AND QUALITY-AWARE WORKERS
+=====================================================
+Date: 2026-10-06. Implementation extends the existing compact20s runner.
+Final implementation and bounded CUDA validation completed on the Vast host.
+Final tests: 1268 passed, 3 portfolio-only tests deselected; 17 GPU smoke seeds
+all complete; exports, no-op resumes and all 12 input checksum audits passed.
+
+DEPLOYMENT AND INPUTS
+Final Vast checkout: /workspace/margin_testing_continuous_release
+Python: /workspace/margin_testing/.venv/bin/python
+Catalog: configs/continuous_catalog.json; selected presets:
+configs/benchmark_solvers_selected_20s.json (explicit --config to use them).
+Seven new normalized inputs: benchmark_data/continuous12/normalized.
+Five reused inputs and all37 historical inputs: benchmark_data/qubo37.
+Raw sources, verified references and exact-search evidence remain beside inputs.
+No input matrix is copied into benchmark results. All12 were verified before
+this change; previous results/inputs remain intact. Current machine:4RTX3080s,
+10GiB each, NOT4090s. Calibrate again on a different machine/source/input/config.
+
+EARLY STOPPING DOES NOT CHANGE THE OPTIMIZER'S EQUATIONS
+Each seed uses one fresh solver/RNG state and the original frozen parameters.
+The benchmark observer, NOT the solver's numerical updates, knows the reference.
+For reference_type=OPTIMUM, each captured incumbent is independently scored
+against original coefficients and its producing GPU work is synchronized.
+If it equals the known optimum within the declared tolerance, save the first
+observed completed/validated time, stop the solve cooperatively and release the
+worker for its next seed. There is no wait to20s after this successful stop.
+Integers use tolerance0; explicitly declared floating inputs use1e-9.
+Below-optimum energies are validation errors, never claimed improvements.
+Late candidates completing at/after the deadline cannot receive quality credit.
+
+Already-recorded checkpoints are never changed. Only later unrecorded entries
+are filled with the attained optimum. Example: hit at.075s keeps the.05s entry
+unchanged, while.1,.2,.5,1,2,5,10,20s carry the optimum. No restart or continued
+optimization is invented. For a true optimum no better feasible energy exists.
+This time is the FIRST OBSERVED CERTIFIED HIT, an upper bound on any unobserved
+internal discovery time, not a reconstruction from the nine checkpoint times.
+
+For reference_type=BKS, matching or beating BKS NEVER triggers early stopping;
+search follows its original behavior within20s. A configured natural return
+still retains its incumbent to20s without restarting or changing controls.
+BKS is not a proven optimum. Its time_to_optimum_s remainsnull.
+--no-stop-on-optimum disables successful early stopping, but still records the
+first observed optimum time; BKS handling is unchanged.
+
+MINIMAL RESULT FORMAT AND CRASH SAFETY
+Raw energies remain float64(N,9), defaultN=100:7,200 numerical bytes plus header.
+progress/<solver>/<problem>.json now additionally contains time_to_optimum_s:
+a seed-aligned list, one float ornull per seed. Null means not observed before
+deadline, not applicable(BKS), pending, or failed as distinguished by status.
+This is a TIME for the SAME known problem optimum, not a new optimum per seed.
+No solution vectors, per-iteration traces, populations or physics states are saved.
+The time commits in the same atomic checksummed record as seed status/row hash.
+Interrupted/uncommitted seeds are rerun in full. Partial energy rows are not
+treated as complete. Raw-discard remains supported by the storage API for old
+use cases, but is rejected in this CLI because the user requires post-run hits.
+Compact schema2/source/policy identity rejects resuming old schema1 campaigns;
+historical results remain readable and do not receive invented optimum times.
+
+POST-RUN1% HITS AND TIMING EXPORTS
+Retain raw checkpoint energies. For minimization and referenceR, a p-percent
+hit is E<=R+(p/100)*abs(R). Negative references are handled correctly; improvements
+over BKS count. AtR=0 the threshold remains0. Missing/failed energies are misses.
+The denominator is all planned seeds, not only scored or successful seeds.
+python tools/postprocess_continuous_results.py RESULTS --hit-percent 1
+Default output RESULTS/postprocessed contains:
+hits_within_1pct.csv: solver,problem,checkpoint_seconds,hits,planned_seeds,
+                     hit_probability
+time_to_optimum.csv: solver,problem,seed,time_to_optimum_s,status,reference_type
+The helper checks completion/integrity, never invokes a solver or changes source
+results, and fails clearly if raw energies are absent. Schema1 times remain empty.
+These are requested post-processing exports, not new per-iteration datasets.
+The standard aggregate remains exactly four columns/three metrics and three PNGs.
+TTS99 still uses nominal checkpoint t and empirical p; early-stop actual latency
+is separately available from the saved optimum times. No fitted hit model.
+
+WORKER MODES, PROGRESS AND REPRODUCIBILITY
+--seed-workers 1 (default): one persistent worker per selected GPU, no pilot.
+--seed-workers auto: choose measured counts per solver/input/GPU.
+--seed-workers N: explicitN per GPU, subject to host/VRAM/CPU admission; no pilot.
+--gpu-workers and --workers-per-gpu are aliases.
+--no-autotune with auto uses one per GPU; CPU mode alwaysuses one worker.
+--max-auto-workers 4(default); --calibration-seeds 4 and
+--calibration-holdout-seeds 4(default). Samples must cover the requested ceiling.
+--calibration-only measures/freezes policy but starts NO production seeds.
+--calibration-cache PATH changes cache location; --recalibrate is new-run-only.
+--dry-run verifies selection/admission without executing calibration or solvers.
+Selected devices and per-solver counts are frozen in manifest.execution.worker_plan.
+Resume restores these counts and checks current memory admission without retuning.
+Progress prints percentage,completed/planned,solver,seed,device,workers,status and
+optimum time when reached. Each completion is durable BEFORE its progress line.
+
+QUALITY-AWARE CALIBRATION CONTRACT
+Legacy pilots were throughput-only and are not used to select this new policy.
+For each actual solver/problem/device, compare1worker to admitted integers2..4
+bydefault. All candidates use identical disjoint screening seeds, starting at
+2^31 and skipping campaign seeds. Use unchanged parameters and the full20s
+observation budget; do not use a.5s pilot to claim20s quality preservation.
+All workers prepare immutable inputs/scoring and pass readiness before timing.
+Workers share only their GPU, never RNG state or mutable optimization state.
+Separate homogeneous solver groups avoid inactive caches filling the GPU and
+avoid comparing calibration on one solver to production with another co-runner.
+
+Acceptance requires successful finite final incumbents, no worse paired energy
+at any observed checkpoint, no loss of exact or1% hit counts, no worse full-cohort
+mean signed gap, and >=10% measured completed-trial throughput gain.
+Both-unobserved early entries are reported as unobserved, not fabricated scores.
+Candidate missing where baseline is finite is rejected. All planned seeds remain
+in hit denominators. The highest passing screening count is preselected, then
+compared to1worker on fresh holdout seeds. A holdout rejection falls back to1,
+not an alternative selected using that same holdout. No pilot joins benchmark
+statistics. A small sample establishes NO OBSERVED DEGRADATION, not a universal
+guarantee, unchanged outcome distribution, statistical equivalence or global optimum.
+
+INITIAL SMALL CALIBRATION ON THE CURRENT VAST HOST (BEFORE STREAM REUSE)
+All 48 screening trials completed: three cases, four paired seeds, counts 1..4.
+All cases selected 1 worker. No higher count passed screening, so no holdout ran.
+These pilot seeds do not enter the production results.
+
+Case                         Throughput ratio with 2 / 3 / 4 workers
+Greedy, gka1d, 100 sparse     1.990x / 2.013x / 2.013x
+SBM, gka8d, 100 dense         1.645x / 1.682x / 2.460x
+Exchange, gka4f, 500 dense    1.997x / 1.998x / 3.988x
+
+The rejection concerns the requested full checkpoint-quality curve, not only
+final energy. Greedy exact hits at 0.2s fell from 2/4 at baseline to 1/4, 0/4,
+0/4, although all final exact counts stayed 2/4. SBM exact hits at 1s fell from
+4/4 to 3/4, 2/4, 0/4, although all final exact counts stayed 4/4.
+Exchange with two workers improved final mean raw gap from 2685.75 to 2382.5,
+but worsened its 1s mean raw gap from 27007.25 to 64626.5. Higher throughput
+therefore did not justify higher concurrency under the conservative policy.
+Actual optimum stopping occurred in 24 pilot trials. BKS Exchange continued
+through the full 20s window. Only these solver/input/GPU combinations were
+measured; neither four workers nor the selected one-worker policy is a proven
+quality guarantee across the other solvers, inputs, seeds or a 4090 machine.
+
+EXCHANGE MEMORY IMPROVEMENT: INFRASTRUCTURE ONLY
+The follow-up lifetime diagnostic found no surviving CUDA graph objects after
+each seed, but allocated memory increased by exactly 17,039,360 bytes per seed.
+The cause is two new capture streams per solve, each retaining a cuBLAS workspace
+of 8,519,680 bytes on this architecture. Python garbage collection and allocator
+empty_cache did not remove those workspaces. This is a stream-keyed library cache,
+not evidence of surviving trajectories; stream-pool saturation may eventually
+bound it, but it unnecessarily raises a long-lived worker's footprint.
+
+The benchmark now prepares one worker-owned CUDA capture stream outside solve
+timing. Fresh Exchange graphs use that stream; fresh graph/state/RNG per seed
+and every physical parameter, update, schedule and synchronization remain intact.
+Legacy calls without this observer field preserve their old stream selection.
+No private workspace-clear API or reduced BLAS workspace configuration is used.
+
+With four fresh two-second diagnostic seeds, allocated memory after every solve
+is exactly 19,040,768 bytes instead of 27,560,448; 44,599,808; 61,639,168;
+78,678,528 bytes. All captured graph weak references are dead after each solve.
+The short diagnostic proves this resource lifecycle improvement only, not 20s
+solution quality. Final full-budget calibration is repeated under the new source
+identity; old evidence remains preserved but cannot select this new runtime.
+Primary implementation evidence (PyTorch v2.11.0):
+https://github.com/pytorch/pytorch/blob/v2.11.0/aten/src/ATen/cuda/CublasHandlePool.cpp
+
+FINAL FULL-BUDGET CALIBRATION (FROZEN MEMORY-SAFE SOURCE)
+All 48 screening attempts completed, no wave errors, all three cases selected 1.
+No higher count passed screening; therefore no holdout ran. Unit tests exercise
+holdout acceptance/rejection, but no real higher-count holdout was needed here.
+
+Case        Throughput 2/3/4 workers     Final mean raw gap, 1/2/3/4 workers
+Greedy      1.990x / 2.015x / 2.014x    25.25 / 25.25 / 25.25 / 25.25
+SBM         1.907x / 1.829x / 2.623x    0 / 0 / 0 / 0
+Exchange    1.997x / 1.997x / 3.984x    2685.75 / 2382.50 / 2678.00 / 2956.00
+
+Greedy lost early exact hits (at .2s: 2/4 -> 1/4, 0/4, 0/4). SBM two-worker
+mean raw gap at .2s worsened from 4259.25 to 7374.50; three/four workers lost
+1s exact hits (4/4 -> 2/4, 0/4). Exchange two-worker mean raw gap at 1s worsened
+from 25556.50 to 65927.25 despite improved final energy for every paired seed.
+Exchange three-worker final mean improved slightly, but two final paired seeds
+worsened. These are concrete observed regressions, not a universal equivalence
+claim. Every tested count was memory-admitted; quality caused the rejections.
+
+Final per-process reserved peaks: Greedy 22 MiB, SBM 22 MiB, Exchange 52 MiB
+at each tested count. Exchange baseline stayed at exactly 52 MiB for all four
+successive seeds, compared with 74/114/154/194 MiB before stream reuse. The
+fourth-seed reserved peak is reduced about 73%; this is Torch allocator memory,
+NOT total VRAM usage or a claim about all solvers/sizes. Host RSS per-process
+maxima were approximately 1161/1095/1198 MiB respectively. Context headroom
+and current free memory remain part of admission. Auto retains one worker on
+these cases; explicit 4-worker execution is available but bypasses quality checks.
+
+MEMORY AND RESOURCE SAFETY (SKILL-INFORMED)
+Preserve Torch; no framework port, custom CUDA build or physical retuning.
+Admission includes source COO/host buffers, native matrix/padding rules, immutable
+independent scoring operator (conservativeFP64), trajectories/workspace, allocator
+and context allowances, CPU/cgroup limits and20%headroom. Profiling is calibration-
+only: scalar CUDA reserved peaks and process RSS high-water marks are retained
+in calibration evidence. Allocated peaks are transiently measured by workers,
+not retained in the minimal evidence report; they cannot be inferred from reserved.
+No production GPU/memory telemetry datasets are added. Actual peaks can restrict
+the static estimate; missing measurements keep1, unsafe baseline aborts clearly,
+and peak growth on screening/holdout rejects unsafe higher counts. Estimates are
+not hard memory guarantees and external processes can change available capacity.
+One baseline worker/GPU remainsallowed when CPU quota is below GPU count, matching
+the existing sharing policy; extra workers obey the measured resource admission.
+
+Cache keys bind input/reference,solver parameters,source,software/hardware/device
+identity,stop/timing policy and calibration options/seeds. Free-memory snapshots
+do not replace current admission checks. Evidence is checksummed; immutable
+report versions are retained when an explicit recalibration updates the cache.
+Resume never silently changes worker count. Workers use bounded queues, separate
+setup/solve watchdogs and own-process terminate/kill cleanup. Ctrl+C cancels all
+calibration pools, and surviving workers/source/input changes abort scheduling.
+
+VALIDATION AND SCOPE
+Smaller unit/integration tests and representative CUDA calibrations/smokes only.
+Full23solvers*12problems*100seeds campaign was NOT launched.
+Final CPU standalone suite: 935 passed, 336 CUDA checks skipped, 48 subtests passed.
+Final Vast suite: 1268 passed, 3 deselected, 48 subtests passed, 2 existing warnings.
+The deselected portfolio-only integration functions are
+test_bqm_factory_registry_matches_public_library and
+test_resident_report_identifies_solver_preparation_mode.
+Real final smoke cases: Greedy100 sparse, 4 workers/8 seeds (4 optimum hits);
+SBM100 dense, 1 worker/4 seeds (4 optimum hits); Exchange500 dense BKS,
+4 workers/4 seeds (no optimum stop); Greedy10000 dense, 1 worker/1 seed
+(completed normally, no optimum hit). All four directories passed integrity,
+post-run hit/time export and no-op resume without rerunning a completed seed.
+Only these bounded cases were run, not all solver/large-input combinations.
+
+Final source snapshot SHA256 (matches local and deployed Vast checkout):
+b3a98190351168ad94d84e528b675d04055d49702a7dccdac522bd4f79e40afb
+Final evidence on Vast:
+benchmark_results/early_stop_gpu_smoke_final
+benchmark_results/early_stop_calibration_final
+benchmark_results/early_stop_calibration_cache_final
+/workspace/early_stop_release_audit.json
+The final audit confirms all 12 normalized input SHA256s and all four completed
+smoke manifests against this deployed source. Matching calibration-cache reuse
+was exercised without launching new pilots or production seeds.
+GPU/memory skill guidance informed profiling,headroom,bounded workers and quality
+gates. Scientific Agent Skills: Kassis T., Agarwal V., He Y., Patel D.,
+Brueckner A.M.(2026), arXiv:2609.00065; latestv2 checked2026-10-06.
+https://doi.org/10.48550/arXiv.2609.00065

@@ -5,6 +5,7 @@ Controls are evaluated at the step midpoint; readout uses cos(theta).
 """
 
 import math
+from .. import observation
 
 from .torch_physics import TorchPhysicsSolver, smoothSchedule
 
@@ -86,7 +87,7 @@ class TorchDynamicalGeometryBQMSolver(TorchPhysicsSolver):
         for step in range(p['steps']):
             from ..observation import poll
             poll()
-            progress = (step + .5) / p['steps']
+            progress = observation.schedule_fraction((step + .5) / p['steps'])
             weight = smoothSchedule(step+.5, p['steps'])
             confinement = p['confinement_start'] + weight*(p['confinement_end']-p['confinement_start'])
             gamma = p['damping'] + weight*(p['terminal_damping']-p['damping'])

@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 import math
 import torch
+from . import observation
 from ._dynamics import IterativeSolver, SpinObjective, finite, normal, positive, publish, spins
 from .solvers import _integer
 
@@ -43,13 +44,13 @@ class SpinVectorLangevin(IterativeSolver):
                     - self.damping * momentum) / self.mass
 
         for k in range(self.max_steps):
-            t = k / max(self.max_steps - 1, 1)
+            t = observation.schedule_fraction(k / max(self.max_steps - 1, 1))
             acceleration = force(theta, velocity, t)
             noise = amplitude * normal(run, theta.shape) if amplitude else 0.
             predicted = theta + dt * velocity
             new_velocity = velocity + dt * acceleration + noise
             if self.integrator == 'heun':
-                next_t = min((k + 1) / max(self.max_steps - 1, 1), 1.)
+                next_t = observation.schedule_fraction(min((k + 1) / max(self.max_steps - 1, 1), 1.))
                 theta = theta + .5 * dt * (velocity + new_velocity)
                 velocity = velocity + .5 * dt * (
                     acceleration + force(predicted, new_velocity, next_t)) + noise

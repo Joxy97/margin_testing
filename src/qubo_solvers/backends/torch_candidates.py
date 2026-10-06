@@ -52,6 +52,34 @@ class TorchCandidateAccumulator:
     def add(self, samples: Any) -> None:
         """Consume a (runs, variables) device tensor."""
         torch = self.torch
+        from ..observation import current
+        observer = current()
+        if getattr(observer, 'scalar_only', False):
+            if self.groups:
+                raise ValueError('Objective-only benchmark requires an unconstrained normalized QUBO')
+            # The benchmark needs source objectives, not host assignments. Keep
+            # all incumbent data on device; ordinary application selection and
+            # its repair/tie protocol below are completely unchanged.
+            observer.poll()
+            values = samples.to(torch.float64)
+            valid = ((values==0)|(values==1)).all(1)
+            energies = values @ self.linear+self.problem.offset
+            for start in range(0, self.problem.interactionCount, self.chunkSize):
+                stop = start+self.chunkSize
+                products = values[:, self.heads[start:stop]]*values[:, self.tails[start:stop]]
+                energies += products @ self.biases[start:stop]
+            energies = torch.where(valid, energies, torch.full_like(energies, float('nan')))
+            minimum = energies.min()
+            observer.capture_objectives(minimum)
+            best = getattr(self, '_scalar_best_energy', None)
+            selected = samples[energies.argmin()].clone()
+            if best is None:
+                self._scalar_best_energy, self._scalar_best_sample = minimum, selected
+            else:
+                improved = minimum < best
+                self._scalar_best_sample = torch.where(improved, selected, self._scalar_best_sample)
+                self._scalar_best_energy = torch.minimum(minimum, best)
+            return
         if self.groups:
             selected = samples[:, self.groupVariables].to(torch.int64)
             prefix = torch.cat((torch.zeros((len(samples), 1), device=samples.device,
@@ -91,6 +119,11 @@ class TorchCandidateAccumulator:
             capture([result[0]], [result[1]], phase='native_candidate')
 
     def result(self) -> Candidate:
+        if hasattr(self, '_scalar_best_sample'):
+            # A natural solver return may still construct its standard internal
+            # result once. The benchmark never serializes this assignment.
+            sample = self._scalar_best_sample.cpu().numpy()
+            return tuple(int(v) for v in sample), self.problem.energy(sample)
         if self.best is None:
             raise ValueError("BQM solver returned no samples")
         return self.best

@@ -1,5 +1,6 @@
 """ReplicaAnnealing for unconstrained QUBO/Ising."""
 from dataclasses import dataclass
+from . import observation
 from ._dynamics import IterativeSolver, SpinObjective, finite, normal, positive, publish, spins
 from .solvers import _integer
 
@@ -35,14 +36,21 @@ class ReplicaAnnealing(IterativeSolver):
         q = .1*spins(run)[:, None, :].repeat(1, self.replicas, 1)
         q += .01*normal(run, q.shape)
         for k in range(self.max_steps):
-            t = (k+1)/max(self.max_steps, 1)
+            t = observation.schedule_fraction((k+1)/max(self.max_steps, 1))
             gradient = (obj.gradient(q)+self.penalty*q*(q*q-1))/self.replicas
             gradient -= self.coupling*t*(q.roll(1, 1)+q.roll(-1, 1))
             q -= self.time_step*gradient
             candidates = (q >= 0).to(q.dtype).mul_(2).sub_(1)
             energies = obj.energy(candidates)
-            for layer in range(self.replicas):
-                publish(run, candidates[:, layer])
+            if not run.spin:
+                # Original QUBO and converted Ising scores differ only by a
+                # constant mathematically, but cancellation can change ties.
+                # Preserve the original-score incumbent and the historical
+                # Ising-score final layer while avoiding one publish per layer.
+                binary = (candidates + 1) * .5
+                original = ((binary @ run.q) * binary).sum(-1)
+                publish(run, candidates[run.rows, original.argmin(1)])
+            # argmin keeps the first layer on ties, as the former ordered pass.
             publish(run, candidates[run.rows, energies.argmin(1)])
             run.iterations += 1
             record(k+1)

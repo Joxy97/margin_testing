@@ -1,0 +1,147 @@
+COMPACT CONTINUOUS 20-SECOND BENCHMARK
+====================================
+Date: 2026-10-06. This defines the NEW named-argument protocol only.
+Historical positional N DENSITY BUDGET experiments and their original files
+remain intact. Do not pool results from the two protocols.
+
+CURRENT EXTENSION: compact schema2 adds known-optimum early stopping and one
+time_to_optimum_s scalar per seed, committed with progress. BKS does not stop
+on a reference hit. Future checkpoints carry the attained optimum; earlier
+entries are preserved. Energy retention is required in the current CLI for
+post-run1% hits. Worker modes1/auto/explicitN and their quality-aware calibration
+are defined in EARLY_STOP_AND_WORKERS.txt, which supersedes earlier contradictory
+natural-return/raw-discard/no-first-hit statements below. Standard metrics stay
+Gap,Hit probability,TTS99; no trajectories or assignment vectors are stored.
+
+RUN AND CHECKPOINTS
+Each solver/problem/seed has one fresh optimization call, initialized once.
+Checkpoints (seconds): 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20.
+Default seeds: 0..99, identical across solvers. No checkpoint restarts.
+An interrupted seed is pending and is rerun completely with its original seed.
+No solver state or RNG state is serialized for resume.
+
+Worker startup and immutable input/operator preparation precede the clock.
+RNG reset, fresh state, algorithm preprocessing, optimization and candidate
+decoding/scoring lie inside the 20-second observation window. Independent
+scoring of a candidate must finish before it can improve a checkpoint. This
+is conservative and includes its overhead; it must not be confused with the
+historical protocol's scoring-outside-budget timing. GPU work is synchronized
+before certification. No late candidate is retroactively credited.
+
+A checkpoint uses the last fully completed independently scored incumbent
+at its boundary, not a candidate that finishes after it. Incumbents are best
+so far: valid energies cannot increase across a seed's checkpoints. A missing
+early incumbent is NaN, never a fabricated initial solution. If an unchanged
+protected solver naturally returns early, its incumbent is retained to 20s;
+it is not restarted or given altered numerical controls. Its curve can be flat.
+
+EXACTLY THREE BENCHMARK METRICS
+All inputs minimize E(x), x in {0,1}. Reference R is stored once per problem.
+
+1. Gap to solution at t = mean_s [best_energy_s(t) - R].
+   This is a SIGNED RAW objective difference, NOT a percentage or absolute
+   value. Zero meets the reference; positive is worse; negative improves a
+   BKS. A value below a proven/independently verified optimum is a validation
+   alarm, not a claimed improvement. Unlike hit rate, a mean gap reflects
+   distance even when no seed reaches the reference.
+
+2. Hit probability p(t) = count[best_energy_s(t) <= R + tolerance] / N.
+   N is every planned seed, default100, not only successful/scored attempts.
+   All current public inputs are integer objectives: tolerance is exactly0.
+   Future floating inputs must explicitly declare integer_objective=false;
+   their shared tolerance is1e-9. For an optimum a hit reaches the optimum;
+   for BKS it reaches OR improves the BKS. This is NOT the historical1% hit.
+   Zero empirical hits remains p=0; no smoothing or fitted probability model.
+
+3. TTS99(t) = t * ln(0.01) / ln(1 - p(t)).
+   p=0 gives Inf. p=1 gives0, the literal continuous-formula limiting value.
+   That0 does NOT mean a physically instantaneous solve. This convention does
+   not substitute t or an integer-rounded restart count. TTS99 is a restart
+   estimate from the marginal checkpoint hit probability, not a directly
+   measured first-hit time, and assumes independent identical repetitions.
+   Checkpoints in a single seed are correlated; they are not extra seeds.
+   Hit probability can rise while TTS99 rises: its numerator also grows with t.
+   Inf is retained in CSV; plotting omits nonfinite points, not replaces them.
+
+FAILED OR UNAVAILABLE ATTEMPTS
+A terminal failed/invalid/OOM attempt stores one all-NaN nine-energy row and
+a small operational status. Missing energies are misses. If any planned
+energy is missing at t, mean gap is NaN, NOT a conditional mean over survivors.
+Incomplete groups do not publish final aggregate curves. Failed attempts stay
+visible; the CLI exits nonzero. Interrupted/worker-lost seeds remain pending.
+
+MINIMAL OUTPUT AND ATOMIC RESUME
+raw/<solver>/<problem>.npy: float64 array, shape(N,9), default(100,9).
+Row i corresponds to manifest.seeds[i]; column j to manifest checkpoints.
+Only best energies (and NaN for unavailable) are stored in this array.
+No vectors, bitstrings, populations, trajectories, auxiliary states, matrices,
+per-iteration energies/times, memory/GPU telemetry, iteration counts, first-hit
+times, per-row gaps/hits or duplicated references are written in new results.
+Temporary internal solver states and natural internal solution returns remain
+allowed. Checkpoints copy only a scalar from GPU, never an n-variable vector.
+
+aggregated/<solver>/<problem>.csv has exactly these four columns:
+checkpoint_seconds,gap_to_solution,hit_probability,TTS99
+There are9 data rows. Solver/problem strings are encoded in the path.
+
+manifest.json stores seeds/checkpoints once, minimal problem/reference fields,
+and fixed source/input/configuration/environment/execution identity for safe
+resume. progress/<solver>/<problem>.json stores status/checksum per seed;
+state.json is a small global completion/integrity record. These are operational
+metadata, not additional benchmark metrics. A full seed row is flushed and
+atomically replaced before its progress commit. Orphan uncommitted rows are
+discarded; corrupt committed rows fail verification rather than being trusted.
+
+--keep-raw-results (default): retain the tiny energy array for recomputation.
+--no-keep-raw-results: after durable aggregate/completion checksums, remove
+that array and its per-row energy checksums, retaining completion/status and
+the three aggregate curves. Completed groups resume without raw arrays.
+No input matrix is copied into a results directory. Reference witnesses and
+exact-search evidence belong to immutable input provenance, not run results.
+
+PLOTS, DENSITY AND GROUPING
+Exactly3 modest PNGs per selected problem, read only from aggregate CSV:
+mean signed Gap vs runtime; Hit probability vs runtime; TTS99 vs runtime.
+Each contains the selected solver curves and identifies n, sparse/dense and
+reference type. The12-slot catalog selects ONE input for each size/category.
+Sparse/dense at the same n can be different mathematical problem families.
+Density is nonzero unordered off-diagonal QUBO interactions / [n(n-1)/2],
+excluding diagonal. Sparse<20%, dense>=20%. Measured percentages and original
+source meanings are documented in CONTINUOUS_INPUT_REFERENCES.txt.
+
+No across-problem dense-vs-sparse pooling, conditional time-to1% or memory
+plot is added in this protocol. In particular, raw signed gaps from different
+objective scales must not be pooled as if directly comparable. Earlier IQR
+plots remain historical. IQR means the25th-to75th percentile interval: the
+middle50% of observations, a descriptive spread, NOT a confidence interval
+for the mean. An across-problem IQR describes problem heterogeneity; a
+within-problem seed IQR describes variation between stochastic runs. Neither
+is newly stored or plotted here, because this protocol requests only the
+three mean/probability/TTS curves from the four-column aggregate files.
+
+20-SECOND PARAMETER MODE (SEPARATE FROM STORAGE)
+The original solver defaults and configs/benchmark_solvers.json are preserved.
+18 previously deliberately changed methods opt into wall-clock annealing
+controls, generous immutable iteration ceilings and tested population/time-
+step candidates. They retain one evolving state. Controls are held constant
+within an Exchange CUDA graph block. freeze_fraction=1 disables the terminal
+freeze; .95 is an explicitly different candidate, not proof of completing a
+terminal cascade. No reference value is supplied to an optimizer.
+
+SA, SBM, greedy, tabu and TAP retain original numerical parameters/schedules.
+Only the explicitly authorized existing native memory guard for SA, greedy,
+tabu and TAP becomes8GiB at n>=5000; smaller guards and SBM stay unchanged.
+That guard is an admission limit, not a guaranteed GPU allocation or a change
+to the algorithm. Bounded tuning does NOT establish globally optimal controls
+or guarantee hits at20s. See CONTINUOUS_TUNING_REPORT.txt for actual evidence.
+
+STORAGE SCALE (EXCLUDES INPUTS AND PLOTS)
+One default solver/problem: 100*9*8=7,200-byte numerical payload;
+NumPy v1 header adds128bytes:7,328bytes per raw array.
+23*12*100*9=248,400 values:1,987,200bytes (~1.90MiB) numerical payload;
+276 NumPy headers add35,328bytes, total2,022,528bytes (~1.93MiB) arrays.
+Small progress/manifests/CSVs add a few MiB, independent of n except short
+identity strings. Plot files can dominate download size; exactly36 PNGs for
+all12 inputs. With raw retention off, only aggregate/integrity/status data
+and optional plots remain. Raising n from100 to10000 never enlarges an
+energy matrix: row/column counts depend on seeds/checkpoints, not variables.

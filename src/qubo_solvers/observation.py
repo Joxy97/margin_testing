@@ -17,6 +17,18 @@ def current():
     return _observer.get()
 
 
+def schedule_fraction(legacy_value):
+    """Optional execution-clock control; ordinary solves keep legacy schedules.
+
+    This changes only the explicitly enabled continuous tuning protocol, not
+    the equations, constructor defaults, or protected comparison settings.
+    """
+    observer = current()
+    if observer is not None and getattr(observer, 'wall_schedule', False):
+        return observer.schedule_fraction(legacy_value)
+    return legacy_value
+
+
 def poll():
     observer = current()
     if observer is not None:

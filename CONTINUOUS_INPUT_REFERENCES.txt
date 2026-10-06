@@ -1,0 +1,149 @@
+CONTINUOUS BENCHMARK INPUTS AND FROZEN REFERENCES
+Verified 2026-10-06. Catalog: configs/continuous_catalog.json
+
+Every objective below minimizes offset + x.T Q x for binary x and symmetric Q.
+Density is 100 * nonzero unordered off-diagonal QUBO pairs / (n*(n-1)/2).
+Sparse means density <20%; dense means density >=20%. These are measured QUBO
+densities, not densities borrowed from an original graph.
+
+Instance                                      n  Category  Density %    Reference  Type
+gka1d                                       100  sparse     9.979798        -6333  POPT
+gka8d                                       100  dense     78.929293       -16352  POPT
+gka1e                                       200  sparse     9.668342       -16464  POPT
+gka5e                                       200  dense     49.532663       -35154  POPT
+bqp500-1                                    500  sparse     9.917435      -116586  BKS
+gka4f                                       500  dense     74.351102      -172771  BKS
+bqp1000-1                                  1000  sparse     9.901502      -371438  BKS
+p_hat1000-1__clique_QUBO                     1000  dense     75.524925          -10  POPT
+G55                                        5000  sparse     0.100004       -10299  BKS
+p5000.2                                    5000  dense     79.597632    -10836019  BKS
+G67                                       10000  sparse     0.040004        -6950  BKS
+rozman10000_0.1_rnd2__weighted_clique_QUBO   10000  dense     90.004780     -8873650  IOPT
+
+POPT = published proven optimum; no separate certificate re-proved here.
+BKS  = published best-known feasible value, not a claim of optimality.
+IOPT = user-approved independently verified optimum, NOT a published numeric
+       reference and NOT a separately checkable formal optimality certificate.
+
+VERIFIED PUBLIC INPUT AND REFERENCE SOURCES
+
+gka1d, gka8d, gka1e, gka5e, gka4f:
+  Inputs: https://biqmac.aau.at/library/biq/gka/INSTANCE.sparse
+  Primary reference: https://biqmac.aau.at/biqmaclib.tex (Table 3)
+  Readable publication: https://biqmac.aau.at/biqmaclib.pdf
+  Each exact row/value and bound-versus-optimum notation was checked. gka4f is
+  the feasible upper bound -172771, with lower bound -181507.74, not an optimum.
+  Source matrix entries are retained in the symmetric minimization QUBO.
+
+bqp500-1:
+  Input: https://biqmac.aau.at/library/biq/beasley/bqp500-1.sparse
+  Primary reference: https://biqmac.aau.at/biqmaclib.tex (Table 1)
+  Feasible upper bound -116586; lower bound -121588.41. BKS, not optimum.
+
+bqp1000-1:
+  Input: https://people.brunel.ac.uk/~mastjjb/jeb/orlib/files/bqp1000.txt
+  The first instance in the original public bundle is used, with exactly 1000
+  variables. Reference: https://arxiv.org/pdf/2004.12345
+  Qian and Pan, Table 3, PDF page 18: 1000_1 Bval=371438, identified as a known
+  heuristic best value. Original maximization is negated for minimization.
+
+p_hat1000-1__clique_QUBO:
+  Input: https://www.dcs.gla.ac.uk/~pat/maxClique/distribution/DIMACS_cliques/p_hat1000-1.clq
+  Reference: https://www.dcs.gla.ac.uk/~pat/maxClique/distribution/TR-2012-333.pdf
+  Prosser (2012), exact BBMC1 result: maximum clique cardinality 10. Published
+  original-label witness independently checked for clique feasibility and
+  normalized QUBO score -10. QUBO density measures graph NONedges.
+
+G55 and G67:
+  Inputs: https://web.stanford.edu/~yyye/yyye/Gset/G55
+          https://web.stanford.edu/~yyye/yyye/Gset/G67
+  Reference: https://leria-info.univ-angers.fr/~jinkao.hao/papers/GoudetGoeffonHaoCOR2024.pdf
+  Goudet, Goeffon and Hao (2024), Table 3, PDF page 25: BKS cut weights 10299
+  and 6950. Neither is relabelled as optimum. Minimize negative cut weight:
+  Q_ii=-sum_j w_ij, Q_ij=w_ij, offset=0, retaining exactly 5000/10000 vertices.
+
+p5000.2:
+  Input: https://mqlibinstances.s3.amazonaws.com/p5000_2.zip
+  Original UBQP recovered from MQLib's public MaxCut encoding: fix its LAST
+  helper vertex to zero, leaving the original 5000 variables. No padding.
+  Primary reference: https://leria-info.univ-angers.fr/~jinkao.hao/UBQP.html
+  Glover, Lu and Hao (2010), Table 5: P5000.2 Best Value=10836019; corroborated
+  by Goudet et al. (2024), Table B.1. Published vector independently reproduces
+  minimization value -10836019. This remains a BKS, not an optimum.
+  Witness: https://www.info.univ-angers.fr/pub/hao/UBQP/5000.2.txt
+
+DENSE 10000: AUTHENTIC WEIGHTED INPUT AND INDEPENDENT EXACT REFERENCE
+
+Primary paper: https://www.nature.com/articles/s41598-024-59689-x
+Public data page: http://insilab.org/maxcliqueweight
+Archive: http://insilab.org/files/maxcliqueweight/random_weighted_graphs.zip
+Member: random_weighted_graphs/random_10000_0.1_clq7.rnd2
+Original input SHA256:
+  68963a69f2c5423e6a4ab0860027e7a1c2c908dce40eb00c81f1fb3ccb2f505e
+The original 59,002,605-byte member was retrieved using exact stable HTTP byte
+ranges; publisher ETag, ZIP directory, decompressed length and CRC32 checked.
+No synthetic graph, discarded weights, borrowed cardinality reference or
+unverified p10000.1 reconstruction was used. Paper Table 5 reports timings,
+not this numeric weighted optimum.
+
+The source has 10000 vertices and 4,997,110 original graph edges. All original
+positive integer vertex weights are preserved (124964 through 1788437).
+Canonical reduction: Q_ii=-w_i; Q_ij=P on original graph NONedges, otherwise 0;
+P=max_i(w_i)+1=1788438; offset=0. Symmetric x.T Q x gives each selected nonedge
+penalty 2P=3576876, greater than any vertex reward. Removing an endpoint of a
+violated pair strictly improves the objective. Thus every minimum is a clique
+and min E is exactly minus the maximum ORIGINAL WEIGHTED clique weight.
+There are 44,997,890 nonzero off-diagonal pairs, not 4,997,110: actual QUBO
+density is 90.0047804780478%. Integer objective arithmetic is int64-safe and
+its absolute coefficient bound is below 2^53; author binary64 weight sums are
+also exact integers for this input.
+
+Two independently implemented exact searches completed with no time/step
+cutoff, both exit code 0 and clean signed-integer-overflow sanitizer output:
+  Author MCQDW, release mcqdw_v1.0.0,
+    commit f156fbf6b3fb1779e9efc274043f76b46c241898
+    https://gitlab.com/janezkonc/insidrug/-/releases/mcqdw_v1.0.0
+  Independent Cliquer 1.21,
+    https://users.aalto.fi/~pat/cliquer.html
+Both return maximum weight 8873650 and original labels:
+  309 1243 3521 5046 6321 6868 7140
+Both witnesses were independently checked against original integer vertex
+weights, all 21 clique pairs, and canonical QUBO score -8873650.
+
+Exact reproduction tools: tools/verify_continuous_reference.cpp and .py.
+In an isolated CPU reference directory, obtain the pinned unmodified author
+release and official Cliquer 1.21 archive, preserving its extracted sources.
+Then run the Python tool with --run-dir DIR --source ORIGINAL_DIMACS_PATH
+--output PROOF_JSON_PATH. It validates input/source hashes, builds both exact
+solvers with signed-overflow checks, runs them sequentially without a cutoff,
+and records commands, successful completion, versions, executable hashes and
+the exact outputs. Author build uses -DNDEBUG as its own CMake specifies;
+the recursive candidate-capacity/global degree-array equality assertion is a
+wrong debug invariant, not a change to algorithm or original-ID indexing.
+
+Durable journal:
+  benchmark_data/continuous12/references/rozman10000_0.1_rnd2_exact_proof.json
+Journal SHA256:
+  1e4895ae8cec1c0301e40e974fd1a11c89a12800e59cec610f04f5ac591e7366
+Agreement of complete independent exact algorithms is strong verification;
+the feasible witnesses alone do not prove optimality, and no separate formal
+optimality certificate is claimed. This reference is explicitly IOPT, not POPT.
+
+INPUT PROVENANCE AND RESULTS SEPARATION
+
+All twelve inputs passed source/normalized fingerprints, actual dimension and
+density checks, primary reference evidence checks, and seven independent
+original-source versus canonical-QUBO scoring probes each (84 total).
+Catalog tests: 26 passed. Source hashes are local integrity fingerprints, not
+independent publisher authenticity certificates.
+
+Existing historical normalized paths are reused for gka1e, bqp500-1, gka4f,
+bqp1000-1 and p_hat1000-1__clique_QUBO; the original 37-input catalog/pipeline
+and these input files were not replaced or duplicated for this suite.
+
+Read-only published/computed reference witnesses and exact-search journals
+are INPUT PROVENANCE under benchmark_data, never benchmark result records.
+No reference objective or reference witness is passed to benchmark solvers.
+Only each solver's own produced candidate and independently audited objective
+may appear as its benchmark result. References remain separate comparison
+targets; BKS improvement does not establish a new proven optimum.
