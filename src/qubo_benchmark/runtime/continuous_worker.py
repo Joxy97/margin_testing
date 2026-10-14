@@ -209,7 +209,7 @@ def run_continuous_trial(worker, job, stop=None):
     """Uses existing WarmWorker immutable input/setup and one fresh solve call."""
     from dataclasses import fields
     from qubo_solvers import create_solver, create_bqm_solver, library_solver_class
-    from .worker import synchronize
+    from .worker import synchronize, SOURCE_SCORED_SOLVERS
     torch, parameters, device = worker.torch, dict(job['parameters']), worker.device
     # Scoring operator is immutable input preparation, not useful optimization.
     needs_operator = _scoring_operator_required(worker, job)
@@ -236,7 +236,10 @@ def run_continuous_trial(worker, job, stop=None):
             observer.poll()
             if worker.native:
                 names = {f.name for f in fields(library_solver_class(job['solver']))}
-                algorithm = create_solver(job['solver'], **{k:v for k,v in parameters.items() if k in names})
+                options = {k:v for k,v in parameters.items() if k in names}
+                if job['solver'] in SOURCE_SCORED_SOLVERS and options.get('dynamics_dtype') is None:
+                    options['dynamics_dtype'] = parameters['dtype']
+                algorithm = create_solver(job['solver'], **options)
                 result = algorithm.solve(worker.prepared, restarts=parameters['runs'], seed=job['seed'],
                     batch_size=parameters['run_batch_size'], best_only=parameters['best_only'],
                     memory_limit_bytes=parameters['memory_limit_bytes'])

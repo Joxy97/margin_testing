@@ -1,6 +1,6 @@
 """Canonical solver selection: one library-owned implementation per retained method.
 
-All 28 canonical entries are owned by this library. The 17 dense tensor solvers
+All 30 canonical entries are owned by this library. The 19 dense tensor solvers
 provide full trajectories; the specialized execution backends provide selected
 results through a best-only tensor adapter and their compact QUBO interface.
 Historical names are migration hints, never separately registered algorithms.
@@ -17,6 +17,7 @@ from .contact_annealing import ContactAnnealing
 from .easy_axis_annealing import EasyAxisAnnealing
 from .exchange_cascade import ExchangeCascade
 from .greedy_local_search import GreedyLocalSearch
+from .gravity_tunneling import GravityTunneling
 from .heat_bath_annealing import HeatBathAnnealing
 from .mean_field_annealing import MeanFieldAnnealing
 from .problems import Ising, QUBO
@@ -28,6 +29,7 @@ from .solvers import _integer, _matrix
 from .spherical_annealing import SphericalAnnealing
 from .spin_coherent_annealing import SpinCoherentAnnealing
 from .spin_vector_langevin import SpinVectorLangevin
+from .su2_chiral_isospin import SU2ChiralIsospin
 from .tabu_search import TabuSearch
 from .tap_annealing import TAPAnnealing
 from .transverse_route import TransverseRoute
@@ -52,6 +54,8 @@ _LIBRARY_CLASSES = {
     'lib_tabu_search': TabuSearch,
     'lib_random_search': RandomSearch,
     'lib_exchange_cascade': ExchangeCascade,
+    'lib_su2_chiral_isospin': SU2ChiralIsospin,
+    'lib_gravity_tunneling': GravityTunneling,
 }
 LIBRARY_SOLVERS = NATIVE_SOLVERS = tuple(_LIBRARY_CLASSES)
 BACKEND_SOLVERS = (
@@ -106,7 +110,7 @@ def solver_capabilities(name):
 
 
 def library_solver_class(name: str):
-    """Concrete class of one of the 17 native tensor algorithms."""
+    """Concrete class of one of the 19 native tensor algorithms."""
     try:
         return _LIBRARY_CLASSES[name]
     except KeyError as error:
@@ -152,7 +156,8 @@ def create_solver(name: str, **algorithm_parameters):
     grouped constraints, or resident application batches use create_bqm_solver.
     """
     if name in NATIVE_SOLVERS:
-        parameters = default_algorithm_parameters(name)
+        steps = 512 if name in ('lib_su2_chiral_isospin', 'lib_gravity_tunneling') else 1000
+        parameters = default_algorithm_parameters(name, steps=steps)
         parameters.update(algorithm_parameters)
         return library_solver_class(name)(**parameters)
     if name in BACKEND_SOLVERS:

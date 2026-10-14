@@ -1,4 +1,34 @@
-# solvers_testing3
+# solvers_testing5
+
+Builds on the published `solver_testing4` branch at
+`c7184313323b815c3539675970b3199d56938d33`.
+
+## SU(2) and gravity solver additions
+
+- Adds `SU2ChiralIsospin` (`lib_su2_chiral_isospin`) and `GravityTunneling`
+  (`lib_gravity_tunneling`) alongside the original 28 canonical methods.
+- Registers native tensor, compact and resident compact execution, benchmark
+  selection, fresh per-seed state, and conservative worker memory admission.
+- Uses batched Torch-native dynamics, reusable buffers, sparse CSR force paths,
+  implicit rank-two chirality, and B-by-B rather than B-by-B-by-n gravity storage.
+- Scores and archives original-source candidates in float64 separately from
+  optional float32 dynamics, including raw duplicate/self-loop compact terms.
+- Adds explicit initial presets (512 steps, 16 trajectories, cadence 16), tests,
+  a bounded GPU/CPU memory/timing probe, and updated usage/clone documentation.
+  Original solver mathematics and frozen presets are not retuned.
+- Includes only source, required configuration, focused tests, reproducible
+  tooling and documentation changes. Existing offline inputs/provenance are
+  inherited; no generated results, recovered bulk data, environments or keys
+  are added by this release.
+
+Prior implementation validation: 1,549 tests and 50 subtests passed on CPU/CUDA;
+three portfolio-only cases were excluded. Sparse/dense synthetic CUDA smokes
+reached 10,000 variables; all 37 offline inputs validated. No full 100-seed
+quality campaign was run; these exploratory classical methods do not guarantee
+optimality or establish an advantage over existing solvers. Preserve the old
+checkout to resume old experiments: source identity changes in this release.
+
+## Historical solvers_testing3 release
 
 This branch builds on `solvers_testing2` at commit
 `d7dc1543962d2d151593d41d1e7510800f3cec3e`.

@@ -76,7 +76,7 @@ def test_all_selection_and_frozen_protocol():
         for p in settings.values():assert 'seed' not in p and 'time_limit' not in p
     assert digest(settings)==before
     rows=inventory(settings)
-    assert sum(r['status']=='runnable' for r in rows)==23
+    assert sum(r['status']=='runnable' for r in rows)==25
     assert sum(r['status']=='excluded' for r in rows)==5
     missing=dict(settings);missing.pop(next(iter(missing)))
     assert sum(r['status']=='unavailable' for r in inventory(missing))==1

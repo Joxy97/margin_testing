@@ -131,8 +131,8 @@ class RunnerTests(unittest.TestCase):
     def test_registry_and_all_configuration(self):
         from qubo_solvers import create_bqm_solver
         self.assertTrue(all(create_bqm_solver(name) is not None for name in SOLVERS))
-        self.assertEqual(len(GPU_SOLVERS),23)
-        self.assertEqual(len(SOLVERS),28)
+        self.assertEqual(len(GPU_SOLVERS),25)
+        self.assertEqual(len(SOLVERS),30)
         full=checkConfig(readJson(ROOT/'benchmark_configs/full.json'))
         self.assertEqual({s['solver'] for s in full['solvers']},set(GPU_SOLVERS))
         full=checkConfig(readJson(ROOT/'benchmark_configs/full_all.json'))

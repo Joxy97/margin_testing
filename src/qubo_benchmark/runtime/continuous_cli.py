@@ -33,7 +33,7 @@ def parser():
     density.add_argument('--dense', dest='density', action='store_const', const='dense')
     p.add_argument('--config', help='Frozen size-aware 20s preset JSON')
     p.add_argument('--catalog', help='Verified twelve-slot public input catalog')
-    p.add_argument('--solvers', help='Comma-separated canonical IDs; default all23')
+    p.add_argument('--solvers', help='Comma-separated canonical IDs; default all25')
     p.add_argument('--runs', type=int, help='Seeds per solver, default100; smaller values are bounded smoke tests')
     p.add_argument('--seed-start', type=int, help='First deterministic seed, default0')
     p.add_argument('--devices', '--device', default=None, help='auto, cpu, cuda:N, or comma-separated CUDA devices')
@@ -68,8 +68,8 @@ def _parameters(config, n):
     profiles = config.get('size_configurations', {})
     profile = profiles.get(str(n))
     settings = profile.get('solvers', profile) if profile is not None else config['solvers']
-    from .selection import resolve_legacy_exchange_defaults
-    settings = resolve_legacy_exchange_defaults(settings)
+    from .selection import resolve_legacy_exchange_defaults, resolve_new_solver_defaults
+    settings = resolve_new_solver_defaults(resolve_legacy_exchange_defaults(settings), n)
     baseline = read(CONFIG/'benchmark_solvers.json')['solvers']
     if profile is None and n>=5000:
         for solver,parameters in settings.items():
@@ -108,7 +108,8 @@ def _verify_job_input(job):
 def _prepare_job(worker, job):
     """Verify cache misses and prepare all immutable data before solve timing."""
     from qubo_solvers import LIBRARY_SOLVERS
-    key = (job['npz'], job['parameters']['dtype'], job['solver'] in LIBRARY_SOLVERS)
+    from .worker import native_input_dtype
+    key = (job['npz'], native_input_dtype(job), job['solver'] in LIBRARY_SOLVERS)
     cache_miss = key != worker.cache_key
     if cache_miss:
         _verify_job_input(job)

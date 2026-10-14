@@ -1,6 +1,6 @@
 ﻿# Solver benchmark deployment instructions
 
-This `solver_testing4` branch ships the standalone canonical solver library,
+This `solvers_testing5` branch ships the standalone canonical solver library,
 historical and continuous benchmark runners, configuration, focused validation
 tests, all 37 historical offline QUBO inputs, and small provenance needed to
 recover the 12 continuous inputs. The earlier `solvers_testing` branch retains
@@ -12,8 +12,10 @@ Read README.md, README_BENCHMARKS.md, BENCHMARK_DEFINITIONS.txt and
 SOLVER_LIBRARY.md before changing the corresponding interfaces.
 
 - Numerical algorithms live only in src/qubo_solvers. All benchmark adapters
-  call this library. Preserve the 28 canonical IDs, including the 23 GPU-capable
+  call this library. Preserve the 30 canonical IDs, including the 25 GPU-capable
   methods compatible with the complete 37-instance corpus.
+  SU(2) chiral isospin and gravity tunneling are new additions; preserve the
+  original 28 algorithms and their historical frozen settings.
 - Runtime orchestration lives in src/qubo_benchmark/runtime. The normal command
   selects every matching instance and seeds 0-99. Never run the full campaign
   as an implementation test.

@@ -186,10 +186,32 @@ def resolve_legacy_exchange_defaults(settings):
     return effective
 
 
+def resolve_new_solver_defaults(settings,n=None):
+    """Append the two new methods without editing historical solver presets.
+
+    Explicit entries take precedence, including incomplete entries which must
+    still fail inventory validation. Resolved settings are frozen into the
+    experiment identity before any trial starts.
+    """
+    effective=copy.deepcopy(settings)
+    configuration=read(CONFIG/'benchmark_solvers_new_physics.json')
+    if configuration.get('schema_version')!=2:
+        raise ValueError('Unsupported new-solver configuration schema')
+    defaults=configuration['solvers']
+    if n is not None and n>=5000:
+        defaults=configuration['large_problem_solvers']
+    expected={'lib_su2_chiral_isospin','lib_gravity_tunneling'}
+    if set(defaults)!=expected:
+        raise ValueError('New-solver defaults must contain exactly the two added canonical methods')
+    for name,parameters in defaults.items():
+        effective.setdefault(name,copy.deepcopy(parameters))
+    return effective
+
+
 def inventory(settings,device='cpu'):
     from qubo_solvers import SOLVERS,solver_capabilities,create_bqm_solver
     from ..adapters import GPU_SOLVERS
-    settings=resolve_legacy_exchange_defaults(settings)
+    settings=resolve_new_solver_defaults(resolve_legacy_exchange_defaults(settings))
     rows=[]
     for name in SOLVERS:
         cap=solver_capabilities(name);eligible=name in GPU_SOLVERS
@@ -239,7 +261,7 @@ def preflight(args):
     import numpy as np
     settings=read(args.config or CONFIG/'benchmark_solvers.json')
     if settings.get('schema_version')!=2:raise ValueError('Unsupported solver configuration schema')
-    settings['solvers']=resolve_legacy_exchange_defaults(settings['solvers'])
+    settings['solvers']=resolve_new_solver_defaults(resolve_legacy_exchange_defaults(settings['solvers']))
     if any('seed' in p or 'device' in p for p in settings['solvers'].values()):
         raise ValueError('Seeds/devices belong to execution policy, not algorithm configuration')
     env=environment(args.device,args.require_gpu);device=env['hardware']['device']
@@ -353,7 +375,17 @@ def worker_capacity(selected,settings,device,policy):
         problem=toSolverProblem(Problem.load(item['npz']))
         for name,parameters in settings.items():
             solver=create_bqm_solver(name,{'device':'cpu'})
-            peak=max(peak,solver.estimatedWorkingMemoryBytes(problem,parameters))
+            if name in ('lib_su2_chiral_isospin','lib_gravity_tunneling'):
+                from .continuous_calibration import estimate_worker_memory
+                # WarmWorker uses dense FP64 native input for these methods;
+                # their sparse compact adapter estimate is a different path.
+                estimate=estimate_worker_memory(problem.variableCount,
+                    problem.interactionCount+problem.variableCount,parameters,True,name)
+                native=estimate['search_matrix_bytes']+estimate['workspace_bytes']
+                host=estimate['host_per_worker_estimate']-estimate['host_framework_reserve_bytes']
+                peak=max(peak,native,host)
+            else:
+                peak=max(peak,solver.estimatedWorkingMemoryBytes(problem,parameters))
     fraction=policy['memory_admission_fraction']
     devices=[device] if isinstance(device,str) else list(device)
     host_free=host_memory_available()

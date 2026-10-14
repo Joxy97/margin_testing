@@ -1,4 +1,4 @@
-"""Offline CPU/CUDA characterization of the 17 native tensor solvers.
+"""Offline CPU/CUDA characterization of the 19 native tensor solvers.
 
 Example: python tools/profile_solver_gpu.py --device cuda:0 --solvers all
              --instances gka1e bqp500-1 bqp1000-1 --output gpu-profile.json
@@ -215,7 +215,7 @@ def main(argv=None):
                   platform=platform.platform(), python=platform.python_version(),
                   cpu_threads=torch.get_num_threads(), warmups=args.warmups, repeats=args.repeats,
                   method='Independent source scoring outside timing. Resident timing excludes transfers; end-to-end includes problem and result transfer. CUDA synchronized before/after each timed region. Optional operator profiling is separate from timings.',
-                  scope='17 native tensor algorithms; backend-specific solvers use the main benchmark runner',
+                  scope='19 native tensor algorithms; backend-specific solvers use the main benchmark runner',
                   selection_scalar_extraction_probe=selection_probe(torch, device, getattr(torch, args.dtype)),
                   gpu_validation='measured on requested CUDA device' if device.type == 'cuda' else 'pending; CPU characterization does not establish GPU speedup',
                   records=records)

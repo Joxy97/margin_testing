@@ -10,6 +10,11 @@ storage/resume semantics and timing caveats are in
 all twelve references are in
 [CONTINUOUS_INPUT_REFERENCES.txt](CONTINUOUS_INPUT_REFERENCES.txt).
 
+The `solvers_testing5` branch adds `lib_su2_chiral_isospin` and
+`lib_gravity_tunneling`, bringing the default eligible inventory to 25 methods.
+Historical presets keep their existing settings; preflight appends the two
+new methods' initial settings before freezing the experiment identity.
+
 ```bash
 python run_benchmark.py --variable-count 200 --sparse --dry-run --json
 python run_benchmark.py --continuous --list-instances --json
@@ -56,12 +61,12 @@ Percentage progress is printed after every durably committed seed.
 See [EARLY_STOP_AND_WORKERS.txt](EARLY_STOP_AND_WORKERS.txt) for precise semantics,
 options, memory assumptions, deployment paths and measured validation.
 
-On the existing Vast instance, use the deployed checkout and its CUDA environment:
+After deploying this branch to the existing Vast checkout, use its CUDA environment:
 
 ```bash
 cd /workspace/margin_testing_continuous_release
 source /workspace/margin_testing/.venv/bin/activate
-# Runs all 23 solvers with 100 seeds on the selected single input, all visible GPUs.
+# Runs all 25 solvers with 100 seeds on the selected single input, all visible GPUs.
 # You start this campaign; installation/validation does not launch it.
 python run_benchmark.py --variable-count 200 --sparse --seed-workers 1 \
   --config configs/benchmark_solvers_selected_20s.json --require-gpu \
@@ -80,7 +85,7 @@ Clone the current branch and recover the checksum-verified public inputs before
 running a continuous campaign:
 
 ```bash
-git clone --depth 1 --single-branch --branch solver_testing4 https://github.com/Joxy97/margin_testing.git
+git clone --depth 1 --single-branch --branch solvers_testing5 https://github.com/Joxy97/margin_testing.git
 cd margin_testing
 python -m venv .venv
 source .venv/bin/activate
@@ -107,9 +112,9 @@ from the repository root:
 python run_benchmark.py 200 sparse 0.05
 ```
 
-This selects **all three** validated 200-variable sparse instances, all 23
+This selects **all three** validated 200-variable sparse instances, all 25
 eligible library solvers, and seeds 0 through 99 for every instance/solver:
-6,900 trials, distributed across **all visible CUDA GPUs** in one invocation.
+7,500 trials, distributed across **all visible CUDA GPUs** in one invocation.
 Persistent workers are reused, and a bounded pilot chooses concurrency before
 the first benchmark trial. No `--instances all` flag is necessary. The other group counts
 are 10, 10, 2, 10 and 2, respectively, for 200 dense, 500 sparse, 500 dense,
@@ -133,7 +138,7 @@ Use an environment with the NVIDIA driver and a compatible CUDA-enabled Torch
 wheel already installed on the GPU host. Use the official PyTorch installation
 selector for that host; no local CUDA compiler is needed by these solvers.
 Do not replace a working CUDA Torch installation with the CPU-only wheel used
-for the local validation. Then install this checkout's declared dependencies:
+for the historical local CPU validation. Then install this checkout's declared dependencies:
 
 ```bash
 python -m pip install -e '.[benchmark,dev]'
@@ -165,8 +170,9 @@ This change does not include a Linux/CUDA wheelhouse.
 
 ## Solver scope and frozen settings
 
-The library contains 28 canonical methods. This runtime campaign intentionally
-selects the **23 GPU-capable methods compatible with every catalog instance**:
+The library contains 30 canonical methods, preserving the original 28. This
+runtime campaign selects the **25 GPU-capable methods compatible with every
+catalog instance**:
 
 ```text
 lib_simulated_annealing        lib_greedy_local_search
@@ -181,6 +187,7 @@ lib_exchange_cascade          lib_simulated_bifurcation
 lib_altermagnet                lib_dynamical_geometry
 lib_geometric                 lib_phonon_exchange
 lib_supersymmetric
+lib_su2_chiral_isospin         lib_gravity_tunneling
 ```
 
 The inventory also records the five excluded methods: `lib_categorical` and
@@ -191,14 +198,33 @@ algorithms remain in the library. No artificial groups, padding of the supplied
 problems, alternative problems, or test-only optimizers are added to the suite.
 Gurobi and CPLEX are not library entry points in this checkout.
 
-`configs/benchmark_solvers.json` contains **all resolved settings**, derived
-from the existing full-compatible configuration and actual library defaults.
+`configs/benchmark_solvers.json` contains the **historical 23 methods' resolved
+settings**, derived from the full-compatible configuration and library defaults.
 It freezes float32, 16 internal trajectories and the existing 1,000-step/sweep
 schedules; the native batch size is eight. Other settings are method-specific
 and are recorded without retuning. Optional postprocessing is disabled in this
 snapshot. External seeds and wall-clock budgets are excluded from the algorithm
 parameter hash and included in each logical run identity. A trajectory batch
 is one trial; its duration is never divided by population size.
+
+The historical runtime, 20-second, and tuned presets remain unchanged. Preflight
+appends initial settings for `lib_su2_chiral_isospin` and `lib_gravity_tunneling`
+from `configs/benchmark_solvers_new_physics.json`, then saves all 25 methods'
+resolved settings in the experiment identity. Explicit entries for either new
+method take precedence and must include all resolved defaults. Their initial
+settings use 512 steps, 16 trajectories in one batch, float32 dynamics, and
+candidate checks every 16 steps. The default memory guard is 512 MiB; continuous
+inputs with at least 5,000 variables use the separate 8 GiB guards in that file.
+Gravity's batch width is its interacting swarm size and changes its algorithm.
+These initial settings have not been tuned for solution quality.
+
+Both new methods retain and report candidates using original float64 objective
+coefficients, independently of their dynamics precision. The runtime workers
+cache a dense float64 native input matrix for these methods, including on sparse
+inputs; admission includes that storage and operator construction. Their compact
+API instead supports sparse preparation and scores raw original terms in bounded
+chunks before retaining candidates. See [SOLVER_LIBRARY.md](SOLVER_LIBRARY.md)
+for the precision and memory contracts.
 
 `configs/benchmark_protocol.json` freezes the seed protocol, representative
 mapping, CPU/BLAS thread limit of one, disabled TF32, observation policy, memory
@@ -323,7 +349,7 @@ solution/trace payloads are read individually when rebuilding exports.
 
 ## Multiple GPUs, parallel seeds and worker reuse
 
-The normal command selects every matching instance, all 23 available eligible
+The normal command selects every matching instance, all 25 available eligible
 solvers and seeds 0-99. It discovers all visible GPUs and writes **one complete
 experiment directory** across those GPUs. Separate shell invocations or manual
 25-seed partitions are unnecessary.
@@ -489,7 +515,7 @@ results/
     hardware_telemetry.csv           # sampled device activity/memory/power, not TFLOPS
     reference_snapshot.json
     solver_configuration.json
-    solver_registry.csv             # all 28, including exclusion reasons
+    solver_registry.csv             # all 30, including exclusion reasons
     instances.csv
     seeds.json
     seed_schedule.csv
@@ -534,7 +560,7 @@ python aggregate_benchmarks.py results --output analysis
 
 The grid has 36 sequential configurations and calls the same public runner;
 within each configuration all selected GPUs run concurrent solver/seed work.
-Its default is all instances and 100 seeds: 510,600 trials with 23 solvers.
+Its default is all instances and 100 seeds: 555,000 trials with 25 solvers.
 Representative mode is explicitly limited coverage. The campaign manifest is
 immutable; resume requires the same grid arguments and environment. Child
 directories are `campaign_<id>/configuration_00/<test-directory>` through
@@ -572,6 +598,22 @@ python -m pytest tests/test_runtime_benchmark.py tests/test_runtime_workers.py t
 python run_benchmark.py 200 sparse 0.05 --instances representative --runs 1 --device cpu --output-root benchmark_results/runtime_smoke
 ```
 
+The two new methods were validated on CPU and CUDA on 2026-10-14 using an
+NVIDIA RTX 4070 SUPER host with Torch 2.11.0+cu128. The fixture-enabled standalone
+regression recorded 1,549 passed, 50 subtests passed, three portfolio application
+cases deselected, and two warnings. All 37 offline inputs passed validation;
+both methods' default 512-step CUDA solves on `bqp500-1` and `bqp1000-1` matched
+independent original-source scoring. These checks cover numerical, API, memory,
+and integration behavior. They do not establish optimum rates, comparative
+solution quality, or a completed 100-seed/20-second benchmark campaign.
+
+For the focused new-method checks and a bounded synchronized memory probe:
+
+```bash
+python -m pytest tests/qubo_solvers/test_su2_chiral_isospin.py tests/qubo_solvers/test_gravity_tunneling.py tests/test_new_solver_integration.py -q
+python tools/profile_new_physics_solvers.py --device cuda:0 --steps 512 --sizes 1000,5000 --runs 16 --repeats 2 --output benchmark_results/new-physics-probe.json
+```
+
 For a focused worker/timing check without the full suite or full campaign:
 
 ```bash
@@ -591,8 +633,11 @@ smoke can verify scoring without altering the 50 ms result.
 The reproducible local acceptance helper is
 `python tools/run_runtime_v2_smoke.py`; it runs exactly those six
 CPU commands sequentially. `python tools/audit_runtime_v2_smoke.py`
-checks the resulting 138 attempts, frozen source/configuration identities,
+checks the resulting 150 attempts for the current 25-method inventory,
+frozen source/configuration identities,
 capture deadlines and independently reconstructs every saved best score.
+The historical 23-method acceptance run contained 138 attempts; its recorded
+results remain evidence for that earlier inventory.
 
 ## Measurement data dictionary
 

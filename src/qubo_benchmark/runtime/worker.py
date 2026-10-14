@@ -7,6 +7,13 @@ import traceback
 from .common import utc
 from qubo_solvers.observation import SolveInterrupted, observing
 
+SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin','lib_gravity_tunneling'))
+
+
+def native_input_dtype(job):
+    """The two new methods retain original coefficients before FP32 dynamics."""
+    return 'float64' if job['solver'] in SOURCE_SCORED_SOLVERS else job['parameters']['dtype']
+
 class Observer:
     def __init__(self,budget,send,stop=None,clock=time.perf_counter_ns):
         self.budget=budget;self.send=send;self.stop=stop;self.clock=clock
@@ -107,7 +114,8 @@ class WarmWorker:
         if job['device']!=self.device or job['cpu_threads']!=self.threads:
             raise ValueError('Cannot change device/thread policy in a warm worker')
         began=time.perf_counter();native=job['solver'] in LIBRARY_SOLVERS
-        key=(job['npz'],job['parameters']['dtype'],native)
+        input_dtype=native_input_dtype(job)
+        key=(job['npz'],input_dtype,native)
         hit=key==self.cache_key
         transfer=0.
         if not hit:
@@ -119,7 +127,7 @@ class WarmWorker:
             copied=time.perf_counter()
             if native:
                 tensor=self.torch.as_tensor(source.dense().copy(),
-                    dtype=getattr(self.torch,job['parameters']['dtype']),device=self.device)
+                    dtype=getattr(self.torch,input_dtype),device=self.device)
                 self.prepared=QUBO(tensor,source.offset)
             synchronize(self.torch,self.device)
             transfer=time.perf_counter()-copied
@@ -160,7 +168,10 @@ class WarmWorker:
                 # Construction, algorithmic preprocessing and RNG reset are timed.
                 if self.native:
                     names={f.name for f in fields(library_solver_class(job['solver']))}
-                    algorithm=create_solver(job['solver'],**{k:v for k,v in parameters.items() if k in names})
+                    options={k:v for k,v in parameters.items() if k in names}
+                    if job['solver'] in SOURCE_SCORED_SOLVERS and options.get('dynamics_dtype') is None:
+                        options['dynamics_dtype']=parameters['dtype']
+                    algorithm=create_solver(job['solver'],**options)
                     result=algorithm.solve(self.prepared,restarts=parameters['runs'],seed=job['seed'],
                         batch_size=parameters['run_batch_size'],best_only=parameters['best_only'],
                         memory_limit_bytes=parameters['memory_limit_bytes'])

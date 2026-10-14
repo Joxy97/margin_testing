@@ -1,10 +1,11 @@
 ﻿# Solver library
 
 `src/qubo_solvers` owns every retained solver, compact problem/result types,
-candidate selection, and execution helpers. There are **28 canonical solvers:
-17 native tensor algorithms and 11 specialized backends**. All run on CPU;
-27 also provide Torch GPU search kernels. Only `lib_planar_graph` is CPU-only.
-CUDA execution is prepared but has not been tested on this CPU-only machine.
+candidate selection, and execution helpers. There are **30 canonical solvers:
+19 native tensor algorithms and 11 specialized backends**. All run on CPU;
+29 also provide Torch GPU search kernels. Only `lib_planar_graph` is CPU-only.
+The two added methods have passed CPU/CUDA validation on actual NVIDIA hardware;
+the scope and limits of that validation are recorded below.
 
 This deployment branch contains the standalone library and benchmark adapters.
 The portfolio application and its integration tests remain on the earlier
@@ -45,7 +46,7 @@ Wheels contain the library, not the versioned benchmark datasets; retain
 
 ## Canonical inventory and migration
 
-| Native tensor algorithms (17) | Specialized backends (11) |
+| Native tensor algorithms (19) | Specialized backends (11) |
 |---|---|
 | `lib_simulated_annealing` | `lib_simulated_bifurcation` |
 | `lib_greedy_local_search` | `lib_altermagnet` |
@@ -64,12 +65,30 @@ Wheels contain the library, not the versioned benchmark datasets; retain
 | `lib_tabu_search` | |
 | `lib_random_search` | |
 | `lib_exchange_cascade` | |
+| `lib_su2_chiral_isospin` | |
+| `lib_gravity_tunneling` | |
 
 `SOLVERS`, `NATIVE_SOLVERS` (also `LIBRARY_SOLVERS`), `BACKEND_SOLVERS`,
 `GPU_SOLVERS`, `CPU_SOLVERS`, and `solver_capabilities(name)` expose the inventory
 and restrictions. Related methods remain separate where their updates differ:
 Metropolis versus heat bath, mean field versus TAP, and distinct continuous
 annealing methods are not collapsed into one solver.
+
+`SU2ChiralIsospin` evolves real unit Bloch vectors with a chiral homotopy,
+rank-two skew action, and explicit geometric midpoint rotations.
+`GravityTunneling` evolves a coupled population with softened configuration-space
+gravity, reflected damped Verlet steps, and stochastic binary relocation.
+Both retain decoded candidates using the original objective in float64. Their
+state updates can use float32 or float64 through `dynamics_dtype`; returned
+energies use float64 for these two methods. Compact inputs preserve original
+float64 coefficients and select sparse operators through `sparse_threshold`.
+Candidate scoring uses raw pair-once terms in bounded chunks before retention,
+including duplicate, reversed, and self-loop records; force preparation may
+aggregate those terms separately. Float64 still rounds arbitrary coefficients,
+and source precision lost before calling the API cannot be recovered.
+The original 28 methods and their numerical settings are preserved. The two
+additions are exploratory classical heuristics with no established performance
+advantage or optimality guarantee.
 
 | Retired duplicate IDs | Retained implementation |
 |---|---|
@@ -105,7 +124,7 @@ result = solver.solve(
 print(result.best_assignment, result.best_energy)
 ```
 
-Use `problem.to(device="cuda:0")` to select CUDA explicitly. The 17 native
+Use `problem.to(device="cuda:0")` to select CUDA explicitly. The 19 native
 algorithms execute on the problem device and return device tensors, with float32
 or float64 coefficients. Objectives are `x.T @ Q @ x + offset` and
 `s.T @ J @ s + h.T @ s + offset`, with `s = 2*x - 1`.
@@ -121,8 +140,32 @@ number consumption.
 workspace, excluding allocator, BLAS, and CUDA context overhead. They are not
 operating-system memory ceilings. Batching bounds trajectory workspace while
 dense coefficients still require quadratic storage. Factory defaults use 1,000
-steps/sweeps; `default_algorithm_parameters(name, steps=...)` resolves defaults
-for native 17. Direct class constructors retain their class defaults.
+steps/sweeps for the original 17 native methods and 512 steps for the two added
+methods. `default_algorithm_parameters(name, steps=...)` resolves the supplied
+schedule for all 19 native methods; its omitted `steps` default remains 1,000.
+Direct class constructors retain their class defaults.
+
+The two added classes and their factory paths default to 512 steps. Benchmark
+initial settings use 16 trajectories in a single batch and candidate checks
+every 16 steps. Gravity's batch width determines its interacting swarm and is
+part of its fixed algorithm settings. Historical presets remain unchanged;
+preflight appends the two methods from
+`configs/benchmark_solvers_new_physics.json` and freezes all resolved settings.
+
+To use float32 dynamics with original float64 source scoring on CUDA:
+
+```python
+solver = create_solver("lib_su2_chiral_isospin", dynamics_dtype="float32")
+result = solver.solve(
+    problem.to(device="cuda:0", dtype=torch.float64),
+    restarts=16, batch_size=16, seed=42, best_only=True,
+    memory_limit_bytes=512 * 1024**2,
+)
+```
+
+Use `lib_gravity_tunneling` for the second method. Fixed-step schedules are the
+ordinary API contract. SU(2)'s explicitly enabled wall schedule is a separate
+protocol; gravity retains its fixed-step controls under such an observer.
 
 `create_solver` also exposes specialized backends through a tensor wrapper
 requiring `best_only=True`. It returns only the selected candidate; unavailable
@@ -182,12 +225,24 @@ Conversions accumulate duplicate, reversed, and diagonal entries and preserve
 offsets; off-diagonal pair-once coefficients become symmetric half-bias entries.
 Candidate ranking uses the original float64 coefficients. One-hot repair stays
 outside native search algorithms; grouped problems reject native best-only mode
-because selection needs all restart candidates. The native compact facade checks
+because selection needs all restart candidates. The original native compact facade checks
 a conservative combined host-and-tensor memory estimate before dense conversion,
 which is stricter than the direct tensor estimate and still excludes context and
 allocator overhead.
 
-Resident preparation is device-based for 18 entries (native 17 plus SBM), and
+For the two added methods, `create_bqm_solver(...).solve(...)` uses direct compact
+preparation, preserving raw source terms and avoiding dense conversion for sparse
+inputs. The classes also expose `solve_compact(..., device=..., precision=...)`
+and `solve_compact_resident(...)`; the resident path requires original float64
+coefficient arrays already on the selected device. `estimate_compact_memory`
+accounts for their preparation and population storage. In contrast, historical
+and continuous benchmark workers cache a dense float64 native input for these
+two methods, even when the source input is sparse. Their admission estimates
+include that matrix and operator construction. Use the compact API when avoiding
+quadratic sparse-input storage matters. Memory guards do not adjust gravity's
+swarm width or retry with different algorithm settings.
+
+Resident preparation is device-based for 20 entries (native 19 plus SBM), and
 uses an explicit authoritative host snapshot for seven (five physics and two
 categorical backends). Planar and both tree methods have no resident preparation
 hook. Consult `solver_capabilities` instead of assuming every GPU solver accepts
@@ -224,22 +279,34 @@ CPU profiling cannot establish a GPU speedup.
 ## Offline benchmarks and GPU validation
 
 All six groups and all 37 objectives are versioned in `benchmark_data/qubo37`.
-No benchmark run or test downloads data. Twenty-three solvers accept every
+The historical benchmark inputs require no downloads. Twenty-five solvers accept every
 catalog instance unchanged. The two categorical methods require complete
 one-hot groups, planar requires planar zero-field structure, and both tree
 methods exceed the configured width; these five receive `unsupported` records.
 
 | Configuration | Selection | Scheduled trials |
 |---|---|---:|
-| `benchmark_configs/full.json` | 23 compatible GPU entries, 37 instances, 20 seeds | 17,020 |
-| `benchmark_configs/full_compatible.json` | Same 23 compatible entries | 17,020 |
-| `benchmark_configs/full_all.json` | All 28, including explicit unsupported records | 20,720 |
-| `benchmark_configs/smoke_all.json` | All 28, six instances, CPU, one seed | 168 |
+| `benchmark_configs/full.json` | 25 compatible GPU entries, 37 instances, 20 seeds | 18,500 |
+| `benchmark_configs/full_compatible.json` | Same 25 compatible entries | 18,500 |
+| `benchmark_configs/full_all.json` | All 30, including explicit unsupported records | 22,200 |
+| `benchmark_configs/smoke_all.json` | All 30, six instances, CPU, one seed | 180 |
 
-The local six-instance all-solver smoke completed 138 solves with 30 expected
+The historical 28-method six-instance all-solver smoke completed 138 solves with 30 expected
 unsupported records and no errors. Completion validates loading, invocation, and independent scoring; it
 does not require finding an optimum. Actual local results and unresolved checks
 are recorded in `SOLVER_LIBRARY_VALIDATION.md`.
+
+On 2026-10-14, the two added methods passed CPU/CUDA checks on an NVIDIA
+RTX 4070 SUPER host with Torch 2.11.0+cu128. The fixture-enabled standalone
+regression recorded 1,549 passed, 50 subtests passed, three portfolio application
+cases deselected, and two warnings. All 37 offline QUBOs passed validation.
+Both methods also matched independent original-source scoring on `bqp500-1`
+and `bqp1000-1` with their 512-step CUDA defaults. Synthetic dense and sparse
+probes checked synchronized timing, allocator peaks, and stable live allocations
+across repeated solves. This evidence covers the new methods and regression
+checks; it does not establish every method's performance on all GPUs, comparative
+solution quality, or a completed 100-seed continuous campaign. Earlier four-GPU
+runtime smoke evidence remains in [MULTIGPU_VALIDATION.md](MULTIGPU_VALIDATION.md).
 
 On the prepared NVIDIA host:
 
@@ -250,7 +317,7 @@ python tools/profile_solver_gpu.py --device cuda:0 --solvers all --instances gka
 python -m qubo_benchmark run --config benchmark_configs/full_all.json --output benchmark_results/runs/full-library-all
 ```
 
-The profiling tool covers native 17 only, refuses unavailable CUDA, warms up,
+The profiling tool covers native 19 only, refuses unavailable CUDA, warms up,
 synchronizes timed regions, separates resident and transfer-inclusive timings,
 and independently scores outputs. Use `--profile-ops` for a separate operator
 profile and `--device cpu` for CPU characterization. Output files must be new.
@@ -258,6 +325,15 @@ Use the benchmark runner for specialized backends. Full campaigns were not run
 locally. Benchmark records include hashes, resolved settings, device, precision,
 timing, and independent scoring; CUDA allocated/reserved peaks exclude other
 processes and are not total device memory or allocation traffic.
+
+`tools/profile_new_physics_solvers.py` provides a bounded synthetic probe for
+the two additions. It separates preparation from resident search and checks
+original-source scores and live allocations. Its timings are not quality or
+time-to-solution results:
+
+```bash
+python tools/profile_new_physics_solvers.py --device cuda:0 --steps 512 --sizes 1000,5000 --runs 16 --repeats 2 --output benchmark_results/new-physics-probe.json
+```
 
 The GPU and memory workflow used the installed `optimize-for-gpu` and
 `memory-optimization` skills. Skill reference: Kassis, T., Agarwal, V., He, Y.,

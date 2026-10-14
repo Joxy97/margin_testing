@@ -21,6 +21,7 @@ from .torch_execution import TorchExecution
 
 
 _MAX_SEED = (1 << 63) - 1
+_SOURCE_SCORED_SOLVERS = frozenset(("lib_su2_chiral_isospin", "lib_gravity_tunneling"))
 _RUN_DEFAULTS = {
     "runs": 32,
     "seed": 1,
@@ -97,7 +98,8 @@ class LibraryBQMSolver(TorchExecution):
         budget_name = "sweeps" if "sweeps" in algorithm_names else "max_steps"
         if "steps" in supplied and budget_name in supplied:
             raise ValueError(f"cannot specify both steps and {budget_name}")
-        steps = _integer("steps", supplied.pop("steps", 1000), 0)
+        default_steps = 512 if self.solverId in _SOURCE_SCORED_SOLVERS else 1000
+        steps = _integer("steps", supplied.pop("steps", default_steps), 0)
         algorithm = default_algorithm_parameters(self.solverId, steps=steps)
         algorithm.update({name: value for name, value in supplied.items() if name in algorithm_names})
         native = create_solver(self.solverId, **algorithm)
@@ -126,6 +128,12 @@ class LibraryBQMSolver(TorchExecution):
         repair. Excludes Python/allocator caches, CUDA contexts and BLAS storage.
         """
         parameters = self._getParameters(solverParameters)
+        if self.solverId in _SOURCE_SCORED_SOLVERS:
+            native = self._createSourceScoredSolver(parameters)
+            return native.estimate_compact_memory(
+                problem, precision=parameters["dtype"], restarts=parameters["runs"],
+                batch_size=parameters["run_batch_size"], best_only=parameters["best_only"],
+            ).total_bytes
         n, runs = problem.variableCount, parameters["runs"]
         batch = min(runs, parameters["run_batch_size"] or runs)
         width = 4 if parameters["dtype"] == "float32" else 8
@@ -172,9 +180,20 @@ class LibraryBQMSolver(TorchExecution):
         results = []
         for problem in problems:
             self._checkMemory(problem, parameters)
-            results.append(self._solveLibraryProblem(
-                problem, self._toLibraryProblem(problem, parameters["dtype"]), parameters,
-            ))
+            if self.solverId in _SOURCE_SCORED_SOLVERS:
+                native = self._createSourceScoredSolver(parameters)
+                result = native.solve_compact(
+                    problem, device=self.device, precision=parameters["dtype"],
+                    restarts=parameters["runs"],
+                    seed=(parameters["seed"] + problem.seedOffset) % _MAX_SEED,
+                    batch_size=parameters["run_batch_size"], best_only=parameters["best_only"],
+                    memory_limit_bytes=parameters["memory_limit_bytes"],
+                )
+                results.append(self._selectLibraryResult(problem, result))
+            else:
+                results.append(self._solveLibraryProblem(
+                    problem, self._toLibraryProblem(problem, parameters["dtype"]), parameters,
+                ))
         return results
 
     def _toLibraryResident(self, resident, dtype):
@@ -215,9 +234,28 @@ class LibraryBQMSolver(TorchExecution):
         with self._solveLock, self._torch().inference_mode():
             for resident in problems:
                 self._checkMemory(resident.source, parameters)
-                library_problem = self._toLibraryResident(resident, parameters["dtype"])
-                results.append(self._solveLibraryProblem(resident.source, library_problem, parameters))
+                if self.solverId in _SOURCE_SCORED_SOLVERS:
+                    native = self._createSourceScoredSolver(parameters)
+                    result = native.solve_compact_resident(
+                        resident, device=self.device, precision=parameters["dtype"],
+                        restarts=parameters["runs"],
+                        seed=(parameters["seed"] + resident.source.seedOffset) % _MAX_SEED,
+                        batch_size=parameters["run_batch_size"], best_only=parameters["best_only"],
+                        memory_limit_bytes=parameters["memory_limit_bytes"],
+                    )
+                    results.append(self._selectLibraryResult(resident.source, result))
+                else:
+                    library_problem = self._toLibraryResident(resident, parameters["dtype"])
+                    results.append(self._solveLibraryProblem(resident.source, library_problem, parameters))
         return results
+
+    def _createSourceScoredSolver(self, parameters):
+        from qubo_solvers import create_solver
+
+        algorithm = {name: value for name, value in parameters.items() if name not in _RUN_DEFAULTS}
+        if algorithm.get("dynamics_dtype") is None:
+            algorithm["dynamics_dtype"] = parameters["dtype"]
+        return create_solver(self.solverId, **algorithm)
 
     def _solveLibraryProblem(self, problem, library_problem, parameters):
         from qubo_solvers import create_solver
@@ -233,6 +271,9 @@ class LibraryBQMSolver(TorchExecution):
             best_only=parameters["best_only"],
             memory_limit_bytes=parameters["memory_limit_bytes"],
         )
+        return self._selectLibraryResult(problem, result)
+
+    def _selectLibraryResult(self, problem, result):
         # Retain all returned candidates until authoritative float64 selection;
         # device-side energies are search diagnostics, not the reporting score.
         best = result.best_assignments.detach().cpu().numpy()
@@ -257,6 +298,7 @@ _LIBRARY_NAMES = (
     "SpinCoherentAnnealing", "VectorAmplitudeAnnealing", "MeanFieldAnnealing",
     "TAPAnnealing", "SphericalAnnealing", "ContactAnnealing", "ReplicaAnnealing",
     "HeatBathAnnealing", "TabuSearch", "RandomSearch", "ExchangeCascade",
+    "SU2ChiralIsospin", "GravityTunneling",
 )
 _LIBRARY_IDS = (
     "lib_simulated_annealing", "lib_greedy_local_search", "lib_spin_vector_langevin",
@@ -264,6 +306,7 @@ _LIBRARY_IDS = (
     "lib_spin_coherent_annealing", "lib_vector_amplitude_annealing", "lib_mean_field_annealing",
     "lib_tap_annealing", "lib_spherical_annealing", "lib_contact_annealing", "lib_replica_annealing",
     "lib_heat_bath_annealing", "lib_tabu_search", "lib_random_search", "lib_exchange_cascade",
+    "lib_su2_chiral_isospin", "lib_gravity_tunneling",
 )
 
 for _name, _solver_id in zip(_LIBRARY_NAMES, _LIBRARY_IDS):

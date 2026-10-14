@@ -19,6 +19,8 @@ from .heat_bath_annealing import HeatBathAnnealing
 from .tabu_search import TabuSearch
 from .random_search import RandomSearch
 from .exchange_cascade import ExchangeCascade
+from .su2_chiral_isospin import SU2ChiralIsospin
+from .gravity_tunneling import GravityTunneling
 from .registry import (
     LIBRARY_SOLVERS, NATIVE_SOLVERS, BACKEND_SOLVERS, SOLVERS, BackendSolver,
     CPU_SOLVERS, GPU_SOLVERS, CATEGORICAL_SOLVERS, REMOVED_SOLVERS, solver_capabilities, register_bqm_solver,
@@ -32,6 +34,7 @@ __all__ = [
     'SpinCoherentAnnealing', 'VectorAmplitudeAnnealing', 'MeanFieldAnnealing',
     'TAPAnnealing', 'SphericalAnnealing', 'ContactAnnealing', 'ReplicaAnnealing',
     'HeatBathAnnealing', 'TabuSearch', 'RandomSearch', 'ExchangeCascade',
+    'SU2ChiralIsospin', 'GravityTunneling',
     'LIBRARY_SOLVERS', 'NATIVE_SOLVERS', 'BACKEND_SOLVERS', 'SOLVERS', 'BackendSolver',
     'CPU_SOLVERS', 'GPU_SOLVERS', 'CATEGORICAL_SOLVERS', 'REMOVED_SOLVERS', 'solver_capabilities', 'register_bqm_solver',
     'create_solver', 'create_bqm_solver', 'library_solver_class', 'default_algorithm_parameters',

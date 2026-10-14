@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from qubo_benchmark.model import Problem
+from qubo_benchmark.adapters import GPU_SOLVERS
 from qubo_benchmark.runtime.common import read,source_identity,filehash
 from qubo_benchmark.runtime.storage import load_attempts,primary
 
@@ -18,10 +19,10 @@ def main():
     for path in sorted(root.glob('*/experiment.json')):
         experiment=read(path);core=experiment['core'];directory=path.parent
         assert core['source']['code_snapshot_hash']==snapshot,directory
-        assert core['seeds']==[0] and len(core['solvers'])==23
+        assert core['seeds']==[0] and set(core['solvers'])==set(GPU_SOLVERS)
         assert filehash(directory/'BENCHMARK_DEFINITIONS.txt')==filehash(ROOT/'BENCHMARK_DEFINITIONS.txt')
         attempts=load_attempts(directory);records=list(primary(attempts).values())
-        assert len(attempts)==len(records)==len(experiment['execution_plan'])==23
+        assert len(attempts)==len(records)==len(experiment['execution_plan'])==len(GPU_SOLVERS)
         problems={i['entry']['instance_id']:Problem.load(ROOT/'benchmark_data/qubo37/normalized'/
                   (i['entry']['instance_id']+'.npz')) for i in core['instances']}
         for attempt in attempts:

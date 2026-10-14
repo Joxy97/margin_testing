@@ -24,10 +24,12 @@ NATIVE_SOLVERS = frozenset((
     'lib_vector_amplitude_annealing', 'lib_mean_field_annealing',
     'lib_tap_annealing', 'lib_spherical_annealing', 'lib_contact_annealing',
     'lib_replica_annealing', 'lib_heat_bath_annealing', 'lib_tabu_search',
-    'lib_random_search', 'lib_exchange_cascade'))
+    'lib_random_search', 'lib_exchange_cascade',
+    'lib_su2_chiral_isospin', 'lib_gravity_tunneling'))
 PHYSICS_SOLVERS = frozenset((
     'lib_altermagnet', 'lib_dynamical_geometry', 'lib_geometric',
     'lib_phonon_exchange', 'lib_supersymmetric'))
+SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin', 'lib_gravity_tunneling'))
 LIMITATION = ('A small paired screening and held-out sample detects observed '
               'regressions only; it does not establish unchanged quality, a '
               'statistical guarantee, or globally optimal concurrency.')
@@ -130,6 +132,8 @@ def estimate_worker_memory(n, coo_count, parameters, native, solver,
     if isinstance(coo_count, bool) or not isinstance(coo_count, int) or coo_count < 0:
         raise ValueError('coo_count must be a nonnegative integer')
     dtype = parameters.get('dtype', 'float32')
+    if solver in SOURCE_SCORED_SOLVERS:
+        dtype = parameters.get('dynamics_dtype') or dtype
     if dtype not in ('float32', 'float64'):
         raise ValueError('Memory admission supports float32 or float64')
     item = 4 if dtype == 'float32' else 8
@@ -150,10 +154,34 @@ def estimate_worker_memory(n, coo_count, parameters, native, solver,
     score_bytes = (8*n*n if symmetric_nnz >= .2*n*n else
                    16*symmetric_nnz + 8*(n+1)) if score_needed else 0
     source_bytes = 32*coo_count + 8*n
+    native_details = {}
     if native:
-        search_bytes = 6*item*size*size
-        workspace = item*((108+12*parameters.get('replicas', 0))*batch*size + 288*batch)
-        host_buffers = 3*source_bytes + n*n*(8+item)
+        if solver in SOURCE_SCORED_SOLVERS:
+            # WarmWorker retains a dense FP64 QUBO, including on sparse inputs.
+            # Match PopulationSolver.estimate_memory before adding the separate
+            # scorer/context allowances. Operator conversion peaks are admitted
+            # conservatively even when the resulting force becomes sparse.
+            cached_input = 8*n*n + 8
+            operators = (32+2*item)*size*size
+            common = (8*item+32)*batch*size + 128*batch + 64*size
+            if solver == 'lib_su2_chiral_isospin':
+                population = item*(48*batch*size+64*batch)
+            else:
+                population = (item*(24*batch*size+4*batch*batch+32*batch)
+                              + 8*(4*batch*size+12*batch)
+                              + 8*batch*size+8*batch)
+            outputs = (n+32 if parameters.get('best_only',False) else
+                       runs*(2*n+32))
+            search_bytes = cached_input+operators
+            workspace = common+population+outputs
+            host_buffers = 3*source_bytes + 16*n*n
+            native_details = dict(native_input_bytes=cached_input,
+                operator_workspace_bytes=operators,common_workspace_bytes=common,
+                population_workspace_bytes=population,output_bytes=outputs)
+        else:
+            search_bytes = 6*item*size*size
+            workspace = item*((108+12*parameters.get('replicas', 0))*batch*size + 288*batch)
+            host_buffers = 3*source_bytes + n*n*(8+item)
     elif solver in PHYSICS_SOLVERS:
         dense = (parameters.get('matrix_format', 'auto') != 'sparse' and
                  size <= parameters.get('max_dense_variables', size))
@@ -178,7 +206,7 @@ def estimate_worker_memory(n, coo_count, parameters, native, solver,
         cuda_context_reserve_bytes=GIB, host_framework_reserve_bytes=GIB,
         gpu_per_worker_estimate=tensor_bytes+GIB,
         host_per_worker_estimate=host_buffers+workspace+GIB,
-        memory_fraction=MEMORY_FRACTION,
+        memory_fraction=MEMORY_FRACTION, **native_details,
         note='Estimates include original scoring and process/library reserves; '
              'allocator/context peaks and external load can still exceed them.')
 

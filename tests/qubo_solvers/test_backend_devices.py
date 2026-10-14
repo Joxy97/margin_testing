@@ -27,6 +27,7 @@ PHYSICS_SOLVERS = (
     "lib_altermagnet", "lib_dynamical_geometry", "lib_geometric",
     "lib_phonon_exchange", "lib_supersymmetric",
 )
+SOURCE_SCORED_SOLVERS = ('lib_su2_chiral_isospin', 'lib_gravity_tunneling')
 CUDA = pytest.param(
     "cuda:0", marks=pytest.mark.skipif(
         not torch.cuda.is_available(), reason="CUDA hardware/runtime is unavailable",
@@ -113,7 +114,15 @@ def _observe_search(monkeypatch, solver, name, expected_device, expected_dtype):
 
         monkeypatch.setattr(owner, attribute, staticmethod(wrapped) if static else wrapped)
 
-    if name in NATIVE_SOLVERS:
+    if name in SOURCE_SCORED_SOLVERS:
+        def check_source_scored_run(args):
+            run = args[1]
+            check(run.q)
+            assert run.x.device == expected_device
+            assert run.energies.device == expected_device
+            assert run.energies.dtype == torch.float64
+        instrument(library_solver_class(name), "_search", check_source_scored_run)
+    elif name in NATIVE_SOLVERS:
         instrument(library_solver_class(name), "_search",
                    lambda args: check(args[1].q, args[1].x))
     elif name in PHYSICS_SOLVERS:

@@ -15,11 +15,11 @@ from qubo_solvers import (
 
 
 def test_registry_has_all_implementations():
-    assert len(LIBRARY_SOLVERS) == 17
+    assert len(LIBRARY_SOLVERS) == 19
     assert len(BACKEND_SOLVERS) == 11
-    assert len(GPU_SOLVERS) == 27
+    assert len(GPU_SOLVERS) == 29
     assert CPU_SOLVERS == ('lib_planar_graph',)
-    assert len(SOLVERS) == len(set(SOLVERS)) == 28
+    assert len(SOLVERS) == len(set(SOLVERS)) == 30
     for name in LIBRARY_SOLVERS:
         solver = create_solver(name, **default_algorithm_parameters(name, 0))
         assert isinstance(solver, library_solver_class(name))
@@ -38,7 +38,12 @@ def test_registered_native_algorithms_preserve_objective(name, spin, dtype):
         problem = problem.to_ising()
     result = create_solver(name, **default_algorithm_parameters(name, 2)).solve(
         problem, restarts=3, batch_size=2, seed=31, best_only=True)
-    torch.testing.assert_close(result.best_energy, problem.energy(result.best_assignment))
+    if name in ('lib_su2_chiral_isospin', 'lib_gravity_tunneling'):
+        assert result.best_energy.dtype == torch.float64
+        expected = problem.to(dtype=torch.float64).energy(result.best_assignment)
+    else:
+        expected = problem.energy(result.best_assignment)
+    torch.testing.assert_close(result.best_energy, expected)
     assert result.best_assignments.shape == (1, 2)
 
 

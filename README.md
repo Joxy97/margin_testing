@@ -1,24 +1,62 @@
 # Solver library and continuous QUBO benchmarks
 
-This branch contains the canonical 28-method solver library and the runtime
-benchmark for the 23 GPU-capable methods compatible with all 37 prepared QUBOs.
-This `solver_testing4` branch additionally ships the validated compact 20-second
+This branch contains the canonical 30-method solver library and the runtime
+benchmark for the 25 GPU-capable methods compatible with all 37 prepared QUBOs.
+This `solvers_testing5` branch adds GPU-friendly SU(2) chiral isospin and gravity
+tunneling solvers to the original 28 methods. It retains the compact 20-second
 continuous runner, frozen solver presets, and provenance for one sparse and one
 dense input at each of 100, 200, 500, 1000, 5000, and 10000 variables. Generated
 benchmark results, environments, caches, bulk recovered continuous inputs, and
 unrelated market datasets are not part of this deployment branch.
 
-Changes since `solvers_testing3` include the continuous protocol, tuned 20-second
+Inherited changes since `solvers_testing3` include the continuous protocol, tuned 20-second
 configuration, known-optimum early stopping, quality-aware worker calibration,
 compact crash-safe results, and post-run 1% hit exports. See
 [README_BENCHMARKS.md](README_BENCHMARKS.md) and
 [EARLY_STOP_AND_WORKERS.txt](EARLY_STOP_AND_WORKERS.txt) for the current protocol.
-[BRANCH_CHANGES.md](BRANCH_CHANGES.md) documents the inherited historical runtime.
+[BRANCH_CHANGES.md](BRANCH_CHANGES.md) documents this release and the inherited runtime.
+
+## Added in solvers_testing5
+
+- `lib_su2_chiral_isospin` / `SU2ChiralIsospin`: Bloch-vector annealing with
+  implicit rank-two chirality and geometric midpoint rotations.
+- `lib_gravity_tunneling` / `GravityTunneling`: softened interacting-swarm
+  dynamics with reflected Verlet steps and archived stochastic binary jumps.
+
+Both are registered with `create_solver()` and `create_bqm_solver()`, and included
+in benchmark discovery. Torch-native batches, reusable buffers and CSR operators
+keep search GPU-friendly; compact sparse inputs avoid dense host/device Q matrices.
+Dynamics can use float32 while original-source candidate/result energies use
+float64. Initial presets use 512 steps, 16 trajectories and checks every 16 steps;
+see `configs/benchmark_solvers_new_physics.json`. Gravity's batch width defines
+its interacting swarm and must stay fixed for a comparable experiment.
+The original methods and their frozen presets are unchanged. These are exploratory
+classical heuristics: defaults are not quality-tuned and optimality is not guaranteed.
+
+```python
+import torch
+from qubo_solvers import QUBO, create_solver
+
+problem = QUBO(torch.tensor([[-1., .25], [.25, -2.]],
+                            dtype=torch.float64, device="cuda:0"))
+solver = create_solver("lib_su2_chiral_isospin", dynamics_dtype="float32")
+# Use "lib_gravity_tunneling" for the second method.
+result = solver.solve(problem, restarts=16, batch_size=16, seed=42,
+                      best_only=True, memory_limit_bytes=512 * 1024**2)
+print(result.best_assignment, result.best_energy)
+```
+
+Implementation validation on Vast RTX 4070 SUPER GPUs passed 1,549 tests plus
+50 subtests (three portfolio-only cases excluded), with sparse/dense CUDA smokes
+through 10,000 variables. This is correctness/scaling evidence, not a full
+100-seed quality campaign. Reproduce bounded timing/memory probes with
+`tools/profile_new_physics_solvers.py`; generated logs, reports, recovered input
+payloads, environments and credentials are not included in this release.
 
 ## Clone and install
 
 ```bash
-git clone --depth 1 --single-branch --branch solver_testing4 https://github.com/Joxy97/margin_testing.git
+git clone --depth 1 --single-branch --branch solvers_testing5 https://github.com/Joxy97/margin_testing.git
 cd margin_testing
 python -m venv .venv
 source .venv/bin/activate
@@ -56,7 +94,7 @@ the source rather than inside a standalone wheel.
 ## Run
 
 ```bash
-# Continuous protocol: one input, all 23 solvers, seeds 0-99, one worker per GPU.
+# Continuous protocol: one input, all 25 solvers, seeds 0-99, one worker per GPU.
 python run_benchmark.py --variable-count 200 --sparse --seed-workers 1 \
   --catalog benchmark_data/continuous12/staged_catalog.json \
   --config configs/benchmark_solvers_selected_20s.json --require-gpu \
@@ -85,10 +123,10 @@ protocol. Its results and timing definitions must not be mixed with continuous
 results.
 
 ```bash
-# Small optional GPU smoke: one representative, one seed, all 23 methods.
+# Small optional GPU smoke: one representative, one seed, all 25 methods.
 python run_benchmark.py 200 sparse 0.05 --instances representative --runs 1 --device cuda:0 --require-gpu --output-root results/gpu_smoke
 
-# Normal command: all matching instances, 100 seeds each, all 23 methods,
+# Normal command: all matching instances, 100 seeds each, all 25 methods,
 # and every visible GPU. Concurrency is selected by a bounded pilot.
 python run_benchmark.py 200 sparse 0.05
 
