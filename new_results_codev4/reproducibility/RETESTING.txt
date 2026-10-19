@@ -1,0 +1,99 @@
+RETESTING THE ARCHIVED CAMPAIGNS
+
+Use a fresh working/output directory. Never resume these completed archives
+under changed paths, inputs, software or hardware identities. No trials were
+launched as part of this publication task.
+
+AUTHORITATIVE SETTINGS
+Each campaign's solver_settings/experiment.json contains all manifest fields.
+The per-solver 'runs' value is internal trajectory count, while the invocation
+'runs'=100 is the number of seed trials. run_batch_size, steps/max_steps,
+dtype, memory limits and every other recorded solver parameter are exported
+without substitution. Seeds are 0..99. Nine checkpoints end at 20 seconds.
+One worker runs per GPU, four GPUs per original deployment. Changing hardware
+can change results under the wall-clock cap even with identical random seeds.
+The old wall_schedule_solvers list differs from the new SM23 empty list:
+SM23 uses frozen finite-step schedules. Its campaign.py wrapper is required.
+
+EXACT SOURCE AND CONFIGURATION
+original23_source.tar.gz is the recovered historical deployed source. Its
+source_snapshot_hash is b3a98190351168ad94d84e528b675d04055d49702a7dccdac522bd4f79e40afb,
+matching all 11 original manifests. original23_config.json matches their
+configuration hash a1659cea533ff350a6e5cf637609ae2f134673e6201d62c6d61024a7c349962a.
+original_catalog.json matches their recorded catalog hash. The source archive
+also includes configuration and provenance files from the old deployment.
+
+SM23_source_62b58c9.tar.gz is the new source at commit
+62b58c9227276ac132086b2bbcc8ebfb1f85a732. Its source_snapshot_hash is
+1ce6c15512e0b391c31b80e2dac1923efe6badffb6052d07bfbb511e535edbb8,
+matching both SM23 manifests. SM23_replay_inputs.tar.gz supplies the exact
+dense n200 normalized matrix and campaign verification metadata; the sparse
+n200 matrix is already in the source archive's qubo37 inputs. Both hosts
+used the same numeric matrices; input_proof.json and canonical_fingerprints
+record numeric COO hashes, independent of NPZ container byte differences.
+
+All archives are relative-path tar files. Preserve bytes (including line
+endings) when extracting. Git's new branch name does not change source hashes.
+Historical archives and tuning/guard evidence must not be text-reformatted.
+
+REPLAY SM23 ON LINUX/CUDA (choose density sparse OR dense)
+Set RESULTS to the absolute new_results_codev4 directory from this branch,
+and WORK to a new, empty working directory outside the archived results.
+
+  export RESULTS=/absolute/path/new_results_codev4
+  export WORK=/workspace/sm23_retest_sparse
+  export DENSITY=sparse
+  mkdir -p "$WORK/repo"
+  cp -a "$RESULTS/codev4_200_${DENSITY}/SM23/reproducibility/campaign/." "$WORK/"
+  tar -xzf "$RESULTS/reproducibility/SM23_source_62b58c9.tar.gz" -C "$WORK/repo"
+  tar -xzf "$RESULTS/reproducibility/SM23_replay_inputs.tar.gz" -C "$WORK/repo"
+  cd "$WORK"
+  python -m pip install -e './repo[benchmark]'
+  python -u campaign.py run --density "$DENSITY" --runs 100 --output "$WORK/retest_output" --dry-run
+
+Review the dry-run and match the saved environment.json before running. Remove
+--dry-run to launch the full retest explicitly. Use a separate WORK for dense.
+The wrapper defaults to cuda:0,cuda:1,cuda:2,cuda:3 and one worker per device.
+For monitoring: python monitor_campaign.py --output "$WORK/retest_output" --watch
+Do not rerun tuning if the aim is to reproduce these frozen settings.
+production_config_identity.json validates the source and evidence chain.
+
+REPLAY ORIGINAL23 ON LINUX/CUDA
+Extract original23_source.tar.gz into a separate WORK/repo directory. Use
+Python 3.12.14 and the manifest's pinned packages/driver where possible; the
+new campaigns used Python 3.12.15 and their separately recorded environment.
+Install that source's benchmark dependencies. Recover the continuous inputs
+using its tools/stage_continuous_inputs.py and configs/continuous_catalog.windows.json
+(see the archived README_BENCHMARKS.md). Validate the numeric fingerprints
+against canonical_fingerprints.json. Original NPZ container hashes may differ
+from regenerated files even when their canonical numeric fingerprints agree;
+this is a NEW retest identity, never grounds to rewrite an archived manifest.
+For n200, the new source/input archives also preserve the exact numeric pair.
+
+For example, from the extracted original repo, after staging inputs:
+  python run_benchmark.py --continuous --variable-count 200 --sparse \
+    --catalog benchmark_data/continuous12/staged_catalog.json \
+    --config /absolute/path/new_results_codev4/reproducibility/original23_config.json \
+    --solvers <comma-separated IDs from the selected original manifest> \
+    --runs 100 --seed-start 0 --seed-workers 1 --devices cuda:0,cuda:1,cuda:2,cuda:3 \
+    --require-gpu --stop-on-optimum --keep-raw-results --output-root /fresh/output
+
+Use --dense for dense, and change variable-count for the corresponding folder.
+Use the manifest's exact 23 IDs, not all solvers known to a newer library.
+Each solver_settings/replay_command.txt expands the IDs for that campaign.
+Input staging may require network access for historical source matrices.
+
+TUNING PROVENANCE
+SM23/reproducibility/campaign/<density>/tuning/ preserves the bounded search,
+candidate settings, holdout rows and report; schedule_review/ preserves the
+follow-up schedule checks. production_config.json includes resolved defaults.
+The two final configs differ: do not interchange sparse and dense settings.
+The tuning was short and used these same two QUBO instances, with held-out
+seeds; it does not establish generalization to unrelated problems.
+
+SOFTWARE VERSUS MEASURED HARDWARE
+Package versions, CUDA, driver and hardware identity are in every manifest;
+the new environment.json also names GPU models. Source equality and seeds
+alone do not guarantee bitwise wall-clock replay on different hardware.
+The original archive's hardware identifier is retained without guessing a
+GPU model that was not recorded in the manifest.

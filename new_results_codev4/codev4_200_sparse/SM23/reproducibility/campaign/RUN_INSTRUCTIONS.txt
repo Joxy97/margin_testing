@@ -1,0 +1,91 @@
+Prepared Hamiltonian campaign: launch only when ready
+
+Production has not been started by this setup. Existing PLots figures have not
+been changed. The two hosts use the same published solver source, commit
+62b58c9227276ac132086b2bbcc8ebfb1f85a732, and independently frozen tuned settings.
+
+Plan: 23 new solvers x 100 seeds (0..99) per input = 2,300 attempts per host,
+4,600 attempts total. "200" is the number of variables, not the number of QUBOs.
+Sparse input: gka1e, published optimum -16464.
+Dense input: gka5e, published optimum -35154.
+Each seed has one continuous 20-second window and checkpoints at
+0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10 and 20 seconds. An independently scored
+published-optimum hit ends that seed early and fills later checkpoints.
+Each GPU has one worker; seed state is fresh. Terminal failures are retained;
+interrupted, uncommitted seeds remain pending for an explicit resume.
+
+SPARSE: connect from Windows PowerShell
+
+ssh -i "C:\Users\Lazar\.ssh\vast_ssh" -p 50180 root@218.150.198.117
+
+Then run these commands in the remote Linux shell:
+
+cd /workspace/hamiltonian_campaign_20261019
+source /venv/main/bin/activate
+python -u campaign.py run --density sparse --runs 100
+
+DENSE: connect from a second Windows PowerShell window
+
+ssh -i "C:\Users\Lazar\.ssh\vast_ssh" -p 17604 root@137.175.22.196
+
+Then run these commands in that remote Linux shell:
+
+cd /workspace/hamiltonian_campaign_20261019
+source /venv/main/bin/activate
+python -u campaign.py run --density dense --runs 100
+
+Both commands can run concurrently on their separate hosts. For a persistent
+session, first run "tmux new -s ham_sparse" or "tmux new -s ham_dense" in the
+appropriate remote shell, then paste its cd/source/python commands above.
+Detach with Ctrl+B, then D. Reattach with "tmux attach -t ham_sparse" or
+"tmux attach -t ham_dense". Detaching does not stop the run.
+
+MONITOR: use another SSH shell on each host
+
+cd /workspace/hamiltonian_campaign_20261019
+source /venv/main/bin/activate
+python monitor_campaign.py --output sparse/production --watch
+
+On the dense host substitute:
+
+python monitor_campaign.py --output dense/production --watch
+
+The monitor prints per-solver and total completed counts, percentages, failures
+and ETA every 10 seconds. It checks manifest/progress identities and metadata
+checksums, reads the committed seed statuses, and writes no result files.
+Add --json for machine-readable snapshots. Ctrl+C stops only the monitor.
+Initial ETA uses 20 seconds per pending seed divided by four GPUs, approximately
+3h12m per host before setup overhead or optimum early stops. After new commits,
+ETA uses measured throughput from the current monitoring session. It is an
+estimate, not a deadline. Completed counts include recorded failed attempts.
+
+RESUME: after an interrupted production run, on the same host and in the same
+activated environment, repeat its command with --resume:
+
+python -u campaign.py run --density sparse --runs 100 --resume
+python -u campaign.py run --density dense --runs 100 --resume
+
+Use only the line matching the host. Completed seeds are preserved. Do not
+change source, inputs, device selection, or frozen configuration between launch
+and resume; the runner verifies the campaign identity. To inspect readiness
+without launching production, append --dry-run to the appropriate run command.
+
+DOWNLOAD: after the corresponding production run has finished, open local
+Windows PowerShell and run:
+
+Set-Location 'C:\Users\Lazar\OneDrive\Documents\solvers_testing\hamiltonian_campaign_20261019'
+& .\download_results.ps1 -Density sparse
+& .\download_results.ps1 -Density dense
+
+Each download creates a fresh downloads\<density>_<timestamp> directory, retains
+the archive and SHA256 display, and extracts raw arrays, aggregate CSVs,
+progress, manifest, tuning evidence, source helper and input provenance there.
+The remote originals are retained. Download after the run completes for a
+consistent final archive; per-seed files remain resumable on the host.
+
+The sparse host has RTX 3060 GPUs; the dense host has RTX 4070 SUPER GPUs.
+Hardware and timing provenance must stay with later comparisons. The six
+existing n=200 plots in new_results_codev4/PLots have 23 older methods; after
+the new data is complete they can include the 23 latest methods, for 46 total.
+The earlier SU2/Gravity campaign did not complete either n=200 group. This
+setup does not add unmeasured curves or automatically update any plots.

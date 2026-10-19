@@ -1,0 +1,67 @@
+Short exploratory tuning of the 23 new Hamiltonian library methods
+
+Only this new method set is tuned. Existing method configurations are untouched.
+The user narrowed this task to tuning, setup and a production launch command;
+production seeds 0 through 99 must not start as part of this tuning task.
+
+There are three predeclared configurations per model: baseline, explore and
+refine. Baseline retains the model's physical defaults with practical population
+and candidate-readout intervals for short timed runs. Most methods use sixteen
+simultaneous trajectories; Gaussian covariance/projector/block methods use eight
+to keep readout and state costs bounded. Runtime settings in common and in each
+candidate are merged before constructor keys are separated from solve options.
+All sixty-nine candidate configurations were constructor-validated locally.
+
+Screening uses seeds 1000 and 1001 and a two-second budget on each host's input.
+Rank by mean final independently source-scored objective, then mean checkpoint
+objective, then declaration order. Evaluate baseline and the screening winner on
+one paired second-stage validation seed 2001 with a twenty-second budget. Retain
+the winner only when its validation ranking strictly improves upon baseline;
+otherwise select baseline. Identical winner and baseline need only one validation
+configuration. This seed enters final selection: it is not an untouched assessment
+of generalization. These few seeds support short exploratory tuning only; retain
+all raw outcomes and avoid strong statistical or universal quality claims.
+
+Sparse is tuned on the four RTX3060 host; dense is tuned on the four RTX4070 SUPER
+host. Calibrate finite max_steps per input, host and baseline model. Warm immutable
+input and CUDA context before timing, but include fresh random state, objective
+preparation, numerical search, decoding and completed capture in timed solves.
+Use one active worker per GPU, identical concurrency through pilot and screen.
+The baseline pilot uses seed9000 and at most sixteen steps under a one-second
+budget. Compute floor(18*completed_iterations/capture_elapsed) for the twenty-
+second ceiling, clamped to1..20000; fall back to one step when no iteration was
+observed. Reuse this baseline ceiling across the three candidates and scale it
+by phase budget for screening. This is a coarse timing estimate: changed model
+parameters and initial/readout cost can change throughput, so terminal annealing
+is not guaranteed to complete before interruption. Store effective max_steps,
+timing measurements, fallback cases and early returns in the tuning data.
+
+Use wall_schedule=false throughout, so every method uses its finite-step anneal.
+All five discrete methods and four Gaussian methods use step/max_steps directly;
+a huge ceiling would prevent those models from reaching the intended final
+driver, temperature or penalty. Continuous and spin families can accept an
+observer schedule, but mixing schedule policies would complicate this brief
+comparison. Covariance methods also construct random planes sized n+max_steps.
+
+XY coordinate compilation is disabled for all three candidates to fit the user's
+fifteen-minute tuning/setup deadline and avoid cold compilation bias. These are
+eager CUDA implementation profiles; previously measured compilation can improve
+this model's throughput materially, and it remains an explicit later option.
+
+The existing continuous runner provides consistent immutable candidate timing:
+only a candidate whose producing stream completed before a checkpoint is eligible
+there. Late captures must not be back-credited. Natural early returns retain the
+incumbent at subsequent checkpoints and do not restart. Source reference energies
+may enter observer validation and parent-side statistics and are never numerical
+solver inputs. The runner retains the existing stop-on-optimum protocol, except
+pilots disable early optimum stopping to measure computational throughput.
+
+The existing run_continuous_trial calls the native dense library solve for these
+methods. At n=200 that is an acceptable comparable baseline protocol; native
+compact resident solve is available but is a different timing path. Preserve the
+runner's timing path for compatibility with the historical figure.
+
+Sparse and dense curves use different GPU hardware. Any combined plot needs the
+hardware labels and this limitation in its manifest/caption. Preserve existing
+historical points, mark the new tuned methods and retain the frozen parameters,
+source commit, environment, input hashes, seeds, raw failures, status and timing.

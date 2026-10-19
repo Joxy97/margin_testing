@@ -1,0 +1,80 @@
+QUBO AND BENCHMARK METRIC DEFINITIONS
+
+QUBO: Quadratic Unconstrained Binary Optimization. Minimize E(x)=x^T Q x+c
+over x in {0,1}^n. The normalized inputs use minimization. A symmetric Q
+counts off-diagonal entries twice; an upper-triangle representation must
+follow the input loader's convention, not silently halve or double terms.
+n is the number of binary variables, not the number of problem instances.
+The new experiments use one n=200 problem per density: gka1e (sparse,
+reference -16464) and gka5e (dense, reference -35154).
+
+Density (%): 100 times the number of nonzero unordered off-diagonal QUBO
+pairs divided by n(n-1)/2. Diagonal entries are excluded. Sparse means
+below 20%; dense means at least 20%. gka1e has 1924 pairs (9.66834%);
+gka5e has 9857 pairs (49.53266%). File format does not define density.
+
+Reference R: published optimum (OPTIMUM) or best-known solution (BKS), as
+recorded in each manifest. Matching a BKS does not prove global optimality.
+
+Trial / seed: one independent invocation with fresh mutable algorithm state.
+Each solver/problem has 100 trials, seeds 0 through 99. The solver parameter
+'runs' counts internal trajectories/replicas in one trial, not these 100
+trials. run_batch_size controls simultaneous internal trajectories; other
+model-specific replica counts remain explicitly recorded in solver settings.
+
+Checkpoint t: one of 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20 seconds in a
+single uninterrupted trial. E_s(t) is the best independently certified
+energy available by t for seed s. No checkpoint restarts or backdating.
+NaN means no valid candidate at that boundary, not zero objective or a hit.
+The raw .npy arrays are float64, shape (100,9): seeds by checkpoints.
+They store objective energies, not binary solution vectors.
+
+Timing: the continuous budget includes RNG reset, fresh algorithm state,
+algorithm preprocessing, search, decoding and independent certification.
+Worker startup and immutable input/operator preparation are excluded.
+Each trial is capped at 20 seconds. A certified OPTIMUM hit stops the trial
+early and carries the incumbent to later checkpoints. BKS hits do not stop
+it. A natural solver return retains its incumbent; it does not restart.
+See each manifest's execution policy for the authoritative recorded rules.
+
+Exact hits H(t): number of finite E_s(t) <= R, denominator fixed at 100.
+For OPTIMUM data these are exact optimum hits; below-optimum energies are
+rejected during validation. For BKS they are reference-or-better hits.
+Hit probability p(t)=H(t)/100. PLots exact_hits displays H, not p.
+
+Gap to solution: mean_s(E_s(t)-R), in raw objective units. This is signed:
+a result improving on a BKS may have negative gap. If any of the 100 seed
+energies is missing, the saved mean is NaN; no conditional finite-only mean.
+
+Gap to reference (%): 100*mean_s(E_s(t)-R)/abs(R). This is the mean gap used
+in PLots/*gap_to_reference_percent*.png. It is not the best seed's gap.
+The relative formula is undefined for R=0 (none of these references is zero).
+
+Hits within 1%: number of finite E_s(t) <= R+0.01*abs(R). Includes exact
+and better-than-reference results. Probability is that count divided by 100.
+The threshold uses abs(R), including for negative references.
+
+TTS99(t): t*ln(0.01)/ln(1-p(t)), an estimated time to at least one success
+with probability 99% under independent identical repeated attempts.
+Historical literal-continuous convention: p=0 gives +Inf; p=1 gives 0.
+No integer ceiling or minimum-one-run correction is applied. This estimator
+is not observed time to optimum, and carries no confidence interval here.
+
+time_to_optimum_s: measured first completed independent certification of an
+optimum, seconds from solve origin. Blank/null means no recorded optimum;
+it is not zero and must not be replaced with the 20-second cap.
+
+Completion/failures: terminal attempts include failures. Failed or missing
+attempts never shrink the planned hit denominator. These 13 archived
+campaigns have 29,900 completed trials and zero recorded failures.
+
+Plot grouping: each new SM23 figure has six panels, sorted solver IDs,
+four solvers per panel and three in the last. The log-scaled x-axis is time.
+Gap panels may have different y ranges; inspect axis labels when comparing.
+An absent initial gap segment means at least one seed lacks an incumbent.
+
+Comparability: settings, hardware and source identities are preserved per
+campaign. The new sparse host used four RTX 3060 GPUs; dense used four
+RTX 4070 SUPER GPUs. These are measured hardware-specific curves, not a
+controlled identical-hardware speed ranking. Tuning used the same problem
+instances with different seeds, so it is not out-of-instance validation.

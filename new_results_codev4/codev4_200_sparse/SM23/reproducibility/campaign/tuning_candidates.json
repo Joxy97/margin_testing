@@ -1,0 +1,644 @@
+{
+  "schema_version": 1,
+  "common": {
+    "runs": 16,
+    "dtype": "float32",
+    "run_batch_size": 16,
+    "best_only": false,
+    "memory_limit_bytes": 8589934592
+  },
+  "protocol": {
+    "screen_budget_s": 2.0,
+    "screen_seeds": [
+      1000,
+      1001
+    ],
+    "holdout_budget_s": 20.0,
+    "holdout_seeds": [
+      2001
+    ],
+    "production_seeds": "0..99",
+    "wall_schedule": false,
+    "selection": "lowest mean final source objective on screening seeds; then mean checkpoint objective; candidate declaration order breaks exact ties",
+    "holdout": "Second-stage validation: compare screening winner with baseline on seed2001 and retain winner only for a strict lexicographic objective improvement; otherwise fall back to baseline. This validation is used in final selection and is not an untouched assessment.",
+    "step_policy": "Measure baseline sixteen-step pilot per solver, input and GPU host; finite20s max_steps=floor(18*completed_iterations/capture_elapsed), clamped1..20000; if no completed iteration use1; reuse the baseline ceiling across candidates; scale by phase budget for screening. Record fallback and early return.",
+    "scope": "23 new methods only; production is not authorized to start in this task",
+    "pilot_seed": 9000
+  },
+  "solvers": {
+    "lib_ssh": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 10
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 10,
+          "driver": 4.0,
+          "damping": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 10,
+          "driver": 1.0,
+          "damping": 2.0,
+          "time_step": 0.025
+        }
+      }
+    ],
+    "lib_syk": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1,
+          "driver_strength": 4.0,
+          "polish_steps": 8
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1,
+          "driver_strength": 0.5,
+          "polish_steps": 32
+        }
+      }
+    ],
+    "lib_bose_hubbard": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 10
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 10,
+          "driver": 4.0,
+          "hopping": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 10,
+          "driver": 1.0,
+          "time_step": 0.05,
+          "kerr": 2.0
+        }
+      }
+    ],
+    "lib_fermi_hubbard": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1,
+          "driver_strength": 4.0,
+          "hopping": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1,
+          "driver_strength": 1.0,
+          "penalty_end": 4.0,
+          "polish_steps": 32
+        }
+      }
+    ],
+    "lib_tj_vacancy": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "readout_interval": 1
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "readout_interval": 1,
+          "runs": 32,
+          "run_batch_size": 32
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "readout_interval": 1,
+          "runs": 8,
+          "run_batch_size": 8,
+          "polish_sweeps": 1
+        }
+      }
+    ],
+    "lib_inozemtsev": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 10
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 10,
+          "interaction_range": 0.5,
+          "exchange": 2.0
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 10,
+          "damping": 0.5,
+          "final_pinning": 1.0,
+          "time_step": 0.0015
+        }
+      }
+    ],
+    "lib_dicke": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 10
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 10,
+          "coupling": 1.0,
+          "transverse_field": 2.0
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 10,
+          "damping": 0.5,
+          "final_pinning": 1.0,
+          "time_step": 0.005
+        }
+      }
+    ],
+    "lib_haldane_shastry": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 10
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 10,
+          "exchange": 2.0,
+          "transverse_field": 2.0
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 10,
+          "damping": 0.6,
+          "final_pinning": 1.0,
+          "time_step": 0.01
+        }
+      }
+    ],
+    "lib_quantum_clock": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 5
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 5,
+          "q": 6,
+          "exchange": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 5,
+          "pinning": 2.0,
+          "relaxation_fraction": 0.3,
+          "time_step": 0.01
+        }
+      }
+    ],
+    "lib_jaynes_cummings": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 10
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 10,
+          "coupling": 1.5,
+          "photon_damping": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 10,
+          "damping": 2.0,
+          "final_pinning": 1.0,
+          "time_step": 0.0014285714285714286
+        }
+      }
+    ],
+    "lib_jaynes_cummings_hubbard": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 10
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 10,
+          "hopping": 0.5,
+          "photon_damping": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 10,
+          "damping": 2.0,
+          "final_pinning": 1.0,
+          "time_step": 0.0014285714285714286
+        }
+      }
+    ],
+    "lib_majumdar_ghosh": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 5
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 5,
+          "exchange": 2.0,
+          "initial_noise": 0.15
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 5,
+          "pinning": 1.0,
+          "relaxation_fraction": 0.3,
+          "time_step": 0.01
+        }
+      }
+    ],
+    "lib_j1_j2": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 5
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 5,
+          "exchange2": 1.0,
+          "initial_noise": 0.15
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 5,
+          "exchange2": 0.5,
+          "pinning": 1.0,
+          "relaxation_fraction": 0.3
+        }
+      }
+    ],
+    "lib_kuramoto": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 5
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 5,
+          "frequency_std": 0.2,
+          "diffusion": 0.1
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 5,
+          "frequency_std": 0.05,
+          "diffusion": 0.025,
+          "pinning": 1.0,
+          "relaxation_fraction": 0.3
+        }
+      }
+    ],
+    "lib_potts": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "readout_interval": 1
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "readout_interval": 1,
+          "labels": 8,
+          "driver_strength": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "readout_interval": 1,
+          "labels": 2,
+          "driver_strength": 0.1,
+          "polish_sweeps": 1
+        }
+      }
+    ],
+    "lib_zn_chiral": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "readout_interval": 1
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "readout_interval": 1,
+          "labels": 12,
+          "driver_strength": 0.5,
+          "antipodal_probability": 0.4
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "readout_interval": 1,
+          "labels": 4,
+          "driver_strength": 0.1,
+          "chirality": 0.2617993877991494,
+          "polish_sweeps": 1
+        }
+      }
+    ],
+    "lib_n_vector": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 10
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 10,
+          "dimension": 5,
+          "initial_temperature": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 10,
+          "initial_temperature": 0.1,
+          "final_pinning": 4.0,
+          "time_step": 0.01
+        }
+      }
+    ],
+    "lib_quantum_rotor": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 5
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 5,
+          "temperature": 1.0,
+          "damping": 0.5
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 5,
+          "temperature": 0.25,
+          "damping": 2.0,
+          "pinning": 4.0,
+          "relaxation_fraction": 0.3
+        }
+      }
+    ],
+    "lib_xy_coordinate": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "readout_interval": 1,
+          "compile_coordinates": false
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "readout_interval": 1,
+          "compile_coordinates": false,
+          "minimization_probability": 0.5,
+          "driver_strength": 0.5,
+          "exchange_interval": 2
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "readout_interval": 1,
+          "compile_coordinates": false,
+          "minimization_probability": 0.9,
+          "driver_strength": 0.1,
+          "exchange_interval": 2,
+          "polish_sweeps": 1
+        }
+      }
+    ],
+    "lib_quantum_dimer": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "readout_interval": 1
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "readout_interval": 1,
+          "slices": 16,
+          "initial_transverse_field": 4.0,
+          "inverse_temperature": 5.0
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "readout_interval": 1,
+          "slices": 8,
+          "initial_transverse_field": 1.0,
+          "inverse_temperature": 20.0,
+          "polish_sweeps": 1
+        }
+      }
+    ],
+    "lib_kitaev_chain": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1,
+          "driver_strength": 2.0,
+          "pairing": 1.0
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1,
+          "driver_strength": 0.5,
+          "time_step": 0.05,
+          "polish_steps": 32
+        }
+      }
+    ],
+    "lib_bdg": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1,
+          "pool_size": 32,
+          "block_size": 8,
+          "max_block_size": 12,
+          "mode_count": 6,
+          "rebuild_interval": 4
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "runs": 8,
+          "run_batch_size": 8,
+          "check_interval": 1,
+          "pool_size": 48,
+          "block_size": 10,
+          "max_block_size": 14,
+          "polish_steps": 32
+        }
+      }
+    ],
+    "lib_spin_squeezing": [
+      {
+        "id": "baseline",
+        "parameters": {
+          "candidate_interval": 5
+        }
+      },
+      {
+        "id": "explore",
+        "parameters": {
+          "candidate_interval": 5,
+          "twisting": 2.0,
+          "transverse_field": 3.0,
+          "initial_noise": 0.2
+        }
+      },
+      {
+        "id": "refine",
+        "parameters": {
+          "candidate_interval": 5,
+          "damping": 0.5,
+          "relaxation_fraction": 0.3,
+          "time_step": 0.025
+        }
+      }
+    ]
+  }
+}
