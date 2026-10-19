@@ -13,7 +13,9 @@ Folder layout, identical for sparse and dense:
   codev4_<n>_<density>/aggregated/<solver>/<problem>.csv
   codev4_<n>_<density>/progress/<solver>/<problem>.json
   codev4_<n>_<density>/plots/, logs/, solver_settings/
-  codev4_200_<density>/SM23/ (same canonical result layout for the new23)
+For n200, the problem directory contains only these two experiment folders:
+  codev4_200_<density>/LM23/ (original23; canonical layout above)
+  codev4_200_<density>/SM23/ (new23; same canonical layout)
 
 The redundant sparse margin_testing_codev4/benchmark_results wrappers were
 removed. Original log bytes and setup/completion markers are retained in
@@ -24,12 +26,14 @@ data, and for both new campaigns. Original result bytes were not rewritten.
 SM23 is a separate experiment within each n200 problem folder because it
 has a distinct immutable manifest, configuration, source and hardware
 identity. This avoids forging a combined resumable experiment. Read both
-the parent raw/ and SM23/raw/ for all 46 solvers on either n200 problem.
+LM23/raw/ and SM23/raw/ for all 46 solvers on either n200 problem.
 The old 23 and SM23 solver IDs are disjoint; each group has 100 seeds.
 
 PLots/ retains all 33 original figures unchanged and adds six *_SM23.png
 figures (exact hits, mean gap percent, 1%-threshold hits; sparse and dense).
-Each new figure has 6 panels: 4+4+4+4+4+3 solvers.
+Each new figure has 6 panels: 4+4+4+4+4+3 solvers. The new figures use
+the original Windows System.Drawing renderer: matching Segoe UI fonts,
+panel borders, legend placement, colors, axes and the 1% gap guide.
 See METRIC_DEFINITIONS.txt for QUBO, metrics, timing and missing values.
 
 Each campaign's solver_settings/experiment.json exports the full recorded
@@ -52,8 +56,10 @@ Validate all stored raw data without launching trials:
   python -m pip install numpy
   python scripts/build_publication.py --validate-only
 Regenerate derived settings and the six SM23 figures:
-  python -m pip install numpy matplotlib
+  python -m pip install numpy
   python scripts/build_publication.py
+Figure generation requires Windows PowerShell and System.Drawing. Validation
+only remains cross-platform. scripts/plot_sm23.ps1 can also be run directly.
 These commands do not alter original raw data, manifests or original plots.
 
 reproducibility/validation_report.json records the full data validation.

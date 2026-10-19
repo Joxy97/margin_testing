@@ -20,42 +20,24 @@ def write_csv(path, fields, rows):
         writer.writeheader(); writer.writerows(rows)
 
 def figures(campaign):
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from matplotlib.ticker import ScalarFormatter
-    m = campaign['manifest']; p = m['problems'][0]
-    solvers = sorted(m['solvers']); x = np.asarray(m['checkpoints_seconds'])
-    metrics = [('exact_hits','Exact reference hits / 100 trials'),
-               ('gap_to_reference_percent','Mean gap to reference (%)'),
-               ('hits_within_1pct','Hits within 1% of reference / 100 trials')]
-    outputs = []
-    for metric, label in metrics:
-        fig, axes = plt.subplots(2,3,figsize=(22.5,14.8),dpi=100)
-        for panel, ax in enumerate(axes.flat):
-            for color, solver in zip(['#0072B2','#D55E00','#009E73','#CC79A7'], solvers[panel*4:panel*4+4]):
-                c = campaign['curves'][solver]
-                y = (c['exact_hits'] if metric=='exact_hits' else c['near_hits'] if metric=='hits_within_1pct'
-                     else 100*c['aggregate'][:,1]/abs(p['reference']))
-                ax.plot(x,y,'o-',color=color,linewidth=1.8,markersize=4,label=solver.removeprefix('lib_'))
-            ax.set_xscale('log'); ax.set_xticks(x); ax.xaxis.set_major_formatter(ScalarFormatter())
-            ax.set_xlabel('Checkpoint (seconds)'); ax.set_ylabel(label)
-            ax.set_title(f'Solvers {panel*4+1}–{min(panel*4+4,len(solvers))}')
-            if metric!='gap_to_reference_percent': ax.set_ylim(-2,102)
-            ax.grid(True,alpha=.25); ax.legend(fontsize=10,loc='best')
-        density = {'sparse':9.668341708542714,'dense':49.53266331658291}[p['density']]
-        fig.suptitle(f"SM23 — {p['id']}, n={p['n']}, {p['density']} ({density:.2f}% nonzero pairs)\n"
-                     f"{label}; reference {p['reference']} ({p['reference_type']}); 100 seeds per solver",fontsize=18)
-        fig.tight_layout(rect=(0,0,1,.94))
-        path = ROOT/'PLots'/f"200_{p['density']}_{metric}_SM23.png"
-        fig.savefig(path); plt.close(fig); outputs.append(path.relative_to(ROOT).as_posix())
-    return outputs
+    # Use the original renderer so typography, layout and scales match LM23.
+    import subprocess
+    p = campaign['manifest']['problems'][0]
+    subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                    '-File', str(ROOT/'scripts/plot_sm23.ps1'),
+                    '-VariableCount', str(p['n']), '-DensityCategory', p['density'],
+                    '-BaseDir', str(ROOT), '-OutputDir', str(ROOT/'PLots')], check=True)
+    return [f"PLots/200_{p['density']}_{metric}_SM23.png" for metric in
+            ['exact_hits', 'hits_within_1pct', 'gap_to_reference_percent']]
+
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--validate-only',action='store_true'); args=parser.parse_args()
     summary=[]; settings_rows=[]; outputs=[]
-    paths=sorted(ROOT.glob('codev4_*/manifest.json'))+sorted(ROOT.glob('codev4_*/SM23/manifest.json'))
+    paths=(sorted(ROOT.glob('codev4_*/manifest.json')) +
+           sorted(ROOT.glob('codev4_*/LM23/manifest.json')) +
+           sorted(ROOT.glob('codev4_*/SM23/manifest.json')))
     for path in paths:
         m=json.loads(path.read_bytes()); c=load_campaign(path,set(m['solvers']))
         name=path.parent.relative_to(ROOT).as_posix(); p=m['problems'][0]
