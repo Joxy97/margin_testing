@@ -210,6 +210,7 @@ def resolve_new_solver_defaults(settings,n=None):
 
 def inventory(settings,device='cpu'):
     from qubo_solvers import SOLVERS,solver_capabilities,create_bqm_solver
+    from qubo_solvers._hamiltonian_catalog import HAMILTONIAN_SOLVERS
     from ..adapters import GPU_SOLVERS
     settings=resolve_new_solver_defaults(resolve_legacy_exchange_defaults(settings))
     rows=[]
@@ -223,6 +224,12 @@ def inventory(settings,device='cpu'):
                  timing_50ms='conditional: no in-budget score if setup/search/capture exceeds cutoff' if eligible else 'out of scope',
                  license_readiness='local open-source backend; no credentials')
         if eligible:
+            if name in HAMILTONIAN_SOLVERS and name not in settings:
+                # New research methods require explicit settings. Preserve the
+                # historical frozen campaign and its success/failure status.
+                row['reason']='Hamiltonian candidate requires an explicit solver configuration'
+                rows.append(row)
+                continue
             try:
                 if name not in settings:raise ValueError('Missing frozen solver configuration')
                 obj=create_bqm_solver(name,{'device':device})
@@ -375,7 +382,8 @@ def worker_capacity(selected,settings,device,policy):
         problem=toSolverProblem(Problem.load(item['npz']))
         for name,parameters in settings.items():
             solver=create_bqm_solver(name,{'device':'cpu'})
-            if name in ('lib_su2_chiral_isospin','lib_gravity_tunneling'):
+            from qubo_solvers._hamiltonian_catalog import HAMILTONIAN_SOLVERS
+            if name in ('lib_su2_chiral_isospin','lib_gravity_tunneling') + HAMILTONIAN_SOLVERS:
                 from .continuous_calibration import estimate_worker_memory
                 # WarmWorker uses dense FP64 native input for these methods;
                 # their sparse compact adapter estimate is a different path.

@@ -8,7 +8,7 @@ import torch
 
 import qubo_solvers
 from qubo_solvers import (
-    BACKEND_SOLVERS, GPU_SOLVERS, NATIVE_SOLVERS, SOLVERS, create_bqm_solver,
+    BACKEND_SOLVERS, GPU_SOLVERS, NATIVE_SOLVERS, SOLVERS, HAMILTONIAN_SOLVERS, create_bqm_solver,
     create_solver, default_algorithm_parameters, library_solver_class, solver_capabilities,
 )
 from qubo_solvers.backends.problem import QUBOProblem
@@ -36,11 +36,11 @@ OLD_NATIVE = (
 
 
 def test_exactly_two_native_additions_keep_existing_registry_order():
-    assert NATIVE_SOLVERS == OLD_NATIVE + NEW_SOLVERS
+    assert NATIVE_SOLVERS == OLD_NATIVE + NEW_SOLVERS + HAMILTONIAN_SOLVERS
     assert len(BACKEND_SOLVERS) == 11
-    assert len(SOLVERS) == len(set(SOLVERS)) == 30
-    assert len(GPU_SOLVERS) == 29
-    assert len(BENCHMARK_SOLVERS) == 25
+    assert len(SOLVERS) == len(set(SOLVERS)) == 53
+    assert len(GPU_SOLVERS) == 52
+    assert len(BENCHMARK_SOLVERS) == 48
     for name, class_name in zip(NEW_SOLVERS, ('SU2ChiralIsospin', 'GravityTunneling')):
         cls = getattr(qubo_solvers, class_name)
         assert class_name in qubo_solvers.__all__
@@ -67,7 +67,7 @@ def test_new_presets_append_without_mutating_or_retuning_old_settings():
     assert tuple(resolved)[-2:] == NEW_SOLVERS
     assert {name: resolved[name] for name in legacy} == legacy
     rows = inventory(baseline)
-    assert len(rows) == 30
+    assert len(rows) == 53
     assert len(select_solvers(rows)) == 25
     for name in NEW_SOLVERS:
         params = resolved[name]

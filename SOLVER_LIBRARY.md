@@ -1,9 +1,12 @@
 ﻿# Solver library
 
 `src/qubo_solvers` owns every retained solver, compact problem/result types,
-candidate selection, and execution helpers. There are **30 canonical solvers:
-19 native tensor algorithms and 11 specialized backends**. All run on CPU;
-29 also provide Torch GPU search kernels. Only `lib_planar_graph` is CPU-only.
+candidate selection, and execution helpers. There are **53 canonical solvers:
+42 native tensor algorithms and 11 specialized backends**. All run on CPU;
+52 also provide Torch GPU search kernels. Only `lib_planar_graph` is CPU-only.
+The 23 Hamiltonian additions are listed by `HAMILTONIAN_SOLVERS`; see
+[HAMILTONIAN_MODELS_IMPLEMENTATION.txt](HAMILTONIAN_MODELS_IMPLEMENTATION.txt)
+for their model mapping, memory limits, numerical variants and CUDA validation.
 The two added methods have passed CPU/CUDA validation on actual NVIDIA hardware;
 the scope and limits of that validation are recorded below.
 
@@ -124,7 +127,7 @@ result = solver.solve(
 print(result.best_assignment, result.best_energy)
 ```
 
-Use `problem.to(device="cuda:0")` to select CUDA explicitly. The 19 native
+Use `problem.to(device="cuda:0")` to select CUDA explicitly. The 42 native
 algorithms execute on the problem device and return device tensors, with float32
 or float64 coefficients. Objectives are `x.T @ Q @ x + offset` and
 `s.T @ J @ s + h.T @ s + offset`, with `s = 2*x - 1`.
@@ -142,8 +145,10 @@ operating-system memory ceilings. Batching bounds trajectory workspace while
 dense coefficients still require quadratic storage. Factory defaults use 1,000
 steps/sweeps for the original 17 native methods and 512 steps for the two added
 methods. `default_algorithm_parameters(name, steps=...)` resolves the supplied
-schedule for all 19 native methods; its omitted `steps` default remains 1,000.
+schedule for all 42 native methods; its omitted `steps` default remains 1,000.
 Direct class constructors retain their class defaults.
+The 23 Hamiltonian factory paths retain their model-specific class defaults;
+their step counts and numerical choices are documented in the implementation report.
 
 The two added classes and their factory paths default to 512 steps. Benchmark
 initial settings use 16 trajectories in a single batch and candidate checks

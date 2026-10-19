@@ -129,14 +129,14 @@ class ObjectiveTests(unittest.TestCase):
 
 class RunnerTests(unittest.TestCase):
     def test_registry_and_all_configuration(self):
-        from qubo_solvers import create_bqm_solver
+        from qubo_solvers import create_bqm_solver, HAMILTONIAN_SOLVERS
         self.assertTrue(all(create_bqm_solver(name) is not None for name in SOLVERS))
-        self.assertEqual(len(GPU_SOLVERS),25)
-        self.assertEqual(len(SOLVERS),30)
+        self.assertEqual(len(GPU_SOLVERS),48)
+        self.assertEqual(len(SOLVERS),53)
         full=checkConfig(readJson(ROOT/'benchmark_configs/full.json'))
-        self.assertEqual({s['solver'] for s in full['solvers']},set(GPU_SOLVERS))
+        self.assertEqual({s['solver'] for s in full['solvers']},set(GPU_SOLVERS)-set(HAMILTONIAN_SOLVERS))
         full=checkConfig(readJson(ROOT/'benchmark_configs/full_all.json'))
-        self.assertEqual({s['solver'] for s in full['solvers']},set(SOLVERS))
+        self.assertEqual({s['solver'] for s in full['solvers']},set(SOLVERS)-set(HAMILTONIAN_SOLVERS))
         for spec in full['solvers']:
             config=effectiveConfig(full,spec)
             if spec['solver'] in CLASSICAL_SOLVERS:

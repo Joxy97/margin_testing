@@ -77,7 +77,7 @@ def test_all_selection_and_frozen_protocol():
     assert digest(settings)==before
     rows=inventory(settings)
     assert sum(r['status']=='runnable' for r in rows)==25
-    assert sum(r['status']=='excluded' for r in rows)==5
+    assert sum(r['status']=='excluded' for r in rows)==28
     missing=dict(settings);missing.pop(next(iter(missing)))
     assert sum(r['status']=='unavailable' for r in inventory(missing))==1
 

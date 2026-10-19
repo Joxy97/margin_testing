@@ -21,6 +21,13 @@ from .random_search import RandomSearch
 from .exchange_cascade import ExchangeCascade
 from .su2_chiral_isospin import SU2ChiralIsospin
 from .gravity_tunneling import GravityTunneling
+from .hamiltonians import (
+    HAMILTONIAN_SOLVERS, SSHDimerOscillator, SparseSYK, BoseHubbard, FermiHubbard,
+    TJVacancy, Inozemtsev, Dicke, HaldaneShastry, QuantumClock, JaynesCummings,
+    JaynesCummingsHubbard, MajumdarGhosh, J1J2, Kuramoto, PottsHeatBath, ZNChiral,
+    NVector, QuantumRotor, XYCoordinate, QuantumDimerWorldline, KitaevChain,
+    BogoliubovDeGennes, SpinSqueezing,
+)
 from .registry import (
     LIBRARY_SOLVERS, NATIVE_SOLVERS, BACKEND_SOLVERS, SOLVERS, BackendSolver,
     CPU_SOLVERS, GPU_SOLVERS, CATEGORICAL_SOLVERS, REMOVED_SOLVERS, solver_capabilities, register_bqm_solver,
@@ -35,6 +42,12 @@ __all__ = [
     'TAPAnnealing', 'SphericalAnnealing', 'ContactAnnealing', 'ReplicaAnnealing',
     'HeatBathAnnealing', 'TabuSearch', 'RandomSearch', 'ExchangeCascade',
     'SU2ChiralIsospin', 'GravityTunneling',
+    'HAMILTONIAN_SOLVERS', 'SSHDimerOscillator', 'SparseSYK', 'BoseHubbard',
+    'FermiHubbard', 'TJVacancy', 'Inozemtsev', 'Dicke', 'HaldaneShastry',
+    'QuantumClock', 'JaynesCummings', 'JaynesCummingsHubbard', 'MajumdarGhosh',
+    'J1J2', 'Kuramoto', 'PottsHeatBath', 'ZNChiral', 'NVector', 'QuantumRotor',
+    'XYCoordinate', 'QuantumDimerWorldline', 'KitaevChain', 'BogoliubovDeGennes',
+    'SpinSqueezing',
     'LIBRARY_SOLVERS', 'NATIVE_SOLVERS', 'BACKEND_SOLVERS', 'SOLVERS', 'BackendSolver',
     'CPU_SOLVERS', 'GPU_SOLVERS', 'CATEGORICAL_SOLVERS', 'REMOVED_SOLVERS', 'solver_capabilities', 'register_bqm_solver',
     'create_solver', 'create_bqm_solver', 'library_solver_class', 'default_algorithm_parameters',

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from qubo_solvers._hamiltonian_catalog import HAMILTONIAN_SOLVERS
 
 
 CHECKPOINTS = (.05, .1, .2, .5, 1., 2., 5., 10., 20.)
@@ -25,11 +26,11 @@ NATIVE_SOLVERS = frozenset((
     'lib_tap_annealing', 'lib_spherical_annealing', 'lib_contact_annealing',
     'lib_replica_annealing', 'lib_heat_bath_annealing', 'lib_tabu_search',
     'lib_random_search', 'lib_exchange_cascade',
-    'lib_su2_chiral_isospin', 'lib_gravity_tunneling'))
+    'lib_su2_chiral_isospin', 'lib_gravity_tunneling') + HAMILTONIAN_SOLVERS)
 PHYSICS_SOLVERS = frozenset((
     'lib_altermagnet', 'lib_dynamical_geometry', 'lib_geometric',
     'lib_phonon_exchange', 'lib_supersymmetric'))
-SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin', 'lib_gravity_tunneling'))
+SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin', 'lib_gravity_tunneling') + HAMILTONIAN_SOLVERS)
 LIMITATION = ('A small paired screening and held-out sample detects observed '
               'regressions only; it does not establish unchanged quality, a '
               'statistical guarantee, or globally optimal concurrency.')
@@ -164,7 +165,20 @@ def estimate_worker_memory(n, coo_count, parameters, native, solver,
             cached_input = 8*n*n + 8
             operators = (32+2*item)*size*size
             common = (8*item+32)*batch*size + 128*batch + 64*size
-            if solver == 'lib_su2_chiral_isospin':
+            if solver in HAMILTONIAN_SOLVERS:
+                # Only this optional branch imports the numerical library. The
+                # model owns its covariance, projector, worldline or spin state.
+                from dataclasses import fields
+                from qubo_solvers import library_solver_class
+                cls = library_solver_class(solver)
+                names = {field.name for field in fields(cls)}
+                algorithm = cls(**{key: value for key, value in parameters.items() if key in names})
+                population = algorithm._population_workspace(size, batch, item)
+                if solver == 'lib_bdg':
+                    # Its exact block coefficients retain an additional source
+                    # operator and bounded edge/lookup construction scratch.
+                    operators += 64 * n * n
+            elif solver == 'lib_su2_chiral_isospin':
                 population = item*(48*batch*size+64*batch)
             else:
                 population = (item*(24*batch*size+4*batch*batch+32*batch)

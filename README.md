@@ -1,6 +1,6 @@
 # Solver library and continuous QUBO benchmarks
 
-This branch contains the canonical 30-method solver library and the runtime
+This branch contains the canonical 53-method solver library and the runtime
 benchmark for the 25 GPU-capable methods compatible with all 37 prepared QUBOs.
 This `solvers_testing5` branch adds GPU-friendly SU(2) chiral isospin and gravity
 tunneling solvers to the original 28 methods. It retains the compact 20-second
@@ -17,6 +17,13 @@ compact crash-safe results, and post-run 1% hit exports. See
 [BRANCH_CHANGES.md](BRANCH_CHANGES.md) documents this release and the inherited runtime.
 
 ## Added in solvers_testing5
+
+The 23 additional Hamiltonian candidates are available through the same library
+factories, including compact sparse and resident execution. Their implementations,
+IDs, initial settings, numerical choices and validation are documented in
+[HAMILTONIAN_MODELS_IMPLEMENTATION.txt](HAMILTONIAN_MODELS_IMPLEMENTATION.txt).
+Historical benchmark presets retain their original selection and parameters;
+the new candidates require explicit configuration for a campaign.
 
 - `lib_su2_chiral_isospin` / `SU2ChiralIsospin`: Bloch-vector annealing with
   implicit rank-two chirality and geometric midpoint rotations.

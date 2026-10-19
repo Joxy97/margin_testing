@@ -6,12 +6,13 @@ import time
 import traceback
 from .common import utc
 from qubo_solvers.observation import SolveInterrupted, observing
+from qubo_solvers._hamiltonian_catalog import HAMILTONIAN_SOLVERS
 
-SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin','lib_gravity_tunneling'))
+SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin','lib_gravity_tunneling') + HAMILTONIAN_SOLVERS)
 
 
 def native_input_dtype(job):
-    """The two new methods retain original coefficients before FP32 dynamics."""
+    """Source-scored methods retain original coefficients before FP32 dynamics."""
     return 'float64' if job['solver'] in SOURCE_SCORED_SOLVERS else job['parameters']['dtype']
 
 class Observer:

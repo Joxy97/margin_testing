@@ -464,6 +464,12 @@ class PopulationSolver:
 
             record(0)
             step = self._search(run, record)
+            if history is not None and step < self.max_steps:
+                # Constant objectives and numerical stalls may finish early.
+                # Carry their completed value through later requested samples.
+                for scheduled in steps:
+                    if scheduled > step:
+                        history[step_rows[scheduled], start:start + width].copy_(run.energies)
             if not bool(torch.isfinite(run.best).all() & torch.isfinite(run.energies).all()):
                 raise FloatingPointError('nonfinite source objective; rescale coefficients or use higher precision')
             if best_only:

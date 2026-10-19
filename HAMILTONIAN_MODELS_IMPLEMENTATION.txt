@@ -1,0 +1,214 @@
+23 HAMILTONIAN CANDIDATES -- IMPLEMENTATION, 19 OCTOBER 2026
+=========================================================
+
+Scope
+-----
+Implemented 23/23 model families from
+Hamiltonians_QUBO_GPU_Solver_Specification (2).tex. All numerical code lives
+in src/qubo_solvers. Existing algorithms and frozen benchmark presets are
+preserved. The registry now has 53 canonical methods (42 native, 11 backends).
+The existing benchmark selection still has 25 configured methods; the new
+exploratory candidates need explicit parameters to join a campaign.
+
+Section   Canonical ID                     Public class
+1         lib_ssh                          SSHDimerOscillator
+2         lib_syk                          SparseSYK
+3         lib_bose_hubbard                 BoseHubbard
+4         lib_fermi_hubbard                FermiHubbard
+5         lib_tj_vacancy                   TJVacancy
+6         lib_inozemtsev                   Inozemtsev
+7         lib_dicke                       Dicke
+8         lib_haldane_shastry              HaldaneShastry
+9         lib_quantum_clock               QuantumClock
+10        lib_jaynes_cummings             JaynesCummings
+11        lib_jaynes_cummings_hubbard     JaynesCummingsHubbard
+12        lib_majumdar_ghosh              MajumdarGhosh
+13        lib_j1_j2                       J1J2
+14        lib_kuramoto                    Kuramoto
+15        lib_potts                       PottsHeatBath
+16        lib_zn_chiral                   ZNChiral
+17        lib_n_vector                    NVector
+18        lib_quantum_rotor               QuantumRotor
+19        lib_xy_coordinate               XYCoordinate
+20        lib_quantum_dimer               QuantumDimerWorldline
+21        lib_kitaev_chain                KitaevChain
+22        lib_bdg                         BogoliubovDeGennes
+23        lib_spin_squeezing              SpinSqueezing
+
+Library use
+-----------
+    import torch
+    from qubo_solvers import QUBO, create_solver, HAMILTONIAN_SOLVERS
+
+    problem = QUBO(torch.tensor([[-1., 1.5], [1.5, -2.]],
+                               device='cuda:0', dtype=torch.float64))
+    solver = create_solver('lib_ssh', max_steps=256, dynamics_dtype='float32')
+    result = solver.solve(problem, restarts=16, batch_size=16, seed=42,
+                          best_only=True, memory_limit_bytes=512*1024**2)
+    print(result.best_assignment, result.best_energy)
+
+The same IDs work with create_bqm_solver and compact QUBOProblem inputs.
+Compact solve parameters use steps/runs/run_batch_size/dtype. Resident plans
+use the existing TorchQUBO and BQMResourcePlan interfaces. Histories and supplied
+starts are available through the native tensor interface. Dynamics precision
+defaults to the supplied problem/compact precision, with an explicit
+dynamics_dtype override. Returned source-objective scores use FP64.
+
+Engineering and numerical choices
+---------------------------------
+* The existing PopulationSolver lifecycle owns restarts, bounded batches,
+  immutable coefficient reuse, RNG, observers, original-source archives,
+  result allocation and memory admission. Early termination now fills trailing
+  requested history samples with the completed candidate value. No previous
+  algorithm equations or parameters were modified.
+* The specification's negative Ising convention is translated to the library's
+  positive cost-gradient convention. Q diagonals and compact self loops remain
+  linear in soft occupations. Offsets and duplicate/reversed compact terms are
+  retained for independent original-objective scoring.
+* Each family uses its own carrier and update: bounded SSH oscillators,
+  normalized Bose amplitudes, unit-spin/cavity dynamics, FFT exchange/mobility,
+  clock spinors, frustrated spins, phase/rotor dynamics, categorical/ternary
+  conditional moves, pure Gaussian covariances, Slater projectors, worldline
+  segments, or spectral proposals followed by exact bounded block optimization.
+* Deterministic geometric updates use frozen-control finite-step acceptance,
+  normalization/retraction or Rodrigues rotations. Rejection loops are bounded;
+  a numerical stall is reported as UNKNOWN rather than a certified optimum.
+  Stochastic phase, rotor and n-vector methods retain their stated noise.
+* SYK/Kitaev use sparse Wick terms and O(n) Givens-plane changes rather than
+  dense matrix exponentials. Opposite parity is explored through an explicit
+  reflection restart. Fermi-Hubbard uses the permitted real-state Slater option,
+  thin QR and conditional projector measurement, retaining exchange terms.
+  BdG eigensolves are restricted to a pool of at most 128 variables; exact block
+  enumeration is tiled and capped at 16 bits, with FP64 source acceptance.
+* XY uses a faster mathematically equivalent exact conditional minimum.
+  At fixed u=|sin(theta)|, choose the signs of cos/sin to match A/B and minimize
+  -|A|sqrt(1-u^2)-|B|u+kappa*u^2 on [0,1]. This function is convex for kappa>=0;
+  48 bounded FP64 bisections isolate its derivative root. Analytic degenerate
+  branches and direct old/new energy comparison preserve ties. This avoids
+  production quartic eigenvalue solvers and unbounded half-angle coordinates.
+  XY also offers compile_coordinates=True on CUDA, lazily fusing this scalar
+  root through torch.compile/Inductor/Triton. The default remains eager and CPU
+  always stays eager. Compilation/cache memory is outside the tensor estimate;
+  first-call compilation time is included in the complete solve.
+* Categorical/ternary/angular coordinate commits are sequential within a
+  replica; replicas and label candidates run in parallel. Cached FP64 fields
+  use sparse column updates. No interacting proposals commit independently
+  against stale fields. Worldlines use implicit periodic temporal bonds and
+  account segment length against n*P slice visits per sweep.
+* The default auxiliary graph choices are the specified sparse ring/chain
+  choices, with small-n distinct-neighbor cases and MG padding handled
+  explicitly. Inozemtsev and Haldane-Shastry use FFT ring operations; cavity
+  and spin-squeezing feedback use collective reductions, without dense drivers.
+* Schedules use finite iteration budgets. Defaults are starting configurations,
+  not a reproduction of every proposed experiment/sweep count in the document.
+  max_steps counts integration/coordinate/block steps for continuous/Gaussian
+  methods and sweeps for the five discrete methods. Gaussian coordinate counts
+  are not full O(n^2) sweeps. Continuous terminal_steps stays inside max_steps;
+  optional polish_sweeps/polish_steps adds explicit readout work. Several
+  reference experiments' restart/extra-terminal stages are available as
+  configurable library runs rather than a hidden indefinite campaign.
+* Optional ZN collective interval proposals and user-supplied multi-harmonic
+  drivers are not included; its base adjacent/antipodal chiral ring method is.
+  Initial presets have not been tuned against held-out production instances.
+
+Memory and execution
+--------------------
+Compact sparse coefficients avoid dense Q construction and share immutable
+operators across trajectory batches. State and mutable fields are independent
+per replica. Scoring is chunked. Memory estimates precede allocation and include
+model-specific state, source operators and temporary workspace. These estimates
+exclude allocator, CUDA context and external-library overhead; they are not
+hard process memory ceilings. Explicit unavailable CUDA requests fail.
+
+SYK/Kitaev and Slater/projector states require quadratic storage and their exact
+conditional measurement can require cubic work. They are comparators for small
+and medium inputs, not unrestricted 10,000-variable methods. Coordinate methods
+can be limited by GPU launch latency on small inputs. The profile tool measures
+this rather than asserting a universal GPU speedup. CPU/GPU RNG streams need
+not produce identical trajectories, even with the same seed.
+
+Validation and bounded profiling
+--------------------------------
+Tests cover endpoint identities, finite-difference real/complex and tangent
+gradients, dissipation, norms, covariance purity/parity, Slater exchange,
+incremental and interacting-block costs, worldline periodic boundaries, exact
+XY minima, original scoring, starts, histories, compact/resident precision,
+restart reproducibility and memory admission.
+
+Run the new tests:
+    python -m pytest tests/qubo_solvers/test_hamiltonian*.py \
+        tests/test_hamiltonian_integration.py -q
+
+Run a bounded timing/memory probe (output outside the repository):
+    python tools/profile_hamiltonian_solvers.py --device cuda:0 \
+        --sizes 32,128 --steps 2 --runs 4 --repeat 3 --cpu-comparison \
+        --memory-limit-mib 1024 --output /tmp/hamiltonian-profile.json
+
+Probe JSON records hardware/software/source hashes, exact parameter overrides,
+warmup, synchronized end-to-end and CUDA event spans, allocation peaks,
+independent original-objective scoring and raw feasible energies. Small smoke
+budgets do not establish competitive quality or speed. No full campaign runs
+or changes to existing benchmark results were authorized or performed.
+
+Measured completion evidence
+----------------------------
+Hardware: supplied Vast endpoint, four NVIDIA GeForce RTX 3060 GPUs, each with
+12 GiB; Torch 2.11.0+cu128, CUDA runtime 12.8, Python 3.12. Independent library
+tests and profiles used explicit devices; no rental/instance lifecycle changes.
+
+Final remote CPU/CUDA library/integration suite: 1,908 passed, 3 deselected,
+zero failures (108.83 seconds). The three deselected cases require the broader
+portfolio application's dependencies; they are outside this standalone library.
+The real CUDA/Triton equivalence tests for the optional XY path passed.
+
+Final Windows CPU suite, including the solver library, new integrations,
+continuous memory admission and existing benchmark/runtime regressions:
+1,298 passed, 648 skipped, 50 subtests passed, zero failures (35.09 seconds).
+Skips mainly select unavailable CUDA on the local CPU-only Torch installation.
+
+Bounded GPU profiles: 148 cases passed, zero scoring/allocation failures.
+* All 23 methods, n=32 and 128, sparse/dense: 92 cases, four restarts, two
+  steps/sweeps, one warmup and three measured repetitions, CPU comparisons.
+* Thirteen linear-state/FFT methods, n=512 and 2048, sparse/dense: 52 cases,
+  sixteen restarts, eight steps, one warmup and two measured repetitions.
+* Optional compiled XY, n=32 and 128, sparse/dense: four cases, matching the
+  first profile's seeds/restarts/steps and three measured repetitions.
+All returned best/final energies were independently recomputed using original
+FP64 coefficients. Peak allocated tensors were 24.34 MiB in the all-method
+small profile and 410.50 MiB in the larger linear-state profile. These figures
+exclude CUDA context and external-library allocations.
+
+Illustrative synchronized medians on these synthetic inputs:
+* At n=128 dense, two steps and four restarts, ordinary XY took 2.9103 seconds;
+  optional compiled XY took 0.33675 seconds after warmup (8.64x on this probe).
+  Its first n=32 sparse warmup took 25.80 seconds including compilation.
+  The measured n=128 dense mean returned energy was -1528.75 in both variants.
+* At n=2048 dense, eight steps and sixteen restarts, the thirteen profiled
+  linear-state/FFT methods took 0.185--0.334 seconds end-to-end. This includes
+  coefficient preparation, transfers, search, readout and candidate capture.
+* Most methods were slower on GPU than CPU at the small profiled sizes. SYK
+  and Hubbard benefited in some tested cases. No universal GPU speedup or
+  quality advantage is established; coordinate launch costs remain material.
+
+Raw JSON/logs and source snapshots are outside the repository, under
+../hamiltonian_validation_20261019/ locally and
+/workspace/hamiltonian_validation_20261019/ on the supplied Vast host.
+Reproduce the optional XY probe by adding --solvers lib_xy_coordinate
+--compile-xy to the profiling command above. Both cold and warm timings remain
+in JSON; do not treat a warm speed ratio as a first-call speedup.
+
+Input specification SHA256:
+ba37b56c58e85eb9c85c8b80de22c1791528633272f408953482485601cf4029
+
+Implementation references
+-------------------------
+The supplied TeX is the model specification. API and timing references:
+https://docs.pytorch.org/docs/stable/generated/torch.sparse.mm.html
+https://docs.pytorch.org/docs/stable/generated/torch.linalg.eigh.html
+https://docs.pytorch.org/docs/stable/notes/cuda.html
+
+The requested GPU optimization skill contributed the validation/profiling
+workflow. Skill provenance: Kassis, T., Agarwal, V., He, Y., Patel, D., and
+Brueckner, A. M. (2026), Scientific Agent Skills: A Library of Procedural
+Knowledge for Research Agents, arXiv:2609.00065 (current record checked).
+https://doi.org/10.48550/arXiv.2609.00065
