@@ -2,7 +2,7 @@
 
 This branch contains the canonical 53-method solver library and the runtime
 benchmark for the 25 GPU-capable methods compatible with all 37 prepared QUBOs.
-This `solvers_testing5` branch adds GPU-friendly SU(2) chiral isospin and gravity
+This `solvers_testing` branch adds GPU-friendly SU(2) chiral isospin and gravity
 tunneling solvers to the original 28 methods. It retains the compact 20-second
 continuous runner, frozen solver presets, and provenance for one sparse and one
 dense input at each of 100, 200, 500, 1000, 5000, and 10000 variables. Generated
@@ -16,7 +16,7 @@ compact crash-safe results, and post-run 1% hit exports. See
 [EARLY_STOP_AND_WORKERS.txt](EARLY_STOP_AND_WORKERS.txt) for the current protocol.
 [BRANCH_CHANGES.md](BRANCH_CHANGES.md) documents this release and the inherited runtime.
 
-## Added in solvers_testing5
+## Added in solvers_testing
 
 The 23 additional Hamiltonian candidates are available through the same library
 factories, including compact sparse and resident execution. Their implementations,
@@ -63,7 +63,7 @@ payloads, environments and credentials are not included in this release.
 ## Clone and install
 
 ```bash
-git clone --depth 1 --single-branch --branch solvers_testing5 https://github.com/Joxy97/margin_testing.git
+git clone --depth 1 --single-branch --branch solvers_testing https://github.com/Joxy97/margin_testing.git
 cd margin_testing
 python -m venv .venv
 source .venv/bin/activate

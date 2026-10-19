@@ -1,10 +1,9 @@
 ﻿# Solver benchmark deployment instructions
 
-This `solvers_testing5` branch ships the standalone canonical solver library,
+This `solvers_testing` branch ships the standalone canonical solver library,
 historical and continuous benchmark runners, configuration, focused validation
 tests, all 37 historical offline QUBO inputs, and small provenance needed to
-recover the 12 continuous inputs. The earlier `solvers_testing` branch retains
-the broader portfolio application. Do not add market datasets, bulk recovered
+recover the 12 continuous inputs. Historical commits retain the broader portfolio application. Do not add market datasets, bulk recovered
 continuous inputs, virtual environments, generated results, caches, or
 credentials to this branch.
 

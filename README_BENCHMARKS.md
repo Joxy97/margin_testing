@@ -10,7 +10,7 @@ storage/resume semantics and timing caveats are in
 all twelve references are in
 [CONTINUOUS_INPUT_REFERENCES.txt](CONTINUOUS_INPUT_REFERENCES.txt).
 
-The `solvers_testing5` branch adds `lib_su2_chiral_isospin` and
+The `solvers_testing` branch adds `lib_su2_chiral_isospin` and
 `lib_gravity_tunneling`, bringing the default eligible inventory to 25 methods.
 Historical presets keep their existing settings; preflight appends the two
 new methods' initial settings before freezing the experiment identity.
@@ -85,7 +85,7 @@ Clone the current branch and recover the checksum-verified public inputs before
 running a continuous campaign:
 
 ```bash
-git clone --depth 1 --single-branch --branch solvers_testing5 https://github.com/Joxy97/margin_testing.git
+git clone --depth 1 --single-branch --branch solvers_testing https://github.com/Joxy97/margin_testing.git
 cd margin_testing
 python -m venv .venv
 source .venv/bin/activate
