@@ -65,11 +65,12 @@ optimum, seconds from solve origin. Blank/null means no recorded optimum;
 it is not zero and must not be replaced with the 20-second cap.
 
 Completion/failures: terminal attempts include failures. Failed or missing
-attempts never shrink the planned hit denominator. These 13 archived
-campaigns have 29,900 completed trials and zero recorded failures.
+attempts never shrink the planned hit denominator. These 14 archived
+campaigns have 31,900 completed trials and zero recorded failures.
 
 LM23 denotes the original 23 solvers; SM23 denotes the new 23 solvers.
-The n200 sparse/dense folders each contain these two experiment subfolders.
+The n200 sparse/dense folders contain these experiment subfolders; dense
+also contains SM20, the twenty new open-system solver models.
 
 Plot grouping: each new SM23 figure has six panels, sorted solver IDs,
 four solvers per panel and three in the last. The log-scaled x-axis is time.
@@ -81,3 +82,17 @@ campaign. The new sparse host used four RTX 3060 GPUs; dense used four
 RTX 4070 SUPER GPUs. These are measured hardware-specific curves, not a
 controlled identical-hardware speed ranking. Tuning used the same problem
 instances with different seeds, so it is not out-of-instance validation.
+
+SM20-specific notes:
+The same gka5e optimum (-35154), 1% threshold (-34802.46), seed schedule
+and nine checkpoints apply. Independent candidate scoring and completed
+certification are included in the actual runtime clock; immutable scorer
+setup is excluded. Archived launch instructions that say scoring is excluded
+are superseded by this source-verified clarification, without editing those
+historical bytes. Finite natural completion carries the last incumbent
+through 20s: a 20s checkpoint does not imply 20s of active search.
+The 20 models are grouped alphabetically in five four-solver panels, with
+the sixth panel unpopulated. Initial unavailable samples remain NaN; missing
+mean-gap segments must not be backfilled from future solutions. SM20 uses
+four RTX 5060 Ti GPUs, so timing curves are not an identical-hardware ranking
+against earlier LM23 or SM23 campaigns.

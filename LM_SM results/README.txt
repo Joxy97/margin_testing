@@ -1,11 +1,12 @@
-ARCHIVED ORIGINAL23 AND SM23 QUBO RESULTS
+ARCHIVED LM23, SM23 AND SM20 QUBO RESULTS
 
 Code branch: https://github.com/Joxy97/margin_testing/tree/solvers_testing
 Results branch: https://github.com/Joxy97/margin_testing/tree/solvers_testing_results
 
 There are 11 original campaigns (23 solvers each, 25,300 trials), plus two
-new SM23 campaigns (23 solvers each, 4,600 trials). All 29,900 attempts are
-complete, with zero recorded failures. No 10000-dense campaign is present.
+SM23 campaigns (23 solvers each, 4,600 trials), and one dense-n200 SM20
+campaign (20 solvers, 2,000 trials). All 31,900 attempts are complete, with
+zero recorded failures. No 10000-dense campaign is present.
 
 Folder layout, identical for sparse and dense:
   <density>_<n>/manifest.json, state.json, completion.json
@@ -13,7 +14,7 @@ Folder layout, identical for sparse and dense:
   <density>_<n>/aggregated/<solver>/<problem>.csv
   <density>_<n>/progress/<solver>/<problem>.json
   <density>_<n>/plots/, logs/, solver_settings/
-For n200, the problem directory contains only these two experiment folders:
+For n200, each problem directory contains the following experiment folders:
   <density>_200/LM23/ (original23; canonical layout above)
   <density>_200/SM23/ (new23; same canonical layout)
 
@@ -73,3 +74,34 @@ instructions use the new name. Historical logs, immutable manifests and
 source archives retain their original names and hashes; any old branch
 reference in them denotes historical provenance. Use solvers_testing for
 current code, and the included exact source archives for faithful retests.
+
+SM20 ADDITION, 2026-10-23
+dense_200/SM20/ contains the twenty open-system models, all 100 seeds each,
+using the same exact gka5e input as SM23. Dense n200 now has 66 distinct
+solvers across LM23, SM23 and SM20; sparse n200 retains its 46 solvers.
+The new SM20 folder uses the same raw, aggregated, progress, postprocessed,
+plots, solver_settings and reproducibility structure as SM23.
+
+PLots/ adds three *_SM20.png figures in the same SM23 style: exact hits,
+mean gap percent and hits within 1%. The six-panel canvas has five panels
+with four solvers each; the sixth notes that all 20 solvers are shown.
+SM20/plots/gka5e/ also contains the standard gap, hit probability and TTS99
+plots. All previous result payloads and plot images remain byte-identical.
+
+Exact parameters, 16 internal trajectories, seeds, finite step schedules,
+worker plan and software/hardware identities are in SM20/solver_settings/.
+SM20 used four RTX 5060 Ti GPUs with one seed worker per GPU. These are
+initial candidate defaults, without broad tuning. See SM20/reproducibility/
+REPLAY.txt and the SM20 source/input archives for a fresh reproducible test.
+No production terminal transcript was captured; the actual setup/test logs,
+per-seed progress and final completion records are retained without invention.
+
+Audit this addition and its derived exports without launching trials:
+  python scripts/build_sm20_publication.py --validate-only
+Refresh its quality summary and searchable settings/publication indexes:
+  python scripts/build_sm20_publication.py
+Regenerate its three styled figures on Windows:
+  powershell -File scripts/plot_sm20.ps1 -VariableCount 200 -DensityCategory dense
+The existing build_publication.py --validate-only also includes SM20.
+See SM20/postprocessed/final_quality_summary.csv for the final per-solver
+best/mean/worst gaps, exact hits and 1% hits.

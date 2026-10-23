@@ -1,4 +1,4 @@
-"""Validate saved campaigns; export settings and six SM23 figures. No trials run."""
+"""Validate saved campaigns; export settings and SM23/SM20 figures. No trials run."""
 from pathlib import Path
 import argparse
 import csv
@@ -19,15 +19,15 @@ def write_csv(path, fields, rows):
         writer = csv.DictWriter(f, fieldnames=fields, quoting=csv.QUOTE_ALL)
         writer.writeheader(); writer.writerows(rows)
 
-def figures(campaign):
+def figures(campaign, family='SM23'):
     # Use the original renderer so typography, layout and scales match LM23.
     import subprocess
     p = campaign['manifest']['problems'][0]
     subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                    '-File', str(ROOT/'scripts/plot_sm23.ps1'),
+                    '-File', str(ROOT/'scripts'/f'plot_{family.lower()}.ps1'),
                     '-VariableCount', str(p['n']), '-DensityCategory', p['density'],
                     '-BaseDir', str(ROOT), '-OutputDir', str(ROOT/'PLots')], check=True)
-    return [f"PLots/200_{p['density']}_{metric}_SM23.png" for metric in
+    return [f"PLots/200_{p['density']}_{metric}_{family}.png" for metric in
             ['exact_hits', 'hits_within_1pct', 'gap_to_reference_percent']]
 
 
@@ -37,7 +37,8 @@ def main():
     summary=[]; settings_rows=[]; outputs=[]
     paths=(sorted(ROOT.glob('*_*/manifest.json')) +
            sorted(ROOT.glob('*_*/LM23/manifest.json')) +
-           sorted(ROOT.glob('*_*/SM23/manifest.json')))
+           sorted(ROOT.glob('*_*/SM23/manifest.json')) +
+           sorted(ROOT.glob('*_*/SM20/manifest.json')))
     for path in paths:
         m=json.loads(path.read_bytes()); c=load_campaign(path,set(m['solvers']))
         name=path.parent.relative_to(ROOT).as_posix(); p=m['problems'][0]
@@ -54,7 +55,7 @@ def main():
                 settings_rows.append(dict(campaign=name,solver=solver,parameter=parameter,value_json=json.dumps(value),
                     trials=len(m['seeds']),budget_seconds=m['execution']['budget_seconds'],
                     wall_schedule=solver in m['execution']['wall_schedule_solvers']))
-        if path.parent.name=='SM23':
+        if path.parent.name in ('SM23','SM20'):
             near=[]; timings=[]
             for solver in sorted(m['solvers']):
                 for t,hits in zip(m['checkpoints_seconds'],c['curves'][solver]['near_hits']):
@@ -65,7 +66,7 @@ def main():
                                         status=progress['status'][i],reference_type=p['reference_type']))
             write_csv(path.parent/'postprocessed/hits_within_1pct.csv',list(near[0]),near)
             write_csv(path.parent/'postprocessed/time_to_optimum.csv',list(timings[0]),timings)
-            outputs.extend(figures(c))
+            outputs.extend(figures(c,path.parent.name))
     if not args.validate_only:
         write_csv(ROOT/'reproducibility/all_solver_settings.csv',list(settings_rows[0]),settings_rows)
         write_json(ROOT/'reproducibility/validation_report.json',dict(campaigns=summary,total_trials=sum(c['trials'] for c in summary),

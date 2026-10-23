@@ -1,0 +1,107 @@
+SM20 REPLAY AND PROVENANCE
+
+This package records the completed gka5e dense n=200 experiment: the twenty
+open-system models, seeds 0..99 per model, a 20-second cap and checkpoints
+0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10 and 20 seconds. Exact model parameters and
+execution metadata are in ../solver_settings/. These were initial candidate
+defaults with no broad tuning. There are 16 internal trajectories per seed,
+separate from the 100 independent benchmark seeds per solver.
+
+Archived artifacts
+The following paths are relative to this REPLAY.txt directory; they work with
+both the original local folder names and the renamed results-branch folders.
+
+../../../reproducibility/SM20_source_29624a8.tar.gz
+  Exact deployed source files, launcher, package configuration and documentation.
+  SHA-256: 70ab48e50616cc78f19fd2887e618485c5ccdd2e9f0f81477812d7532bbde26f
+../../../reproducibility/SM20_replay_inputs.tar.gz
+  Exact normalized gka5e input, raw source input and verification evidence.
+  SHA-256: 3a6014ae5cf373749b07bc2afeb8f7616a735dca31090b5bbf77a985dae4d525
+../../../reproducibility/SM20_dense_200_20261023.tar.gz
+  Original result/campaign transport archive; retain it for integrity checks.
+  SHA-256: c9611faa99b9126ad297fea8efb3940cb993f3b048ee0521e9710bb60e3d6a41
+campaign/
+  Original config.json, catalog.json, input_proof.json, identity.json, launcher,
+  monitor and implementation/launch documentation, preserved unchanged.
+replay_identity_validation.json
+  Offline extraction and frozen-identity verification of source, launcher,
+  inputs and campaign files; zero solver trials were started by that check.
+
+Authoritative identities
+Numerical source snapshot:
+  29624a8421d59da66f358ff6b1a4efb491553fe4ab523abdc78d893ab579bc8c
+Launcher SHA-256:
+  5723dae3d12ed3c4096f06de3a4b650eced69365421cc4f8a9e057dd05232d84
+Normalized gka5e input SHA-256:
+  3a2d6521caefa62a867a7b96dae169388b14088b1ba309dbcdef989b9460d375
+Canonical manifest digest, used by the results protocol and experiment.json:
+  551d9d92fb607132ddd773fb14e3e2ad3c91daadb5888ed8cc2c9a2ce39ce442
+Original manifest.json file byte SHA-256 (a different serialization identity):
+  04b0b3b8aad98d9b0660f11b71f193aeafd8208cd30fb14fa43c20b901390a53
+
+The solver implementation was published on code branch solvers_testing as
+commit 5d92c86 after this campaign had begun. The deployed working tree was
+based on 0544406bc275f83d254ef7b74d595fb5c1e9248a plus the new implementation.
+The archived byte-level source snapshot, not a moving Git branch name or the
+base commit alone, identifies the code that produced these measurements.
+Do not regenerate identity.json or edit a stored hash to bypass a mismatch.
+Extracting the source archive avoids newline conversion by a Git checkout.
+
+Linux/CUDA replay
+Use a fresh directory and the recorded software/hardware environment for the
+closest replay. The original run used four NVIDIA RTX 5060 Ti GPUs, one seed
+worker per GPU, Python 3.12.15, Torch 2.11.0+cu128, CUDA 12.8 and driver
+610.57.04. Exact dependency versions and the hardware identity are in
+../solver_settings/experiment.json. The original venv reused the working
+system CUDA Torch installation through --system-site-packages. Installing
+only the project's lower dependency bounds does not reproduce exact versions;
+retain the recorded installed versions when building the replay environment.
+
+Set REPLAY_DIR to this directory on the Linux machine. Set REPLAY_ROOT to an
+unused location outside the published results tree. The following commands
+unpack the archived code and inputs, then validate admission without trials:
+
+  set -euo pipefail
+  REPLAY_DIR="/path/to/results/dense_200/SM20/reproducibility"
+  REPLAY_ROOT="/workspace/sm20_replay_20261023"
+  ARCHIVES="$(cd "$REPLAY_DIR/../../../reproducibility" && pwd)"
+  test ! -e "$REPLAY_ROOT"
+  mkdir -p "$REPLAY_ROOT/code"
+  tar -xzf "$ARCHIVES/SM20_source_29624a8.tar.gz" -C "$REPLAY_ROOT/code"
+  tar -xzf "$ARCHIVES/SM20_replay_inputs.tar.gz" -C "$REPLAY_ROOT/code"
+  cd "$REPLAY_ROOT/code"
+  python3.12 -m venv --system-site-packages .venv
+  source .venv/bin/activate
+  python -m pip install -e '.[benchmark,dev]'
+  python -m pip check
+  python -u run_open_system_dense.py run --dry-run --campaign "$REPLAY_DIR/campaign" --output "$REPLAY_ROOT/results" --devices cuda:0,cuda:1,cuda:2,cuda:3
+
+Only the following command starts a NEW full 2,000-trial campaign. It writes
+new results and never modifies the archived measurements:
+
+  python -u run_open_system_dense.py run --campaign "$REPLAY_DIR/campaign" --output "$REPLAY_ROOT/results" --devices cuda:0,cuda:1,cuda:2,cuda:3
+
+For live progress from the same activated environment:
+
+  python -u run_open_system_dense.py status --watch --campaign "$REPLAY_DIR/campaign" --output "$REPLAY_ROOT/results"
+
+To resume that new replay after interruption, repeat its run command with
+--resume. Do not resume into the archived SM20 directory. The run launcher
+validates the source, configuration, input and launcher identities before
+dispatch. Environment changes can change timing and numerical trajectories;
+the same seed does not guarantee identical results on different GPU/software
+environments, particularly with wall-clock checkpoint boundaries.
+
+Timing clarification
+The run uses finite fixed-step schedules (wall_schedule=false), no restarts,
+and independent source-objective scoring. A naturally returned incumbent is
+held through 20s. A verified optimum stops early and is carried forward.
+Only immutable input/scoring-operator setup happens before the solve origin.
+Independent scoring, CUDA completion, scalar copies and validation occurring
+after that origin are INCLUDED in the measured runtime. The historical
+campaign/OPEN_SYSTEM_DENSE_CAMPAIGN.txt incorrectly states that scoring is
+excluded. It is preserved byte-for-byte as evidence; this clarification and
+the archived continuous_worker.py implementation describe actual behavior.
+
+No tuning, solver changes, rerun trials or replacement of original measurements
+were performed while assembling this publication package.
