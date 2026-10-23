@@ -1,0 +1,113 @@
+OPEN-SYSTEM AND MANY-BODY QUBO CANDIDATES (23 OCTOBER 2026)
+
+Source design: user-supplied Open_System_Many_Body_QUBO_GPU_Compendium.tex.
+Twenty specified classical search adaptations are added to the existing 53
+canonical library methods. The native physical models are not being simulated
+as unrestricted quantum many-body states. OAT and TACT are explicitly separate
+variants of a family already represented in the previous collection.
+
+Library inventory: qubo_solvers.OPEN_SYSTEM_SOLVERS / OPEN_SYSTEM_CLASSES.
+Use create_solver(id, **algorithm_parameters) for the tensor QUBO/Ising API,
+or create_bqm_solver(id, {'device':'cuda:0'}) for compact/resident execution.
+All old solver IDs and numerical implementations retain their existing behavior.
+Historical frozen benchmark configurations do not automatically select these
+research candidates. configs/benchmark_solvers_open_system.json records their
+complete initial parameters and must be selected explicitly for a future run.
+These are initial defaults, not extensively tuned or benchmark-winning settings.
+
+Model IDs follow the document's numbered chapters:
+  1 lib_doppler_cooling
+  2 lib_cavity_atom_cooling
+  3 lib_noisy_laser_atom
+  4 lib_kicked_top
+  5 lib_cavity_optomechanics
+  6 lib_optomechanical_cooling
+  7 lib_noisy_excitation_transport
+  8 lib_steady_state_squeezing
+  9 lib_tomonaga_luttinger
+ 10 lib_kane_mele
+ 11 lib_kondo
+ 12 lib_moore_read
+ 13 lib_emery
+ 14 lib_bcs
+ 15 lib_aklt
+ 16 lib_annni
+ 17 lib_lieb_mattis
+ 18 lib_quadrature_squeezing
+ 19 lib_one_axis_twisting
+ 20 lib_two_axis_counter_twisting
+
+Numerical implementation and contracts
+- Numerical kernels live in open_system_continuous.py, open_system_spin.py and
+  open_system_discrete.py. Each class documents its particular finite-step
+  dynamics and auxiliary topology. Shared helpers do not turn distinct models
+  into aliases of one algorithm.
+- The existing PopulationSolver owns fresh per-call state, memory admission,
+  batch processing, original-coefficient FP64 scoring and incumbent retention.
+  Dense operators are shared across trajectories; compact sparse inputs use
+  sparse operators. There is no n-by-n matrix per trajectory or exponential
+  quantum state. Explicit small block enumeration is bounded by model settings.
+- The reported result is always a binary assignment scored on the input QUBO,
+  including its offset. Native Ising conversion follows the existing library
+  convention. Internal normalized forces and auxiliary energies are not reported
+  as objective values. A lower surrogate energy is not a proof of optimality.
+- Search supports float32/float64 dynamics; verification retains source float64.
+  The budget includes search/preprocessing/readout/certification as in the
+  continuous runner. Immutable preparation remains outside the solve interval.
+- Observers receive completed candidates and cooperative deadline polls.
+  The existing runner retains certified incumbents at checkpoints and stops
+  only on an independently verified optimum when that policy is enabled.
+- Seeds use the existing device-local Torch generator. Reproducibility requires
+  the same device/software, batch size and parameters. Counter-based per-variable
+  stream invariance across changes of batching is not claimed.
+- Memory estimates cover tensors and algorithm scratch conservatively; CUDA
+  context, allocator reserve and vendor-library caches require runtime headroom.
+  Reducing run_batch_size reduces mutable state without duplicating coefficients.
+
+Small validation only
+tests/qubo_solvers/test_open_system_*.py cover model algebra and the library,
+compact sparse, source-scoring and admission boundaries on tiny fixtures.
+tools/probe_open_system_solvers.py performs only two seeds per solver per
+existing n200 problem, with a one-second budget. It uses the production scorer
+and deadlines, records full resolved parameters, actual latency and peak CUDA
+memory, and includes the existing simulated-bifurcation preset as a reference.
+Method-specific default readout remains visible in the saved configuration;
+this is an engineering smoke comparison, not a controlled statistical ranking.
+No full benchmark, broad parameter search or 100-seed campaign is launched.
+
+Example on the prepared Vast instance (small probe only):
+  cd /workspace/margin_testing
+  source .venv/bin/activate
+  python tools/probe_open_system_solvers.py --dense-input /workspace/open_system_validation_20261023/gka5e.npz --output /workspace/open_system_validation_20261023/smoke.json
+
+Development procedure
+Used optimize-for-gpu and memory-optimization skills: keep Torch device data
+resident, bound scratch/replica storage, verify numerical semantics before
+timing, synchronize CUDA measurements and retain measured memory evidence.
+skill-installer was used to inspect the curated catalog; no additional skill
+was needed. Scientific Agent Skills reference (current record checked):
+Kassis, T., Agarwal, V., He, Y., Patel, D., & Brueckner, A. M. (2026).
+Scientific Agent Skills: A Library of Procedural Knowledge for Research Agents.
+https://doi.org/10.48550/arXiv.2609.00065
+
+Specific numerical choices
+Continuous candidates retain the existing library force normalization and
+seeded RNG conventions. TLL uses the fixed logical-order ring and a positive
+truncated Neumann filter; its zero mode is nonzero but not exact unit gain.
+Mobility/TLL/compensated-oscillator steps use conservative timestep caps.
+Kane-Mele uses an oriented-cycle skew operator, not a claim of honeycomb
+topology. BCS uses normalized disjoint group patterns, rank four by default.
+OAT applies exact group momentum shear; TACT uses recomputed-axis x/y/x
+rotations. Nonfinite state is rejected or reset to a verified incumbent where
+explicitly documented, never accepted by clipping an overflow to a corner.
+Kondo enumerates bounded blocks in chunks (default8 variables, hard cap16).
+Moore-Read enumerates all eight triple masks. ANNNI's exact shortcut covers
+open range-two chains; other blocks use a surrogate with full-gain acceptance.
+AKLT max_steps counts sequential coordinate sweeps; discrete block methods
+count proposal rounds and Emery counts integration steps.
+
+Measured validation: 591 checks passed on Vast (one unavailable portfolio test
+excluded); 84/84 final one-second smoke trials completed. Retained SBM reached
+the optimum on all four comparison trials; the new defaults did not beat it.
+No broad tuning or statistical superiority claim is made. Full evidence is
+retained outside the code tree in open_system_validation_20261023.

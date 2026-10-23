@@ -1,9 +1,9 @@
 ﻿# Solver library
 
 `src/qubo_solvers` owns every retained solver, compact problem/result types,
-candidate selection, and execution helpers. There are **53 canonical solvers:
-42 native tensor algorithms and 11 specialized backends**. All run on CPU;
-52 also provide Torch GPU search kernels. Only `lib_planar_graph` is CPU-only.
+candidate selection, and execution helpers. There are **73 canonical solvers:
+62 native tensor algorithms and 11 specialized backends**. All run on CPU;
+72 also provide Torch GPU search kernels. Only `lib_planar_graph` is CPU-only.
 The 23 Hamiltonian additions are listed by `HAMILTONIAN_SOLVERS`; see
 [HAMILTONIAN_MODELS_IMPLEMENTATION.txt](HAMILTONIAN_MODELS_IMPLEMENTATION.txt)
 for their model mapping, memory limits, numerical variants and CUDA validation.
@@ -345,3 +345,9 @@ The GPU and memory workflow used the installed `optimize-for-gpu` and
 Patel, D., and Brueckner, A. M. (2026), *Scientific Agent Skills: A Library of
 Procedural Knowledge for Research Agents*,
 https://doi.org/10.48550/arXiv.2609.00065.
+
+The 20 open-system candidates are available as `OPEN_SYSTEM_SOLVERS`. See
+[OPEN_SYSTEM_MODELS_IMPLEMENTATION.txt](OPEN_SYSTEM_MODELS_IMPLEMENTATION.txt)
+for their IDs, numerical boundaries and small validation procedure. Select
+`configs/benchmark_solvers_open_system.json` explicitly; historical presets
+are unchanged.

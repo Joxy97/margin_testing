@@ -1,0 +1,82 @@
+OPEN-SYSTEM NEW20: N200 DENSE CAMPAIGN
+===================================
+
+Prepared on Vast at /workspace/margin_testing. Campaign settings and input
+proof are in /workspace/open_system_dense_campaign_20261023. Preparation and
+the GPU dry-run do not launch production trials.
+
+START ON VAST
+  cd /workspace/margin_testing
+  source .venv/bin/activate
+  python -u run_open_system_dense.py run
+
+The foreground command prints percent, completed trials and an estimated
+remaining time after every saved trial. Keep the SSH session connected, or
+run inside your usual tmux session. To also retain console output:
+  python -u run_open_system_dense.py run 2>&1 | tee /workspace/open_system_dense_campaign_20261023/run.log
+
+MONITOR FROM ANOTHER TERMINAL
+  cd /workspace/margin_testing
+  .venv/bin/python run_open_system_dense.py status --watch
+
+RESUME AN INTERRUPTED CAMPAIGN
+  cd /workspace/margin_testing
+  .venv/bin/python -u run_open_system_dense.py run --resume
+
+READ-ONLY PREFLIGHT (NO TRIALS)
+  .venv/bin/python run_open_system_dense.py run --dry-run
+
+FIXED PROTOCOL
+- Existing gka5e, 200 binary variables, dense (49.53266331658291% of unordered
+  off-diagonal pairs nonzero). Canonical minimization reference: -35154,
+  published proven optimum. Input and primary reference provenance are checked.
+- Exactly the 20 OPEN_SYSTEM_SOLVERS, in document order; no older solvers.
+- Seeds 0 through 99 independently per solver: 2,000 trials total.
+- Each trial uses the frozen initial candidate settings, including 16 internal
+  trajectories. These are the small-test defaults, not broadly tuned settings.
+- One independent worker per visible CUDA GPU, four on the prepared Vast host.
+  No worker or solver tuning is performed by this launcher.
+- One continuous trial per seed; algorithm budget capped at 20 seconds.
+  RNG reset, fresh algorithm state and solver work are timed. Startup, immutable
+  input setup, independent objective scoring and disk persistence are excluded,
+  following the existing continuous benchmark protocol. Cooperative observation
+  checks and the external watchdog bound execution; process wall time can exceed
+  the scored 20-second window. Late candidates are not counted retroactively.
+- Checkpoints in seconds: 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20.
+  Each checkpoint uses the best valid incumbent captured by its boundary.
+- A completed independent score matching the verified optimum stops the trial.
+  Its energy is carried to subsequent checkpoints; earlier samples are retained.
+- Finite-step natural completion retains its last incumbent until the 20-second
+  endpoint, without restarting the solver. Fixed-step dynamics match the smoke.
+- All terminal attempts, including failures, count toward displayed completion.
+  Failures remain explicit and affect metric denominators. Interrupted trials
+  remain pending; resume restarts them with their original seed.
+- Resume rejects changed source, launcher, input, parameters, environment or
+  execution identity. Do not edit solver code during an active campaign.
+
+RESULTS
+  /workspace/open_system_dense_campaign_20261023/results
+
+Raw data are the existing compact protocol's float64 checkpoint matrices:
+  raw/<solver>/gka5e.npy                  100 seeds x 9 checkpoints
+  aggregated/<solver>/gka5e.csv           gap, hit probability, TTS99
+  progress/<solver>/gka5e.json            checked status and optimum time per seed
+  manifest.json                         settings, seeds, source/input/environment
+  campaign_progress.json                latest progress and measured ETA
+  completion.json                       final completion and checksums
+The compact protocol does not save bitstrings or full trajectories. Raw
+checkpoint energies are retained for later metrics and plotting. Plotting is
+not launched automatically by this script.
+
+Expected time on four GPUs at the full budget: 2h46m40s plus setup, scoring and
+persistence overhead. Optimum early stops can shorten it. Measured ETA updates
+after each saved trial; early estimates may be noisy.
+
+PREPARE A FRESH COPY
+  python run_open_system_dense.py prepare --input /path/to/existing/gka5e.npz
+The offline original gka5e source and primary reference cache must also be
+available under benchmark_data. The prepared Vast installation already has
+them. This checks the exact old input, merges unchanged historical protected
+settings for CLI compatibility, and freezes only the requested20 in the plan.
+Generated settings and results default to a sibling campaign directory, outside
+the code repository. --campaign and --output can select a separate experiment.

@@ -1,6 +1,6 @@
 # Solver library and continuous QUBO benchmarks
 
-This branch contains the canonical 53-method solver library and the runtime
+This branch contains the canonical 73-method solver library and the runtime
 benchmark for the 25 GPU-capable methods compatible with all 37 prepared QUBOs.
 This `solvers_testing` branch adds GPU-friendly SU(2) chiral isospin and gravity
 tunneling solvers to the original 28 methods. It retains the compact 20-second
@@ -189,3 +189,13 @@ timing, output fields and bounded tests. Four-RTX-3090 smoke results, measured
 pilot throughput and short-budget limitations are in
 [MULTIGPU_VALIDATION.md](MULTIGPU_VALIDATION.md). Validate measured throughput on
 each target system; generated result artifacts are not bundled with the source.
+
+The 20 open-system candidates are available as `OPEN_SYSTEM_SOLVERS`. See
+[OPEN_SYSTEM_MODELS_IMPLEMENTATION.txt](OPEN_SYSTEM_MODELS_IMPLEMENTATION.txt)
+for their IDs, numerical boundaries and small validation procedure. Select
+`configs/benchmark_solvers_open_system.json` explicitly; historical presets
+are unchanged.
+
+For the prepared new20 n200 dense campaign (100 seeds, 20-second cap), use
+`python -u run_open_system_dense.py run`. Preparation, monitoring and resume
+commands are in [OPEN_SYSTEM_DENSE_CAMPAIGN.txt](OPEN_SYSTEM_DENSE_CAMPAIGN.txt).

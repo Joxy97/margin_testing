@@ -19,10 +19,11 @@ from .problem import QUBOProblem
 from .resource_plan import BQMResourcePlan
 from .torch_execution import TorchExecution
 from ..hamiltonians import HAMILTONIAN_CLASSES, HAMILTONIAN_SOLVERS
+from ..open_systems import OPEN_SYSTEM_CLASSES, OPEN_SYSTEM_SOLVERS
 
 
 _MAX_SEED = (1 << 63) - 1
-_SOURCE_SCORED_SOLVERS = frozenset(("lib_su2_chiral_isospin", "lib_gravity_tunneling") + HAMILTONIAN_SOLVERS)
+_SOURCE_SCORED_SOLVERS = frozenset(("lib_su2_chiral_isospin", "lib_gravity_tunneling") + HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS)
 _RUN_DEFAULTS = {
     "runs": 32,
     "seed": 1,
@@ -100,7 +101,7 @@ class LibraryBQMSolver(TorchExecution):
         if "steps" in supplied and budget_name in supplied:
             raise ValueError(f"cannot specify both steps and {budget_name}")
         default_steps = 512 if self.solverId in _SOURCE_SCORED_SOLVERS else 1000
-        if self.solverId in HAMILTONIAN_SOLVERS:
+        if self.solverId in HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS:
             default_steps = library_solver_class(self.solverId)().max_steps
         steps = _integer("steps", supplied.pop("steps", default_steps), 0)
         algorithm = default_algorithm_parameters(self.solverId, steps=steps)
@@ -313,6 +314,8 @@ _LIBRARY_IDS = (
 )
 _LIBRARY_NAMES += tuple(cls.__name__ for cls in HAMILTONIAN_CLASSES.values())
 _LIBRARY_IDS += HAMILTONIAN_SOLVERS
+_LIBRARY_NAMES += tuple(cls.__name__ for cls in OPEN_SYSTEM_CLASSES.values())
+_LIBRARY_IDS += OPEN_SYSTEM_SOLVERS
 
 for _name, _solver_id in zip(_LIBRARY_NAMES, _LIBRARY_IDS):
     _class_name = f"Library{_name}BQMSolver"

@@ -10,17 +10,17 @@ from qubo_solvers import (
     QUBO, Ising, LIBRARY_SOLVERS, NATIVE_SOLVERS, BACKEND_SOLVERS, SOLVERS, BackendSolver,
     REMOVED_SOLVERS, GPU_SOLVERS, CPU_SOLVERS,
     TerminationReason, create_solver, create_bqm_solver,
-    HAMILTONIAN_SOLVERS,
+    HAMILTONIAN_SOLVERS, OPEN_SYSTEM_SOLVERS,
     default_algorithm_parameters, library_solver_class,
 )
 
 
 def test_registry_has_all_implementations():
-    assert len(LIBRARY_SOLVERS) == 42
+    assert len(LIBRARY_SOLVERS) == 62
     assert len(BACKEND_SOLVERS) == 11
-    assert len(GPU_SOLVERS) == 52
+    assert len(GPU_SOLVERS) == 72
     assert CPU_SOLVERS == ('lib_planar_graph',)
-    assert len(SOLVERS) == len(set(SOLVERS)) == 53
+    assert len(SOLVERS) == len(set(SOLVERS)) == 73
     for name in LIBRARY_SOLVERS:
         solver = create_solver(name, **default_algorithm_parameters(name, 0))
         assert isinstance(solver, library_solver_class(name))
@@ -39,7 +39,7 @@ def test_registered_native_algorithms_preserve_objective(name, spin, dtype):
         problem = problem.to_ising()
     result = create_solver(name, **default_algorithm_parameters(name, 2)).solve(
         problem, restarts=3, batch_size=2, seed=31, best_only=True)
-    if name in ('lib_su2_chiral_isospin', 'lib_gravity_tunneling') + HAMILTONIAN_SOLVERS:
+    if name in ('lib_su2_chiral_isospin', 'lib_gravity_tunneling') + HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS:
         assert result.best_energy.dtype == torch.float64
         expected = problem.to(dtype=torch.float64).energy(result.best_assignment)
     else:

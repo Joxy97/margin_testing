@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 from qubo_solvers._hamiltonian_catalog import HAMILTONIAN_SOLVERS
+from qubo_solvers._open_system_catalog import OPEN_SYSTEM_SOLVERS
 
 
 CHECKPOINTS = (.05, .1, .2, .5, 1., 2., 5., 10., 20.)
@@ -26,11 +27,11 @@ NATIVE_SOLVERS = frozenset((
     'lib_tap_annealing', 'lib_spherical_annealing', 'lib_contact_annealing',
     'lib_replica_annealing', 'lib_heat_bath_annealing', 'lib_tabu_search',
     'lib_random_search', 'lib_exchange_cascade',
-    'lib_su2_chiral_isospin', 'lib_gravity_tunneling') + HAMILTONIAN_SOLVERS)
+    'lib_su2_chiral_isospin', 'lib_gravity_tunneling') + HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS)
 PHYSICS_SOLVERS = frozenset((
     'lib_altermagnet', 'lib_dynamical_geometry', 'lib_geometric',
     'lib_phonon_exchange', 'lib_supersymmetric'))
-SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin', 'lib_gravity_tunneling') + HAMILTONIAN_SOLVERS)
+SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin', 'lib_gravity_tunneling') + HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS)
 LIMITATION = ('A small paired screening and held-out sample detects observed '
               'regressions only; it does not establish unchanged quality, a '
               'statistical guarantee, or globally optimal concurrency.')
@@ -165,7 +166,7 @@ def estimate_worker_memory(n, coo_count, parameters, native, solver,
             cached_input = 8*n*n + 8
             operators = (32+2*item)*size*size
             common = (8*item+32)*batch*size + 128*batch + 64*size
-            if solver in HAMILTONIAN_SOLVERS:
+            if solver in HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS:
                 # Only this optional branch imports the numerical library. The
                 # model owns its covariance, projector, worldline or spin state.
                 from dataclasses import fields
