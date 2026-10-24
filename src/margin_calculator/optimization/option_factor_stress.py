@@ -40,6 +40,7 @@ def solveOptionFactorStress(model: OptionFactorStressModel, solver, *,
                            config: FactorStressQUBOConfig = FactorStressQUBOConfig(),
                            solverParameters: dict | None = None,
                            repairConfig: FactorStressRepairConfig = FactorStressRepairConfig(),
+                           executionPolicy=None,
                            ) -> OptionStressSearchResult:
     """Solve smooth-anchor QUBOs and fully reprice/repair deterministic seeds.
 
@@ -83,29 +84,42 @@ def solveOptionFactorStress(model: OptionFactorStressModel, solver, *,
     base = FactorStressQUBO.build(QuadraticStressObjective(0., np.zeros(dimension),
         np.zeros((dimension, dimension))), config)
     repair = FactorStressRepair(model, base, repairConfig)
-    candidates, raw_feasibility = [], []
+    candidates_by_seed, raw_feasibility = {}, []
     smooth, nonsmooth = 0, 0
-    for integers in seeds.values():
-        candidates.append(repair.repair(base.encodeIntegers(integers)))
-        anchor = integers*scale
-        try:
-            local = model.localQuadratic(anchor)
-        except NonsmoothOptionError:
-            nonsmooth += 1
-            continue
-        hessian, gradient, constant = local.hessian, local.gradient, local.value
-        # Express the anchor polynomial in the original z coordinates. A, c
-        # and the radius stay fixed; each polynomial gets its own penalty bound.
-        objective = QuadraticStressObjective(constant-gradient@anchor+.5*anchor@hessian@anchor,
-            gradient-hessian@anchor, hessian)
-        encoding = FactorStressQUBO.build(objective, config)
-        solved = solver.solve(encoding.problem, dict(solverParameters or {}))
+
+    def problems():
+        nonlocal nonsmooth
+        for index, integers in enumerate(seeds.values()):
+            candidates_by_seed[index] = [repair.repair(base.encodeIntegers(integers))]
+            anchor = integers*scale
+            try:
+                local = model.localQuadratic(anchor)
+            except NonsmoothOptionError:
+                nonsmooth += 1
+                continue
+            hessian, gradient, constant = local.hessian, local.gradient, local.value
+            # Express the anchor polynomial in the original z coordinates. A, c
+            # and the radius stay fixed; each polynomial gets its own penalty bound.
+            objective = QuadraticStressObjective(constant-gradient@anchor+.5*anchor@hessian@anchor,
+                gradient-hessian@anchor, hessian)
+            encoding = FactorStressQUBO.build(objective, config)
+            yield (index, encoding), encoding.problem
+
+    items = problems()
+    # None retains the original direct-solve lifecycle. An explicit policy may
+    # batch the same ordered anchors without changing seeds, objectives or ties.
+    results = (((context, solver.solve(problem, dict(solverParameters or {})))
+                for context, problem in items) if executionPolicy is None else
+               executionPolicy.execute(solver, items, solverParameters))
+    for (index, encoding), solved in results:
         raw_feasibility.append(bool(encoding.diagnostics(solved.sample)["encoding_feasible"]))
         # Project before any price evaluation: a raw binary sample may be far
         # outside the screened pricing domain. Rebuild all product/slack bits.
         projected = projectIntegerBall(encoding.integerCoordinates(solved.sample), m)
-        candidates.append(repair.repair(base.encodeIntegers(projected)))
+        candidates_by_seed[index].append(repair.repair(base.encodeIntegers(projected)))
         smooth += 1
+    candidates = [candidate for index in sorted(candidates_by_seed)
+                  for candidate in candidates_by_seed[index]]
     best = min(candidates, key=lambda result: result.pnl)
     point = best.integers*scale
     logs = model._logReturns(point)

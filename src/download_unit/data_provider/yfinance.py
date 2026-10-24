@@ -3,10 +3,17 @@
 from datetime import timedelta
 from typing import Any
 
-import yfinance
-
 from ..command import DataRequest, YfinanceCommand
 from .data_provider import DataProvider
+
+
+def __getattr__(name):
+    # Preserve the historical module attribute used by adapter callers/mocks,
+    # while local CSV execution remains independent of this optional dependency.
+    if name == "yfinance":
+        import yfinance
+        return yfinance
+    raise AttributeError(name)
 
 
 class YfinanceDataProvider(DataProvider):
@@ -51,6 +58,10 @@ class YfinanceDataProvider(DataProvider):
         """Download data using the command's positional parameters."""
         if not isinstance(command, YfinanceCommand):
             raise TypeError("command must be a YfinanceCommand instance")
+        try:
+            import yfinance
+        except ImportError as error:
+            raise ImportError("The yfinance provider requires the yfinance package") from error
         instruments, start_date, end_date, _period = command.parameters
         import pandas
         from yfinance.exceptions import YFPricesMissingError

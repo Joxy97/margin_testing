@@ -8,7 +8,14 @@ Use this file as the default guide for work anywhere in the repository. Keep it 
 
 ## Start Here
 
-The project is not installed as a Python package. Run Python code from the repository root with `src` on `PYTHONPATH`.
+The joint factor application is installable with `python -m pip install -e '.[reports]'`.
+Run `factor-margin calculate examples/joint_factor_margin/equities.yaml` or
+`factor-margin backtest examples/joint_factor_margin/backtest.yaml --output /tmp/factor-backtest`.
+Before changing its composition, YAML, search integration, or replay, read
+`JOINT_FACTOR_MARGIN.md`; run `tests/test_joint_factor_margin.py` with unittest.
+The integration preserves existing factor mathematics and explicitly rejects
+unsupported option replay. Legacy scripts still run from the repository root
+with `src` on `PYTHONPATH`.
 
 ```bash
 python -m venv .venv
@@ -114,6 +121,8 @@ version while CSV column names remain compatible. `plot_backtest.py` renders a n
 
 ## Repository Map
 
+- `src/joint_factor_margin/`: installable factor-stress application, typed requests/results,
+  strict YAML, numerical adapters, replay integration, and explicit artifact writers.
 - `src/margin_engine/`: top-level orchestration, strict YAML parsing, reports, and the `python -m margin_engine` CLI.
 - `src/portfolio/`: portfolio weights and cash. Weights are `Decimal` values and represent return/P&L exposure, not share counts.
 - `src/option_pricing/`: futures/equity option models, forward curves, volatility smiles, smile calibration, and volatility-shock estimation.

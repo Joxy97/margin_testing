@@ -1,0 +1,51 @@
+schemaVersion: 1
+marginDate: '2025-02-27'
+portfolio:
+  weights:
+    AAA: '2000'
+    BBB: '-500'
+    CCC: '1000'
+  cash: '0'
+engine:
+  downloadManager:
+    providers:
+      local: local_csv
+    providerSelection: local_first
+    downloadAlgorithm: single_request
+    requestParameters:
+      location: prices.csv
+  dataManager:
+    type: close_prices
+    memorySize: 16
+  estimation:
+    ew_window: 20
+    ew_lambda: 0.93
+    components: 2
+    pcaGridProvider:
+      memorySize: 8
+      backend:
+        type: numpy
+  encoding:
+    bitsPerCoordinate: 3
+    radius: 3.0
+    penaltySafety: 1.1
+    penaltyMultiplier: 1.0
+  search:
+    type: single_anchor
+    repairEnabled: true
+    repair:
+      maxSteps: 1024
+      improvementTolerance: 1.0e-12
+      neighborhood: full
+  solver:
+    type: simulated_annealing
+    constructorParameters: {}
+    solverParameters:
+      num_reads: 8
+      num_sweeps: 100
+      seed: 19
+  diagnostics:
+    references: true
+    bounds: true
+    boundCoordinates: true
+    boundsBackend: cpu

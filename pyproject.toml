@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "joint-factor-margin"
+version = "0.1.0"
+description = "Modular application for the existing joint factor-stress margin model"
+readme = "JOINT_FACTOR_MARGIN.md"
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.24", "pandas>=2", "scipy>=1.10", "PyYAML>=6", "dimod>=0.12", "dwave-samplers>=1"]
+
+[project.optional-dependencies]
+torch = ["torch>=2"]
+online = ["yfinance"]
+reports = ["matplotlib>=3.7"]
+legacy-analysis = ["scikit-learn", "matplotlib>=3.7", "yfinance"]
+
+[project.scripts]
+factor-margin = "joint_factor_margin.cli:main"
+
+[tool.setuptools]
+py-modules = ["market_to_qubo"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["joint_factor_margin*", "backtesting*", "cache*", "data_manager*", "download_manager*", "download_unit*", "margin_calculator*", "margin_engine*", "numerics*", "option_pricing*", "portfolio*", "risk_state_generator*"]
+namespaces = false

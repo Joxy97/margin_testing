@@ -114,8 +114,12 @@ class MarginApplicationConfig:
         return BacktestExperiment(self, checkpointStore=checkpointStore).run(resume).results
 
 
-class _YamlConfigParser:
-    """Translate primitive YAML values into typed application configuration."""
+class MarginConfigParser:
+    """Parse application settings and reusable market/portfolio input sections.
+
+    Public section readers share existing input conventions with other apps.
+    Paths are resolved against baseDirectory; unknown section keys fail.
+    """
 
     def __init__(self, baseDirectory: Path) -> None:
         self.baseDirectory = baseDirectory
@@ -267,7 +271,7 @@ class _YamlConfigParser:
             ),
         )
 
-    def _downloadManager(self, value: Any) -> DownloadManagerConfig:
+    def parseDownloadManager(self, value: Any) -> DownloadManagerConfig:
         config = self._mapping(value, "engine.downloadManager")
         self._only(
             config,
@@ -317,9 +321,7 @@ class _YamlConfigParser:
             )
         )
         if "location" in request_parameters:
-            request_parameters["location"] = str(
-                self._path(request_parameters["location"])
-            )
+            request_parameters["location"] = self._sourceLocation(request_parameters["location"])
         if "locations" in request_parameters:
             locations = request_parameters["locations"]
             if isinstance(locations, (str, bytes)) or not isinstance(
@@ -330,7 +332,7 @@ class _YamlConfigParser:
                     "must be a list"
                 )
             request_parameters["locations"] = tuple(
-                str(self._path(location)) for location in locations
+                self._sourceLocation(location) for location in locations
             )
         return DownloadManagerConfig(
             providers=providers,
@@ -341,6 +343,12 @@ class _YamlConfigParser:
             downloadParameters=download_parameters,
             requestParameters=request_parameters,
         )
+
+    def _sourceLocation(self, value: Any) -> str:
+        """Resolve local sources while retaining provider-supported URLs."""
+        if isinstance(value, str) and "://" in value:
+            return value
+        return str(self._path(value))
 
     def _provider(self, value: Any, path: str) -> Any:
         if isinstance(value, str):
@@ -381,7 +389,7 @@ class _YamlConfigParser:
             )
         raise ValueError(f"Unknown chunker: {chunker_type!r}")
 
-    def _dataManager(self, value: Any) -> Any:
+    def parseDataManager(self, value: Any) -> Any:
         path = "engine.dataManager"
         config = self._mapping(value, path)
         self._only(
@@ -580,7 +588,7 @@ class _YamlConfigParser:
             )
         raise ValueError(f"Unknown BQM execution policy: {policy_type!r}")
 
-    def _portfolio(self, value: Any) -> Portfolio | DerivativesPortfolio:
+    def parsePortfolio(self, value: Any) -> Portfolio | DerivativesPortfolio:
         path = "portfolio"
         config = self._mapping(value, path)
         self._only(
@@ -626,7 +634,7 @@ class _YamlConfigParser:
             cash=Decimal(str(config.get("cash", 0))),
         )
 
-    def _derivativePosition(self, value: Any, path: str) -> DerivativePosition:
+    def parseDerivativePosition(self, value: Any, path: str) -> DerivativePosition:
         config = self._mapping(value, path)
         instrument_type = str(self._required(config, "instrumentType", path))
         common_keys = {
@@ -840,3 +848,11 @@ class _YamlConfigParser:
             return configClass(**values)
         except TypeError as error:
             raise ValueError(f"Invalid configuration at {path}: {error}") from error
+
+
+# Preserve the original parser and helper names for existing callers.
+MarginConfigParser._downloadManager = MarginConfigParser.parseDownloadManager
+MarginConfigParser._dataManager = MarginConfigParser.parseDataManager
+MarginConfigParser._portfolio = MarginConfigParser.parsePortfolio
+MarginConfigParser._derivativePosition = MarginConfigParser.parseDerivativePosition
+_YamlConfigParser = MarginConfigParser
