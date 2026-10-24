@@ -250,6 +250,12 @@ class Kondo(_OpenBase):
 @dataclass(frozen=True)
 class MooreRead(_OpenBase):
     """Eight-mask triple search, strong wedges mixed with seeded random triples."""
+    random_triple_interval: int = 5
+
+    def __post_init__(self):
+        super().__post_init__()
+        _integer('random_triple_interval', self.random_triple_interval, 1)
+
     def _search(self, run, record):
         if not self.max_steps:
             return 0
@@ -262,7 +268,7 @@ class MooreRead(_OpenBase):
         for step in range(1, self.max_steps + 1):
             poll()
             anchor = (step - 1) % target.n
-            indices = (blocks[order[anchor]] if step % 5 else
+            indices = (blocks[order[anchor]] if step % self.random_triple_interval else
                        [order[(anchor + j) % target.n] for j in range(min(3, target.n))])
             matrix = _submatrix(target, indices)
             proposed = _enumerate_block(state[:, indices], field[:, indices], matrix, 8)
@@ -377,6 +383,7 @@ class NoisyExcitationTransport(_OpenBase):
     activity_temperature: float = .2
     rate_cap: float = 2.
     temperature: float = .25
+    cooling_fraction: float = .9
 
     def __post_init__(self):
         super().__post_init__()
@@ -386,6 +393,9 @@ class NoisyExcitationTransport(_OpenBase):
         for name in ('dephasing', 'reinjection', 'activity_temperature', 'rate_cap'):
             _positive(name, getattr(self, name))
         _positive('temperature', self.temperature, True)
+        _positive('cooling_fraction', self.cooling_fraction)
+        if self.cooling_fraction > 1:
+            raise ValueError('cooling_fraction must not exceed one')
 
     def _population_workspace(self, n, batch, width):
         return super()._population_workspace(n, batch, width) + 128 * n * self.activity_degree * batch
@@ -422,7 +432,7 @@ class NoisyExcitationTransport(_OpenBase):
                 dephasing=self.dephasing, reinjection=self.reinjection,
                 activity_temperature=self.activity_temperature, rate_cap=self.rate_cap)
             chosen = torch.multinomial(activity, 1, generator=run.generator).squeeze(1)
-            temperature = self.temperature * max(0., 1 - step / (.9 * self.max_steps)) ** 2
+            temperature = self.temperature * max(0., 1 - step / (self.cooling_fraction * self.max_steps)) ** 2
             accepted = _metropolis(gains[rows, chosen] / scale, temperature, run, strict=True)
             # A batched single-flip vector supports distinct sites per replica.
             # Full sparse field multiplication avoids dense CSR column gathering.
@@ -445,11 +455,19 @@ class AKLT(_OpenBase):
     """Ternary heat bath with positive endpoint pinning and sequential commits."""
     temperature: float = .5
     pinning: float = .5
+    initial_vacancy_probability: float = .25
+    cooling_fraction: float = .9
 
     def __post_init__(self):
         super().__post_init__()
         _positive('temperature', self.temperature, True)
         _positive('pinning', self.pinning, True)
+        _positive('initial_vacancy_probability', self.initial_vacancy_probability, True)
+        if self.initial_vacancy_probability > 1:
+            raise ValueError('initial_vacancy_probability must not exceed one')
+        _positive('cooling_fraction', self.cooling_fraction)
+        if self.cooling_fraction > 1:
+            raise ValueError('cooling_fraction must not exceed one')
 
     def _search(self, run, record):
         if not self.max_steps:
@@ -458,7 +476,7 @@ class AKLT(_OpenBase):
         if target.constant:
             return 0
         scale = _scale(target)
-        state.masked_fill_(_random(state.shape, run) < .25, 0.)
+        state.masked_fill_(_random(state.shape, run) < self.initial_vacancy_probability, 0.)
         field = target.field(state)
         labels = state.new_tensor([-1., 0., 1.])
         order = torch.randperm(target.n, generator=run.generator, device=state.device).cpu().tolist()
@@ -466,7 +484,7 @@ class AKLT(_OpenBase):
             poll()
             fraction = step / self.max_steps
             pin = self.pinning * (3 * fraction ** 2 - 2 * fraction ** 3)
-            temperature = self.temperature * max(0., 1 - fraction / .9) ** 2
+            temperature = self.temperature * max(0., 1 - fraction / self.cooling_fraction) ** 2
             for i in order:
                 poll()
                 energies = field[:, i, None] / scale * labels + pin * (1 - labels.square())

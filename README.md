@@ -1,6 +1,6 @@
 # Solver library and continuous QUBO benchmarks
 
-This branch contains the canonical 73-method solver library and the runtime
+This branch contains the canonical 159-method solver library and the runtime
 benchmark for the 25 GPU-capable methods compatible with all 37 prepared QUBOs.
 This `solvers_testing` branch adds GPU-friendly SU(2) chiral isospin and gravity
 tunneling solvers to the original 28 methods. It retains the compact 20-second
@@ -59,6 +59,19 @@ through 10,000 variables. This is correctness/scaling evidence, not a full
 100-seed quality campaign. Reproduce bounded timing/memory probes with
 `tools/profile_new_physics_solvers.py`; generated logs, reports, recovered input
 payloads, environments and credentials are not included in this release.
+
+## Fine-tuning settings
+
+[fine_tuning/](fine_tuning/README.md) contains the selected dense 200-variable
+`gka5e` settings, with one traceable JSON file per solver, a combined settings
+file, tested source identities, environment details, and an explicit preset
+replay command. It records 130 tuned solvers and 14 excluded solvers whose
+settings were retained unchanged. Library defaults and historical presets
+remain unchanged; use the replay command to apply the selected settings.
+
+The final tuning comparisons used 24 seeds and informed preset selection.
+They are exploratory tuning evidence, not an independent 100-seed benchmark.
+See the linked instructions for the exact input, seed sets, and timing protocol.
 
 ## Clone and install
 

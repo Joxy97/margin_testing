@@ -6,14 +6,15 @@ from pathlib import Path
 from qubo_solvers import (
     LIBRARY_SOLVERS, SOLVERS, create_bqm_solver, solver_capabilities,
     GPU_SOLVERS as TORCH_SOLVERS, CPU_SOLVERS as CLASSICAL_SOLVERS,
-    CATEGORICAL_SOLVERS,
+    CATEGORICAL_SOLVERS, COMPENDIUM_III_STRUCTURED_SOLVERS,
 )
 from .catalog import ROOT
 from .model import binaryVector
 from .storage import sha256
 
 TREE_SOLVERS = ('lib_tree_decomposition_solver', 'lib_tree_decomposition_sampler')
-GPU_SOLVERS = tuple(name for name in TORCH_SOLVERS if name not in CATEGORICAL_SOLVERS + TREE_SOLVERS)
+GPU_SOLVERS = tuple(name for name in TORCH_SOLVERS if name not in (
+    CATEGORICAL_SOLVERS + TREE_SOLVERS + COMPENDIUM_III_STRUCTURED_SOLVERS))
 DETERMINISTIC_SOLVERS = ('lib_planar_graph', 'lib_tree_decomposition_solver')
 
 
@@ -30,6 +31,8 @@ def solverCapabilities():
 
 
 def structuralCheck(problem, solverId):
+    if solverId in COMPENDIUM_III_STRUCTURED_SOLVERS:
+        raise UnsupportedProblem('Compendium III decoders require explicit check/group metadata; the unstructured benchmark corpus does not supply it. Use the library interface with a matching encoded objective.')
     if solverId in CATEGORICAL_SOLVERS:
         raise UnsupportedProblem('Categorical solvers require one-hot groups covering every variable; the 37 original QUBOs have none. Adding groups would change the benchmark.')
     if solverId == 'lib_planar_graph':

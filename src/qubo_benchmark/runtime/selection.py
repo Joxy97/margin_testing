@@ -212,6 +212,7 @@ def inventory(settings,device='cpu'):
     from qubo_solvers import SOLVERS,solver_capabilities,create_bqm_solver
     from qubo_solvers._hamiltonian_catalog import HAMILTONIAN_SOLVERS
     from qubo_solvers._open_system_catalog import OPEN_SYSTEM_SOLVERS
+    from qubo_solvers._compendium_iii_catalog import COMPENDIUM_III_SOLVERS
     from ..adapters import GPU_SOLVERS
     settings=resolve_new_solver_defaults(resolve_legacy_exchange_defaults(settings))
     rows=[]
@@ -225,7 +226,7 @@ def inventory(settings,device='cpu'):
                  timing_50ms='conditional: no in-budget score if setup/search/capture exceeds cutoff' if eligible else 'out of scope',
                  license_readiness='local open-source backend; no credentials')
         if eligible:
-            if name in HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS and name not in settings:
+            if name in HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS + COMPENDIUM_III_SOLVERS and name not in settings:
                 # New research methods require explicit settings. Preserve the
                 # historical frozen campaign and its success/failure status.
                 row['reason']='Research candidate requires an explicit solver configuration'
@@ -385,7 +386,8 @@ def worker_capacity(selected,settings,device,policy):
             solver=create_bqm_solver(name,{'device':'cpu'})
             from qubo_solvers._hamiltonian_catalog import HAMILTONIAN_SOLVERS
             from qubo_solvers._open_system_catalog import OPEN_SYSTEM_SOLVERS
-            if name in ('lib_su2_chiral_isospin','lib_gravity_tunneling') + HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS:
+            from qubo_solvers._compendium_iii_catalog import COMPENDIUM_III_SOLVERS
+            if name in ('lib_su2_chiral_isospin','lib_gravity_tunneling') + HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS + COMPENDIUM_III_SOLVERS:
                 from .continuous_calibration import estimate_worker_memory
                 # WarmWorker uses dense FP64 native input for these methods;
                 # their sparse compact adapter estimate is a different path.

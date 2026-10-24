@@ -5,3 +5,6 @@ benchmark_data/** -text -diff
 # Preserve the deployed code/configuration identities across Git platforms.
 *.py -text
 configs/*.json -text
+# Preserve checksum-bound JSON bytes, including original CRLF terminators.
+fine_tuning/*.json -text whitespace=cr-at-eol
+fine_tuning/solvers/*.json -text whitespace=cr-at-eol

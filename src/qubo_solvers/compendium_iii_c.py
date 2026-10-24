@@ -150,6 +150,7 @@ class _C3Base(PopulationSolver):
     candidate_interval: int = 16
     pinning: float = .25
     initial_scale: float = .12
+    terminal_fraction: float = .15
     polish_steps: int = 8
     normalize: bool = True
     dynamics_dtype: object = None
@@ -163,6 +164,9 @@ class _C3Base(PopulationSolver):
         positive('initial_scale', self.initial_scale)
         if self.initial_scale >= 1:
             raise ValueError('initial_scale must be less than one')
+        if (isinstance(self.terminal_fraction, bool) or not math.isfinite(self.terminal_fraction)
+                or not 0 <= self.terminal_fraction < 1):
+            raise ValueError('terminal_fraction must be in [0, 1)')
         if not isinstance(self.normalize, bool):
             raise ValueError('normalize must be boolean')
         if not math.isfinite(self.sparse_threshold) or not 0 <= self.sparse_threshold <= 1:
@@ -176,7 +180,7 @@ class _C3Base(PopulationSolver):
 
     def _controls(self, step):
         fraction = observation.schedule_fraction(step / max(1, self.max_steps))
-        fraction = min(1., max(0., fraction / .85))
+        fraction = min(1., max(0., fraction / (1 - self.terminal_fraction)))
         ramp = fraction * fraction * (3 - 2 * fraction)
         return 1 - ramp, self.pinning * ramp
 

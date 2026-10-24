@@ -160,6 +160,16 @@ class _Base(PopulationSolver):
 
 @dataclass(frozen=True)
 class _Continuous(_Base):
+    initial_scale: float = .05
+    initial_noise: float = .01
+
+    def __post_init__(self):
+        super().__post_init__()
+        _positive('initial_scale', self.initial_scale)
+        _positive('initial_noise', self.initial_noise, zero=True)
+        if self.initial_scale >= 1:
+            raise ValueError('initial_scale must be less than one')
+
     def _prepare(self, run, z):
         return z, {}
 
@@ -172,8 +182,12 @@ class _Continuous(_Base):
         readout = _Readout(run.objective)
         if readout.constant:
             return 0
-        z = .05 * (run.initialbits.to(run.x.dtype) * 2 - 1)
-        z = z + .01 * run.normal(z.shape)
+        z = self.initial_scale * (run.initialbits.to(run.x.dtype) * 2 - 1)
+        z = z + self.initial_noise * run.normal(z.shape)
+        # User-selected wide initial clouds must remain inside the spin box:
+        # tanh-coordinate carriers use atanh and cannot start at its poles.
+        margin = torch.finfo(z.dtype).eps
+        z = z.clamp(-1 + margin, 1 - margin)
         state, cache = self._prepare(run, z)
         for step in range(1, self.max_steps + 1):
             observation.poll()

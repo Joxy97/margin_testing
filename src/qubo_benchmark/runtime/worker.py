@@ -8,8 +8,9 @@ from .common import utc
 from qubo_solvers.observation import SolveInterrupted, observing
 from qubo_solvers._hamiltonian_catalog import HAMILTONIAN_SOLVERS
 from qubo_solvers._open_system_catalog import OPEN_SYSTEM_SOLVERS
+from qubo_solvers._compendium_iii_catalog import COMPENDIUM_III_SOLVERS
 
-SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin','lib_gravity_tunneling') + HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS)
+SOURCE_SCORED_SOLVERS = frozenset(('lib_su2_chiral_isospin','lib_gravity_tunneling') + HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS + COMPENDIUM_III_SOLVERS)
 
 
 def native_input_dtype(job):

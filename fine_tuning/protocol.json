@@ -1,0 +1,176 @@
+{
+  "budget_seconds": 20.0,
+  "checkpoints_seconds": [
+    0.05,
+    0.1,
+    0.2,
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0
+  ],
+  "deadline": {
+    "description": "Completed source scoring, producing-stream synchronization and optimum scalar transfer precede timestamp eligibility. At elapsed >=20 seconds, the observer rejects the capture before changing the certified incumbent. Return can overshoot during noninterruptible operations and cleanup.",
+    "hard_physical_wall_time_cap": false,
+    "kind": "strict solution-certification deadline with cooperative return",
+    "late_candidate_credit": false,
+    "natural_return": "Already certified incumbent is propagated to remaining checkpoints without additional search or sleep.",
+    "optimum_stop": "A reference hit is checked only by independent observer; it stops that trial and is propagated forward. No reference enters solver dynamics."
+  },
+  "execution": {
+    "cpu_threads": 1,
+    "independent_source_scoring": true,
+    "natural_return": "forward-fill without sleep; no additional search or restart",
+    "no_reference_in_solver": true,
+    "tf32": false,
+    "timing": "fresh RNG,state,preparation,search,readout and completed certification included",
+    "workers_per_gpu": 1
+  },
+  "historical_100_seed_campaign": false,
+  "holdout_seeds_per_pass": 24,
+  "limitations": [
+    "One dense n200 input; no unseen-QUBO transfer claim.",
+    "The24-seed confirmation affects promotion; reported selected-setting observations are selection-affected, not an untouched external test.",
+    "Do not pool the two passes or substitute historical100-seed statistics.",
+    "Finite-step changes can change periodic readout counts; coupled-population changes can change physical dynamics.",
+    "Exchange-cascade graph mode requires memory_limit_bytes=None; capture memory estimates are heuristic, not guaranteed bounds."
+  ],
+  "performance_profile_seeds_excluded": [
+    310001,
+    410001
+  ],
+  "precision": {
+    "dynamics": "Per-solver dtype and dynamics_dtype must be preserved.",
+    "fresh_state": "Every seed resets RNG and creates fresh mutable algorithm state; only input/framework resources are reused.",
+    "source_scoring": "Original coefficients; exact FP32 accumulation only where the integer-sum bound proves safety, otherwise FP64.",
+    "tf32": false
+  },
+  "problem": {
+    "actual_density_percent": 49.53266331658291,
+    "category": "dense",
+    "fingerprint_method": "continuous-numeric-coo-v1",
+    "identity_policy": "Canonical COO fingerprint must match; differing NPZ container bytes are permitted and their current byte hash must be recorded.",
+    "instance_id": "gka5e",
+    "n_variables": 200,
+    "npz_sha256": "3a2d6521caefa62a867a7b96dae169388b14088b1ba309dbcdef989b9460d375",
+    "numeric_coo_sha256": "72e9a381b7ef3105cb55ead694d7f4a95674cf09aaf1ee5070b5ced5477dffcb",
+    "objective": "minimize offset + x.T @ symmetric_Q @ x, x in {0,1}^200; upper-triangle off-diagonal entries contribute twice.",
+    "raw_source_bytes": 103082,
+    "raw_source_sha256": "46a7e2fe7e18ed749cc7ba9ae070f7f89c4fdaded2f40694445955b3e8448c26",
+    "raw_source_url": "https://biqmac.aau.at/library/biq/gka/gka5e.sparse",
+    "reference": -35154.0,
+    "reference_provenance": "Published Biq Mac optimum; local source normalization preserves minimize x.T Q x.",
+    "reference_type": "OPTIMUM",
+    "repository_npz": "benchmark_data/continuous12/normalized/gka5e.npz"
+  },
+  "promotion": "Preselected challenger,24freshpairedseeds; exact,1%,mean gap cannot worsen and >=1 must improve",
+  "schedule_by_solver_file": "selected_settings.json",
+  "schema_version": 1,
+  "second_pass_baseline": "Independently validated first-pass selected settings, including unpromoted retained baselines.",
+  "seed_stages": {
+    "first_pass": {
+      "holdout": [
+        230001,
+        230002,
+        230003,
+        230004,
+        230005,
+        230006,
+        230007,
+        230008,
+        230009,
+        230010,
+        230011,
+        230012,
+        230013,
+        230014,
+        230015,
+        230016,
+        230017,
+        230018,
+        230019,
+        230020,
+        230021,
+        230022,
+        230023,
+        230024
+      ],
+      "pilot": [
+        200001
+      ],
+      "screen": [
+        210001,
+        210002,
+        210003
+      ],
+      "validation": [
+        220001,
+        220002,
+        220003,
+        220004,
+        220005,
+        220006,
+        220007,
+        220008,
+        220009,
+        220010,
+        220011,
+        220012
+      ]
+    },
+    "second_pass": {
+      "holdout": [
+        330001,
+        330002,
+        330003,
+        330004,
+        330005,
+        330006,
+        330007,
+        330008,
+        330009,
+        330010,
+        330011,
+        330012,
+        330013,
+        330014,
+        330015,
+        330016,
+        330017,
+        330018,
+        330019,
+        330020,
+        330021,
+        330022,
+        330023,
+        330024
+      ],
+      "pilot": [
+        300001
+      ],
+      "screen": [
+        310101,
+        310102,
+        310103
+      ],
+      "validation": [
+        320001,
+        320002,
+        320003,
+        320004,
+        320005,
+        320006,
+        320007,
+        320008,
+        320009,
+        320010,
+        320011,
+        320012
+      ]
+    }
+  },
+  "selection": "failed trials first; then exact hits descending, within1% descending, mean gap ascending",
+  "selection_affected_estimates": true
+}

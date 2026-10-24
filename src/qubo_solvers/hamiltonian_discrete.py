@@ -14,6 +14,7 @@ import math
 import torch
 
 from ._population import PopulationSolver, _mm, _dtype
+from ._dynamics import positive
 from .observation import poll
 from .solvers import _integer
 
@@ -138,6 +139,12 @@ def _decode(values, run):
                        values > .5).to(torch.float64)
 
 
+def _probability(name, value):
+    positive(name, value, zero=True)
+    if value > 1:
+        raise ValueError(f'{name} must not exceed one')
+
+
 @dataclass(frozen=True)
 class _DiscreteSolver(PopulationSolver):
     max_steps: int = 512
@@ -182,6 +189,23 @@ class _DiscreteSolver(PopulationSolver):
 @dataclass(frozen=True)
 class TJVacancy(_DiscreteSolver):
     """Ternary Metropolis labels with symmetric vacancy exchanges."""
+    initial_vacancy_probability: float = .5
+    single_move_probability: float = .5
+    chemical_start: float = -1.
+    chemical_end: float = 1.
+    start_temperature: float = 2.
+    end_temperature: float = .01
+
+    def __post_init__(self):
+        super().__post_init__()
+        for name in ('initial_vacancy_probability', 'single_move_probability'):
+            _probability(name, getattr(self, name))
+        for name in ('chemical_start', 'chemical_end'):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not math.isfinite(value):
+                raise ValueError(f'{name} must be finite')
+        for name in ('start_temperature', 'end_temperature'):
+            positive(name, getattr(self, name))
 
     def _search(self, run, record):
         if self.max_steps == 0:
@@ -190,14 +214,15 @@ class TJVacancy(_DiscreteSolver):
         if target.constant:
             return 0
         state = (run.x.double() if run.spin else run.x.double() * 2 - 1)
-        state.masked_fill_(_random(state.shape, run) < .5, 0.)
+        state.masked_fill_(_random(state.shape, run) < self.initial_vacancy_probability, 0.)
         field = target.field(state)
         order, _ = _ring(target.n, run)
         edges = list(zip(order, order[1:] + order[:1])) if target.n > 2 else ([(0, 1)] if target.n == 2 else [])
         for step in range(1, self.max_steps + 1):
             poll()
             t = step / self.max_steps
-            chemical, temperature = -1 + 2 * t, 2 * (.01 / 2) ** t
+            chemical = self.chemical_start + (self.chemical_end - self.chemical_start) * t
+            temperature = self.start_temperature * (self.end_temperature / self.start_temperature) ** t
             sites = torch.randint(target.n, (target.n,), generator=run.generator,
                                   device=run.q.device).cpu().tolist()
             for i in sites:
@@ -208,7 +233,7 @@ class TJVacancy(_DiscreteSolver):
                 proposed = choices.double()
                 delta = proposed - old
                 cost = delta * field[:, i] + chemical * (old.square() - proposed.square())
-                single = _random(old.shape, run) < (.5 if edges else 1.)
+                single = _random(old.shape, run) < (self.single_move_probability if edges else 1.)
                 accepted = _metropolis(cost, temperature, run) & single
                 change = delta * accepted
                 state[:, i].add_(change)
@@ -247,12 +272,18 @@ class PottsHeatBath(_DiscreteSolver):
     """Rank-one QUBO categorical heat bath with an implicit Potts ring."""
     labels: int = 4
     driver_strength: float = .25
+    start_temperature: float = .5
+    end_temperature: float = .01
+    final_pinning: float = 1.
 
     def __post_init__(self):
         super().__post_init__()
         _integer('labels', self.labels, 2)
         if not math.isfinite(self.driver_strength) or self.driver_strength < 0:
             raise ValueError('driver_strength must be finite and nonnegative')
+        for name in ('start_temperature', 'end_temperature'):
+            positive(name, getattr(self, name))
+        positive('final_pinning', self.final_pinning, zero=True)
 
     def _population_workspace(self, n, batch, width):
         return super()._population_workspace(n, batch, width) + 96 * batch * self.labels
@@ -272,7 +303,8 @@ class PottsHeatBath(_DiscreteSolver):
         for step in range(1, self.max_steps + 1):
             poll()
             t = step / self.max_steps
-            tau, kappa, temperature = self.driver_strength * (1 - t) ** 2, t * t, .5 * (.01 / .5) ** t
+            tau, kappa = self.driver_strength * (1 - t) ** 2, self.final_pinning * t * t
+            temperature = self.start_temperature * (self.end_temperature / self.start_temperature) ** t
             sites = torch.randperm(n, generator=run.generator, device=run.q.device).cpu().tolist()
             for i in sites:
                 poll()
@@ -303,6 +335,9 @@ class ZNChiral(_DiscreteSolver):
     chirality: float = math.pi / 6
     driver_strength: float = .25
     antipodal_probability: float = .2
+    start_temperature: float = .5
+    end_temperature: float = .01
+    final_pinning: float = 1.
 
     def __post_init__(self):
         super().__post_init__()
@@ -314,6 +349,9 @@ class ZNChiral(_DiscreteSolver):
                 raise ValueError(f'{name} must be finite')
         if self.driver_strength < 0 or not 0 <= self.antipodal_probability <= 1:
             raise ValueError('driver_strength must be nonnegative and antipodal_probability in [0,1]')
+        for name in ('start_temperature', 'end_temperature'):
+            positive(name, getattr(self, name))
+        positive('final_pinning', self.final_pinning, zero=True)
 
     def _population_workspace(self, n, batch, width):
         return super()._population_workspace(n, batch, width) + 32 * self.labels
@@ -338,7 +376,8 @@ class ZNChiral(_DiscreteSolver):
         for step in range(1, self.max_steps + 1):
             poll()
             t = step / self.max_steps
-            tau, kappa, temperature = self.driver_strength * (1 - t) ** 2, t * t, .5 * (.01 / .5) ** t
+            tau, kappa = self.driver_strength * (1 - t) ** 2, self.final_pinning * t * t
+            temperature = self.start_temperature * (self.end_temperature / self.start_temperature) ** t
             sites = torch.randint(n, (n,), generator=run.generator, device=run.q.device).cpu().tolist()
             for i in sites:
                 poll()
@@ -486,6 +525,11 @@ class XYCoordinate(_DiscreteSolver):
     minimization_probability: float = .75
     exchange_interval: int = 10
     compile_coordinates: bool = False
+    cold_start_temperature: float = .1
+    cold_end_temperature: float = .001
+    hot_start_temperature: float = 1.
+    hot_end_temperature: float = .05
+    final_pinning: float = 2.
 
     def __post_init__(self):
         super().__post_init__()
@@ -496,6 +540,13 @@ class XYCoordinate(_DiscreteSolver):
             raise ValueError('driver_strength must be finite and nonnegative')
         if not math.isfinite(self.minimization_probability) or not 0 <= self.minimization_probability <= 1:
             raise ValueError('minimization_probability must be in [0,1]')
+        for name in ('cold_start_temperature', 'cold_end_temperature',
+                     'hot_start_temperature', 'hot_end_temperature'):
+            positive(name, getattr(self, name))
+        if (self.cold_start_temperature > self.hot_start_temperature or
+                self.cold_end_temperature > self.hot_end_temperature):
+            raise ValueError('cold temperature endpoints must not exceed hot endpoints')
+        positive('final_pinning', self.final_pinning, zero=True)
 
     def _search(self, run, record):
         if self.max_steps == 0:
@@ -515,9 +566,10 @@ class XYCoordinate(_DiscreteSolver):
         for step in range(1, self.max_steps + 1):
             poll()
             t = step / self.max_steps
-            tau, kappa = self.driver_strength * (1 - t) ** 2, 2 * t * t
+            tau, kappa = self.driver_strength * (1 - t) ** 2, self.final_pinning * t * t
             kappa_control = values.new_tensor(kappa) if compiled_coordinates is not None else None
-            tmin, tmax = .1 * (.001 / .1) ** t, .05 ** t
+            tmin = self.cold_start_temperature * (self.cold_end_temperature / self.cold_start_temperature) ** t
+            tmax = self.hot_start_temperature * (self.hot_end_temperature / self.hot_start_temperature) ** t
             temperatures = tmin * (tmax / tmin) ** ranks
             for i in torch.randperm(n, generator=run.generator, device=run.q.device).cpu().tolist():
                 poll()
@@ -577,6 +629,8 @@ class QuantumDimerWorldline(_DiscreteSolver):
     inverse_temperature: float = 10.
     initial_transverse_field: float = 2.
     final_transverse_field: float = .01
+    single_slice_probability: float = .5
+    full_worldline_probability: float = .25
 
     def __post_init__(self):
         super().__post_init__()
@@ -585,6 +639,10 @@ class QuantumDimerWorldline(_DiscreteSolver):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f'{name} must be finite and positive')
+        for name in ('single_slice_probability', 'full_worldline_probability'):
+            _probability(name, getattr(self, name))
+        if self.single_slice_probability + self.full_worldline_probability > 1:
+            raise ValueError('single_slice_probability + full_worldline_probability must not exceed one')
 
     def _population_workspace(self, n, batch, width):
         return super()._population_workspace(n, batch, width) + 96 * batch * n * self.slices
@@ -610,7 +668,8 @@ class QuantumDimerWorldline(_DiscreteSolver):
             visits = 0
             draws = _random((n * p,), run)
             lengths = torch.randint(2, p, (n * p,), generator=run.generator, device=run.q.device)
-            lengths = torch.where(draws < .5, 1, torch.where(draws < .75, p, lengths))
+            lengths = torch.where(draws < self.single_slice_probability, 1,
+                torch.where(draws < self.single_slice_probability + self.full_worldline_probability, p, lengths))
             bits = torch.randint(n, (n * p,), generator=run.generator, device=run.q.device)
             plan = torch.stack((lengths, bits), -1).cpu().tolist()
             proposal_index = 0
