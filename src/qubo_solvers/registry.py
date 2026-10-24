@@ -1,6 +1,6 @@
 """Canonical solver selection: one library-owned implementation per retained method.
 
-All 73 canonical entries are owned by this library. The 62 native tensor solvers
+All 159 canonical entries are owned by this library. The 148 native tensor solvers
 provide full trajectories; the specialized execution backends provide selected
 results through a best-only tensor adapter and their compact QUBO interface.
 Historical names are migration hints, never separately registered algorithms.
@@ -20,6 +20,8 @@ from .greedy_local_search import GreedyLocalSearch
 from .gravity_tunneling import GravityTunneling
 from .hamiltonians import HAMILTONIAN_CLASSES, HAMILTONIAN_SOLVERS
 from .open_systems import OPEN_SYSTEM_CLASSES, OPEN_SYSTEM_SOLVERS
+from .compendium_iii import (COMPENDIUM_III_CLASSES, COMPENDIUM_III_SOLVERS,
+                             COMPENDIUM_III_STRUCTURED_SOLVERS)
 from .heat_bath_annealing import HeatBathAnnealing
 from .mean_field_annealing import MeanFieldAnnealing
 from .problems import Ising, QUBO
@@ -61,6 +63,7 @@ _LIBRARY_CLASSES = {
 }
 _LIBRARY_CLASSES.update(HAMILTONIAN_CLASSES)
 _LIBRARY_CLASSES.update(OPEN_SYSTEM_CLASSES)
+_LIBRARY_CLASSES.update(COMPENDIUM_III_CLASSES)
 LIBRARY_SOLVERS = NATIVE_SOLVERS = tuple(_LIBRARY_CLASSES)
 BACKEND_SOLVERS = (
     'lib_simulated_bifurcation', 'lib_altermagnet', 'lib_dynamical_geometry',
@@ -108,7 +111,8 @@ def solver_capabilities(name):
                 resident_preparation_mode=resident_mode,
                 cpu_topology_preparation=name in TREE_SOLVERS,
                 precisions=['float64'] if name in CPU_SOLVERS else ['float32', 'float64'],
-                restriction=('Requires complete one-hot groups' if name in CATEGORICAL_SOLVERS else
+                restriction=('Requires explicit decoder check/group metadata; not an unstructured QUBO solver' if name in COMPENDIUM_III_STRUCTURED_SOLVERS else
+                             'Requires complete one-hot groups' if name in CATEGORICAL_SOLVERS else
                              'Requires planar zero-field Ising structure' if name=='lib_planar_graph' else
                              'Requires elimination width <= 25 and tables within the configured memory budget' if name in TREE_SOLVERS else None))
 
@@ -160,7 +164,7 @@ def create_solver(name: str, **algorithm_parameters):
     grouped constraints, or resident application batches use create_bqm_solver.
     """
     if name in NATIVE_SOLVERS:
-        if name in HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS:
+        if name in HAMILTONIAN_SOLVERS + OPEN_SYSTEM_SOLVERS + COMPENDIUM_III_SOLVERS:
             return library_solver_class(name)(**algorithm_parameters)
         steps = 512 if name in ('lib_su2_chiral_isospin', 'lib_gravity_tunneling') else 1000
         parameters = default_algorithm_parameters(name, steps=steps)

@@ -29,6 +29,8 @@ from .hamiltonians import (
     BogoliubovDeGennes, SpinSqueezing,
 )
 from .open_systems import OPEN_SYSTEM_CLASSES, OPEN_SYSTEM_SOLVERS
+from . import compendium_iii as _compendium_iii
+from .compendium_iii import *
 from .registry import (
     LIBRARY_SOLVERS, NATIVE_SOLVERS, BACKEND_SOLVERS, SOLVERS, BackendSolver,
     CPU_SOLVERS, GPU_SOLVERS, CATEGORICAL_SOLVERS, REMOVED_SOLVERS, solver_capabilities, register_bqm_solver,
@@ -56,4 +58,6 @@ __all__ = [
 ]
 
 from .open_systems import (DopplerCooling, CavityAtomCooling, NoisyLaserAtom, KickedTop, CavityOptomechanics, OptomechanicalCooling, NoisyExcitationTransport, SteadyStateSqueezing, TomonagaLuttinger, KaneMele, Kondo, MooreRead, Emery, BCS, AKLT, ANNNI, LiebMattis, QuadratureSqueezing, OneAxisTwisting, TwoAxisCounterTwisting)
+__all__ += _compendium_iii.__all__
+
 __all__ += ['DopplerCooling', 'CavityAtomCooling', 'NoisyLaserAtom', 'KickedTop', 'CavityOptomechanics', 'OptomechanicalCooling', 'NoisyExcitationTransport', 'SteadyStateSqueezing', 'TomonagaLuttinger', 'KaneMele', 'Kondo', 'MooreRead', 'Emery', 'BCS', 'AKLT', 'ANNNI', 'LiebMattis', 'QuadratureSqueezing', 'OneAxisTwisting', 'TwoAxisCounterTwisting']
