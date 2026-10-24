@@ -1,0 +1,171 @@
+COMPENDIUM III: FOUR-INSTANCE N200 DENSE CAMPAIGN
+
+Setup and validation do not launch the full campaign. Start production yourself
+using the commands below after deployment has been reported ready. Run one
+campaign controller on each instance. Each controller uses all four visible
+GPUs, with one persistent spawned worker per GPU and fresh solver state per seed.
+
+INSTANCE ASSIGNMENTS
+
+Partition  SSH endpoint             GPUs                  Solvers  Trials
+1          171.235.174.109:10592     4 x RTX 5060 Ti        20       2,000
+2          171.235.174.109:12674     4 x RTX 5060 Ti        20       2,000
+3          137.175.22.196:17582     4 x RTX 4070 SUPER     19       1,900
+4          64.64.224.51:50397       4 x RTX 4060 Ti        19       1,900
+
+The prepared partitions are disjoint and together cover all 78 compatible
+Compendium III solvers: 7,800 production trials. Eight of the 86 entries require
+structured decoder metadata and an appropriately encoded QUBO. They are recorded
+as unsupported, with reasons, and receive no fabricated or failed seed trials.
+The full assignment is frozen in partitions.json on each host and locally.
+
+CONNECT FROM WINDOWS POWERSHELL
+
+ssh -i "C:\Users\Lazar\.ssh\vast_ssh" -p 10592 root@171.235.174.109
+ssh -i "C:\Users\Lazar\.ssh\vast_ssh" -p 12674 root@171.235.174.109
+ssh -i "C:\Users\Lazar\.ssh\vast_ssh" -p 17582 root@137.175.22.196
+ssh -i "C:\Users\Lazar\.ssh\vast_ssh" -p 50397 root@64.64.224.51
+
+Use the matching connection for each partition. No port forwarding is needed
+for this command-line campaign.
+
+START ON EACH INSTANCE, SURVIVING SSH DISCONNECTION
+
+The same commands apply on all four hosts; the host's prepared identity selects
+its own solver partition. Create one tmux session on each host:
+
+tmux new-session -s c3-dense
+
+Inside that tmux session, run:
+
+cd /workspace/margin_testing_c3_campaign
+source .venv/bin/activate
+set -o pipefail
+python -u run_compendium_iii_dense.py run 2>&1 | tee /workspace/compendium_iii_dense_campaign_20261024/run.log
+
+Detach without stopping the run: press Ctrl+b, release, then press d.
+It is then safe to disconnect SSH. Reconnect and inspect the session with:
+
+tmux attach-session -t c3-dense
+
+If the session already exists, attach to it rather than starting another
+controller. Do not run a second production command while the first is active.
+In a foreground shell the minimal launch command is the same on every host:
+
+python -u run_compendium_iii_dense.py run
+
+READ-ONLY PROGRESS AND ETA
+
+Open another SSH connection to the same host:
+
+cd /workspace/margin_testing_c3_campaign
+source .venv/bin/activate
+python run_compendium_iii_dense.py status --watch
+
+For one snapshot, omit --watch. Press Ctrl+C to stop only the monitor. The
+monitor reports committed overall and per-solver percentages, failed terminal
+attempts, and estimated remaining time. The production log prints progress and
+an ETA after every durably committed seed. An initial budget estimate is
+replaced by an observed-rate estimate as results arrive.
+
+Optional admission check, without solver trials:
+
+python run_compendium_iii_dense.py run --dry-run
+
+RESUME AFTER AN INTERRUPTED CONTROLLER
+
+First verify that the old controller is no longer running, then enter the same
+working directory and environment, preferably inside tmux, and run:
+
+set -o pipefail
+python -u run_compendium_iii_dense.py run --resume 2>&1 | tee -a /workspace/compendium_iii_dense_campaign_20261024/run.log
+
+Resume preserves committed attempts; interrupted, uncommitted seeds restart
+from their original seed. It restores the frozen execution identity and refuses
+incompatible source, launcher, input, parameter, partition or environment changes.
+Recorded terminal failures count as completed attempts and are not silently
+rerun. Do not pull source changes, reinstall packages or edit frozen campaign
+files while production is active or before resuming an unfinished campaign.
+
+FILES ON EACH INSTANCE
+
+Checkout and interpreter:
+  /workspace/margin_testing_c3_campaign
+  /workspace/margin_testing_c3_campaign/.venv/bin/python
+
+Frozen campaign and setup:
+  /workspace/compendium_iii_dense_campaign_20261024/identity.json
+  /workspace/compendium_iii_dense_campaign_20261024/partitions.json
+  /workspace/compendium_iii_dense_campaign_20261024/config.json
+  /workspace/compendium_iii_dense_campaign_20261024/solver_settings.json
+  /workspace/compendium_iii_dense_campaign_20261024/catalog.json
+  /workspace/compendium_iii_dense_campaign_20261024/input_proof.json
+  /workspace/compendium_iii_dense_campaign_20261024/unsupported.json
+
+Controller log from the tee command above:
+  /workspace/compendium_iii_dense_campaign_20261024/run.log
+
+Results root:
+  /workspace/compendium_iii_dense_campaign_20261024/results
+
+Within results, the existing compact protocol writes manifest.json, state.json,
+campaign_progress.json, per-solver progress metadata, raw/<solver>/gka5e.npy,
+and aggregated/<solver>/gka5e.csv. Further worker, calibration or diagnostic
+files are retained where produced by the established runtime. Keep the complete
+campaign directory, including setup files, logs and results, for reproducibility.
+This launcher does not generate plots during production.
+
+EXACT EXPERIMENT PROTOCOL
+
+- Input: the existing 200-variable dense gka5e QUBO, unchanged and verified
+  against the original public source. Canonical objective: minimize x.T @ Q @ x
+  plus the recorded offset. The published proven optimum is -35154.
+- Every selected solver receives independent seeds 0 through 99.
+- Each seed has a 20-second solver-time cap. The existing continuous timing
+  implementation includes RNG reset, algorithm state/preprocessing, search,
+  candidate capture, GPU synchronization and independent candidate scoring.
+  Process/context startup, immutable input setup and result persistence are
+  excluded. A late candidate receives no earlier-checkpoint credit.
+- Sample checkpoints, in seconds: 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20.
+  Each boundary retains the last independently scored incumbent completed by
+  that time. Before the first valid capture, a missing value remains missing.
+- A verified exact optimum stops that seed early; its objective is propagated
+  to all later checkpoints. Reaching the 1% quality threshold does not stop
+  the run. Reference targets are used by the external observer, not handed to
+  the numerical solver for search.
+- Solver schedules use their frozen finite step counts. There is no wall-time
+  schedule retuning, automatic restart, extra external polish or concurrency
+  autotuning. A natural solver return retains the final incumbent through the
+  remaining checkpoints; it does not begin another solve.
+- The initial candidate presets use 16 trajectories, with run_batch_size=16,
+  float32 dynamics and source-precision scoring. They have not undergone broad
+  quality tuning. All complete solver-specific settings, including step counts,
+  are frozen in solver_settings.json and the executable config.json.
+- The 100 independent seeds are distinct from the 16 trajectories within each
+  seed. One worker per GPU preserves the previous isolated-device execution
+  policy; four independent seeds can run concurrently on each host.
+- Raw retained data are per-seed checkpoint energies and associated metadata,
+  including recorded optimum-hit times where available. The compact protocol
+  does not retain reconstructable solution bitstrings or a continuous path.
+- Eight unsupported records are collection-level metadata, not failed runs and
+  not part of either the 7,800-trial denominator or a success-rate denominator.
+
+ESTIMATED COMPLETION TIME
+
+At the full 20-second cap and four workers, 2,000 trials require 2 h 46 min 40 s
+of idealized scheduled solver time; 1,900 require 2 h 38 min 20 s. Allow roughly
+3-4 hours of elapsed time per host for setup, persistence, scheduling and other
+overhead. This is an estimate, not a measured guarantee. Exact optimum hits can
+shorten it, and resource contention or failures can lengthen it. Running all four
+hosts together means the combined campaign finishes when the slowest host does.
+
+The three GPU models have different throughput. With capped wall-clock budgets,
+hardware can affect both sampled quality and observed time to solution. Preserve
+the per-host hardware/environment records and consider that difference when
+comparing these results with one another and with earlier solver collections.
+
+The complete library contains 159 entries; this campaign evaluates only the 78
+new entries compatible with this unchanged input. Earlier solver results remain
+separate, and the eight structured decoders have no comparable dense-QUBO trial.
+
+No full production campaign is launched by preparing these files or by --dry-run.

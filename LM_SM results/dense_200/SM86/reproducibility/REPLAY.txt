@@ -1,0 +1,106 @@
+SM86 REPLAY AND PROVENANCE
+
+This collection contains 78 completed generic-QUBO solvers from the 86-model
+Compendium III. The eight structured decoders listed in unsupported.json lack
+the metadata required for this unchanged input and have no fabricated trials.
+There are 100 independent seeds per supported solver, or 7,800 trials.
+
+The flat raw, progress and aggregated files are byte-identical copies from four
+original campaigns. The root manifest/state/completion are derived collection
+metadata, explicitly non-resumable. Each progress record retains its original
+partition manifest identity. Follow manifest.json -> solver_origin and partitions
+to the original campaign when checking a row or its execution environment.
+
+All original campaign files are retained under:
+  reproducibility/campaign/partition_1/campaign/
+  reproducibility/campaign/partition_2/campaign/
+  reproducibility/campaign/partition_3/campaign/
+  reproducibility/campaign/partition_4/campaign/
+Their results/ subdirectories retain original manifests, states, completion,
+raw arrays, aggregate CSVs and progress records. The associated setup files and
+logs are retained separately as documented in download_manifest.json.
+
+Archives in the results root's reproducibility/ directory:
+  SM86_partition_1_20261024.tar.gz
+  SM86_partition_2_20261024.tar.gz
+  SM86_partition_3_20261024.tar.gz
+  SM86_partition_4_20261024.tar.gz
+  SM86_source_fcb0985_runtime.tar.gz
+  SM86_replay_inputs.tar.gz
+
+The source archive contains the exact deployed solver/runtime source and launcher,
+including the runtime additions deployed after Git commit fcb0985. Using that
+Git commit alone does not reconstruct the complete runtime overlay. All four
+partitions used source snapshot:
+  ecdeb6896f4cc85ecf8e3b47abd7836f39ecf15c9c73dfa99609320018f61ede
+
+The input archive contains the verified gka5e n200 dense QUBO, its original public
+source, primary reference cache and verification provenance. Its normalized NPZ
+SHA-256 is:
+  3a2d6521caefa62a867a7b96dae169388b14088b1ba309dbcdef989b9460d375
+This is the same input as the preserved SM23 and SM20 dense n200 campaigns.
+The minimization objective is x.T @ Q @ x, x in {0,1}^200, with recorded offset 0.
+The published proven optimum is -35154.
+
+RETEST IN A NEW DIRECTORY ON A CUDA HOST
+
+Copy the source/input archives and the file
+reproducibility/campaign/partition_1/campaign/partitions.json to the host.
+Extract both archives into one fresh code directory. For example:
+
+  mkdir sm86_retest
+  cd sm86_retest
+  tar -xzf /path/to/SM86_source_fcb0985_runtime.tar.gz
+  tar -xzf /path/to/SM86_replay_inputs.tar.gz
+  python -m venv .venv
+  source .venv/bin/activate
+  python -m pip install -e '.[benchmark,dev]'
+  python -m pip check
+
+Use a compatible CUDA PyTorch installation; the recorded runs used Python
+3.12.15 and Torch 2.11.0+cu128. Exact recorded packages, driver, platform, GPU
+identity and worker plan are preserved in each original results/manifest.json.
+Use matching GPU models and software when comparing time-dependent performance.
+
+Prepare a fresh output directory for the desired partition (1, 2, 3 or 4):
+
+  python run_compendium_iii_dense.py prepare \
+    --input benchmark_data/continuous12/normalized/gka5e.npz \
+    --partition 1 --partitions-file /path/to/partitions.json \
+    --campaign /path/to/new_retest_partition_1
+  python run_compendium_iii_dense.py run --dry-run \
+    --campaign /path/to/new_retest_partition_1
+
+After confirming the plan, start that fresh partition:
+
+  python -u run_compendium_iii_dense.py run \
+    --campaign /path/to/new_retest_partition_1
+
+Repeat with the other partition numbers in separate campaign directories.
+The four original hosts had four GPUs each, with one worker per GPU. The split
+was 20, 20, 19 and 19 solvers. Do not resume against this derived SM86 collection
+or overwrite the archived original completed campaigns.
+
+SETTINGS AND TIMING
+
+solver_settings/solver_parameters.json contains every exact recorded parameter.
+solver_settings/experiment.json retains the combined protocol and per-partition
+execution evidence. The 100 benchmark seeds are distinct from each seed's
+16 internal trajectories. Dynamics use float32, independent source scoring uses
+FP64 coefficients, and TF32 is disabled. These were initial implementation
+presets, not broadly tuned parameters.
+
+The cap is 20 seconds, with checkpoints 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10 and
+20 seconds. Finite step schedules are preserved; a naturally finished solver
+holds its last incumbent without restarting. A verified exact optimum stops
+early and propagates to later checkpoints. A 1% hit does not stop a trial.
+Independent scoring and GPU completion after the solve origin count against
+the checkpoint clock; worker startup and immutable input setup do not.
+
+The compact raw arrays retain checkpoint energies, with status and first exact
+hit times in progress metadata. They do not contain solution bitstrings or full
+trajectories. Missing early captures remain missing, not fabricated values.
+
+The archived source, launcher, all four frozen campaign identities and primary
+input/reference proof were verified offline without starting any new solver
+trial. See replay_identity_validation.json and validation_report.json.

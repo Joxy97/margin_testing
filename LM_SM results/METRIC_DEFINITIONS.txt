@@ -65,8 +65,8 @@ optimum, seconds from solve origin. Blank/null means no recorded optimum;
 it is not zero and must not be replaced with the 20-second cap.
 
 Completion/failures: terminal attempts include failures. Failed or missing
-attempts never shrink the planned hit denominator. These 14 archived
-campaigns have 31,900 completed trials and zero recorded failures.
+attempts never shrink the planned hit denominator. These 18 archived
+campaigns have 39,700 completed trials and zero recorded failures.
 
 LM23 denotes the original 23 solvers; SM23 denotes the new 23 solvers.
 The n200 sparse/dense folders contain these experiment subfolders; dense
@@ -96,3 +96,29 @@ the sixth panel unpopulated. Initial unavailable samples remain NaN; missing
 mean-gap segments must not be backfilled from future solutions. SM20 uses
 four RTX 5060 Ti GPUs, so timing curves are not an identical-hardware ranking
 against earlier LM23 or SM23 campaigns.
+
+SM86-specific notes:
+SM86 names the 86-model Compendium III collection: 78 solvers have measured
+results (7,800 completed trials), and eight metadata-dependent structured
+entries are unsupported on the unchanged dense QUBO. Unsupported entries
+have no fabricated raw arrays, hit counts or quality curves. The fixed
+denominator of 100 applies separately to every measured solver.
+
+The same gka5e optimum (-35154), 1% threshold (-34802.46), seeds 0..99 and
+nine sampling times apply. Each trial has a 20-second solver-time cap;
+independent certification is included, while worker and immutable-input
+setup are excluded. A certified optimum stops search and is carried to
+later checkpoints. Natural finite-step completion also carries its final
+incumbent forward; a value at 20s does not imply 20s of active search.
+
+SM86 combines four original campaigns only for viewing and comparison.
+Original per-host manifests and progress identities remain authoritative.
+Counts across this publication include each original campaign once, not
+again through the derived collection. There are 18 original campaigns and
+39,700 trials overall, with 144 measured dense-n200 solvers across all groups.
+
+SM86 figures use two pages per metric: six panels of seven solvers on the
+first page (42), then six panels of six on the second (36). Missing initial
+samples remain unavailable; future solutions are never backfilled into
+earlier checkpoints. Hardware differs between SM86 partitions and earlier
+groups, so these curves are not a controlled identical-hardware speed test.

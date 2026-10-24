@@ -1,12 +1,16 @@
-ARCHIVED LM23, SM23 AND SM20 QUBO RESULTS
+ARCHIVED LM23, SM23, SM20 AND SM86 QUBO RESULTS
 
 Code branch: https://github.com/Joxy97/margin_testing/tree/solvers_testing
 Results branch: https://github.com/Joxy97/margin_testing/tree/solvers_testing_results
 
-There are 11 original campaigns (23 solvers each, 25,300 trials), plus two
-SM23 campaigns (23 solvers each, 4,600 trials), and one dense-n200 SM20
-campaign (20 solvers, 2,000 trials). All 31,900 attempts are complete, with
-zero recorded failures. No 10000-dense campaign is present.
+There are 11 original campaigns (23 solvers each, 25,300 trials), two
+SM23 campaigns (23 solvers each, 4,600 trials), one dense-n200 SM20 campaign
+(20 solvers, 2,000 trials), and four dense-n200 SM86 partitions (78 compatible
+solvers in total, 7,800 trials). All 18 original campaigns have completed:
+39,700 trials, zero recorded failures. No 10000-dense campaign is present.
+Dense n200 now has 144 measured solvers across LM23, SM23, SM20 and SM86.
+SM86 additionally records eight unsupported structured models without
+fabricated measurements. The sparse n200 collection retains 46 solvers.
 
 Folder layout, identical for sparse and dense:
   <density>_<n>/manifest.json, state.json, completion.json
@@ -105,3 +109,37 @@ Regenerate its three styled figures on Windows:
 The existing build_publication.py --validate-only also includes SM20.
 See SM20/postprocessed/final_quality_summary.csv for the final per-solver
 best/mean/worst gaps, exact hits and 1% hits.
+
+SM86 ADDITION, 2026-10-24
+dense_200/SM86/ contains the 78 compatible Compendium III solvers, each with
+100 seeds on the same gka5e dense n200 input used by SM23 and SM20. The eight
+structured decoder entries require metadata absent from this QUBO and appear
+in unsupported.json. They are exclusions, not failed or zero-quality trials.
+
+SM86 is a derived, non-resumable collection of four original campaigns.
+Its flat raw/, aggregated/ and progress/ files preserve original bytes.
+The original manifests, checked metadata, per-host settings, captured logs
+and setup evidence remain under reproducibility/campaign/partition_N/.
+solver_origin in manifest.json identifies each solver's authoritative
+partition. Never treat this collection manifest as a resumable experiment.
+
+PLots/ adds six *_SM86_part1.png / *_SM86_part2.png figures in the existing
+System.Drawing style. Part 1 has 42 solvers in six panels of seven; part 2
+has 36 solvers in six panels of six. Each part shows exact hits, mean gap
+percent and hits within 1%. The six figures are also saved inside SM86.
+Six standard runtime figures show raw gap, hit probability and TTS99 in
+SM86/plots/gka5e/. Every older result payload and plot image is unchanged.
+
+solver_settings/ exports all recorded parameters, internal trajectories,
+steps, seed schedules, timing rules, worker plans and environment identities.
+The four hosts used 8 RTX 5060 Ti, 4 RTX 4070 SUPER and 4 RTX 4060 Ti GPUs,
+with one seed worker per GPU. Curves therefore measure their recorded
+hardware and are not an identical-hardware ranking against earlier groups.
+See SM86/reproducibility/REPLAY.txt for source/input archives and retesting.
+
+Validate the retained originals and the derived collection without trials:
+  python scripts/validate_sm86.py --target dense_200/SM86
+Regenerate the six curated figures on Windows:
+  powershell -File scripts/plot_sm86.ps1 -VariableCount 200 -DensityCategory dense
+The original build_publication.py helper covers the earlier groups; use
+validate_sm86.py for SM86's four-identity collection schema.
